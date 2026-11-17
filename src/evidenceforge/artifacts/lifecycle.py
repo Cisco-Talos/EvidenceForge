@@ -19,6 +19,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge._windows_cleanup import remove_owned_tree
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.artifacts.scaffolds import scaffold_fingerprint, scenario_scaffold
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.naming import storage_name, validate_display_name, validate_name
@@ -91,19 +92,35 @@ def _safe_path(path: Path) -> Path:
 
 
 def snapshot_tree(root: Path, *, allow_hardlinks: bool = False) -> dict[str, bytes]:
-    """Capture a bounded regular-file tree without following links."""
+    """Capture a bounded regular-file tree without following links.
+
+    Physical I/O uses the Windows long-path spelling so deep releases (for example bundled
+    examples beneath a private runtime) are read without a host long-path policy. Any
+    unreadable directory fails the capture; it is never silently omitted from an inventory.
+    """
     _safe_path(root)
-    if not root.is_dir():
+    physical = filesystem_path(root)
+    if not physical.is_dir():
         raise ArtifactError(f"artifact directory was not found: {root}")
+
+    def unreadable(error: OSError) -> None:
+        raise ArtifactError(
+            f"artifact directory could not be read under {root}: {error}"
+        ) from error
+
+    members = [
+        directory / name
+        for directory, _directories, names in physical.walk(on_error=unreadable)
+        for name in names
+    ]
     files: dict[str, bytes] = {}
     total = 0
-    for path in sorted(root.rglob("*")):
+    for path in sorted(members):
+        name = path.relative_to(physical).as_posix()
+        logical = root / name
         _safe_path(path)
-        if path.is_dir():
-            continue
         if not path.is_file() or not allow_hardlinks and path.stat().st_nlink != 1:
-            raise ArtifactError(f"artifact member must be an unlinked regular file: {path}")
-        name = path.relative_to(root).as_posix()
+            raise ArtifactError(f"artifact member must be an unlinked regular file: {logical}")
         safe_relative(name)
         size = path.stat().st_size
         total += size
@@ -111,14 +128,14 @@ def snapshot_tree(root: Path, *, allow_hardlinks: bool = False) -> dict[str, byt
             raise ArtifactError("artifact exceeds portable file-count or byte limits")
         content = path.read_bytes()
         if len(content) != size:
-            raise ArtifactError(f"input changed while capturing {path}")
+            raise ArtifactError(f"input changed while capturing {logical}")
         files[name] = content
     return files
 
 
 def _write_files(root: Path, files: dict[str, bytes]) -> None:
     for name, content in sorted(files.items()):
-        destination = root / safe_relative(name)
+        destination = filesystem_path(root / safe_relative(name))
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with destination.open("xb") as stream:
             stream.write(content)
