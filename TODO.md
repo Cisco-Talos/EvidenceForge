@@ -212,11 +212,13 @@ validation are implemented on `codex/ground-truth-reconciliation`; source exclus
 exact instances and independent restrictions. Validation and comparison evidence are in the
 [ground-truth worklog](docs/worklog/2026-11-10-ground-truth-reconciliation.md#source-aware-evaluation-and-visibility).
 
-- [ ] **P1 — Evaluate full datasets without fixed corpus-size caps:** Replace
+- [x] **P1 — Evaluate full datasets without fixed corpus-size caps:** Replace
   whole-corpus byte/file/record ceilings with streaming evaluation and bounded or
   disk-backed indexes across CLI and Studio. Preserve full scoring coverage and
   per-record input protections; verify score equivalence and memory use on large
   datasets. See the [Studio evaluation diagnosis](docs/worklog/2026-11-10-ground-truth-reconciliation.md#live-studio-evaluation-failure-diagnosis).
+  Closed November 17: PR #471 (`4df3c2ae`) removed corpus ceilings; `EvaluationLimits` and
+  `--allow-large-evaluation` remain only as deprecated no-ops, with memory gates in CI.
 
 - [ ] **P0 — Reconcile full mixed-fleet ground-truth acceptance (release blocker):** The unchanged
   canonical iteration benchmark fails schema-v5 agreement despite strong blind
@@ -357,7 +359,7 @@ exact instances and independent restrictions. Validation and comparison evidence
   eCAR lifetime/final-execution matches and zero unknown results. All 23 existing failed
   PostgreSQL/MySQL attempts have nonzero native results. Start coverage remains 229/229
   forks, 291/291 execs and 85/85 authored starts. See the same worklog.
-- [ ] Finish user acceptance of the finite Mac endpoint delivery sequence: supported
+- [x] Finish user acceptance of the finite Mac endpoint delivery sequence: supported
   process starts/exits, reference-qualified minimum Unified Log coverage and combined
   recovery/filter verification now pass within the documented scope. No open-ended
   catalog expansion or repeated blind-assessment loop. Scope and
@@ -371,6 +373,8 @@ exact instances and independent restrictions. Validation and comparison evidence
   On November 4 the user agreed to keep that family gated and requested a fresh
   `MacOS-test` regeneration/review before accepting the approach. Do not open a PR
   into `dev` until the user is satisfied with that result.
+  Closed November 17: the Mac work merged in PR #463, shipped in 2.2.0a5/a6 and rc1 presents
+  macOS simulation as supported; the PR gate above is superseded.
 
 - [x] **P1** Repair Mac ES source chronology through immutable occurrence ingress, exact
   canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native
@@ -438,30 +442,38 @@ exact instances and independent restrictions. Validation and comparison evidence
   inventories retain stable metadata and zero birth-order inversions; exact native
   recovery/filter checks pass. Dense allocation is still a bounded model, not full APFS
   fidelity. See the same new worklog.
-- [ ] **P1 — Interactive workflow pacing:** Replace repeated approximately 96-second
+- [x] **P1 — Interactive workflow pacing:** Replace repeated approximately 96-second
   editor/build launch slots with task/completion/think-time ownership, preserving
   explicitly intended automation. Two independent reviewers identify the same measured
   developer burst in loops66–67. Verify the planner rather than adding emitter jitter.
   See the same new worklog.
+  Closed November 17: loop69 (behavior revision 489) widened planner-owned
+  `baseline.foreground_think`; the repeated 94–98 s gaps no longer reproduce.
 - [ ] **P1 — UDP source-state lifetime and duration:** Separate ASA datagram state
   expiration from application completion, qualifying configured idle policy, DNS inspection
   and exceptional removal. Reconcile Zeek duration presence with measured elapsed time
   rather than one-way state labels. Loop67 finds 11 same-second UDP syslog state deletions
   and systematic one-way duration omissions. See the same new worklog.
-- [ ] **P1 — Windows session bootstrap ownership:** Verify and repair the session-specific
+- [x] **P1 — Windows session bootstrap ownership:** Verify and repair the session-specific
   SMSS parent across local and RDP bootstrap paths, preserving canonical identities and
   source agreement. Loop65 identifies 24 Winlogon creations on six hosts sharing one
   per-host parent across distinct terminal sessions. See the same new worklog.
-- [ ] **P1 — Browser instance lifecycle:** Model persistent browser ownership per host,
+  Closed November 17: loop71 (behavior revision 491) allocates per-session SMSS parents for
+  local and RDP bootstrap, including RDP teardown.
+- [x] **P1 — Browser instance lifecycle:** Model persistent browser ownership per host,
   user and resolved user-data directory, with short forwarding invocations for additional
   windows when appropriate. Loop65 finds seven visibly overlapping Mac roots and a Windows
   sibling; retain profile-isolation alternatives and authored process intent. See the same
   new worklog.
-- [ ] **P1 — Linux logind allocation chronology:** Replace the elapsed-time-derived
+  Closed November 17: loop72 could not reproduce the overlap; shared profile-key reuse is
+  covered by the completed browser ownership items above.
+- [x] **P1 — Linux logind allocation chronology:** Replace the elapsed-time-derived
   eight/nine-IDs-per-minute model with actual modeled session allocation ownership,
   including supported background sessions. Loop64 measures near-clock progression on
   three hosts. Preserve rollback, out-of-order planning and recovery; do not conceal the
   pattern with arbitrary gaps. See the same new worklog.
+  Closed November 17: loops 73–74 (behavior revisions 492/495) moved logind IDs to the canonical
+  chronological allocator with an exhaustion fallback.
 - [ ] **P2 — Bounded source follow-ups:** Qualify snapd task IDs and stateful daemon
   diagnostics; inspect Windows registry actor authority and request/use timing; review
   Mac short-utility outcomes and terminal ancestor-close fences. Keep version, collection,
@@ -471,10 +483,12 @@ exact instances and independent restrictions. Validation and comparison evidence
   and timing owners. The historical panel identifies 14 Windows births in two milliseconds;
   retain startup and collection alternatives. The separate bounded Mac query timing repair
   is recorded in the current coverage worklog above. See the same assessment.
-- [ ] **P1** Migrate the Mac branch's remaining continuous timing-RNG call sites to the
+- [x] **P1** Migrate the Mac branch's remaining continuous timing-RNG call sites to the
   shared timing owner and reconcile moved selectors without weakening the inventory cap.
   The slow static guard has nine pre-existing excess calls; the November 4 exit repair
   adds none. See the [Mac worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+  Closed November 17: revision 483 migrated the listed call sites; the shrunken inventory cap
+  and slow temporal-RNG guard pass.
 - [ ] **P2** Add native sqlcmd process/network correlation with explicit endpoint ownership.
   Keep the new network action independent of
   later activity selection/ownership; prototype failures and scope are recorded in the
@@ -513,11 +527,13 @@ exact instances and independent restrictions. Validation and comparison evidence
   require backslashes after the pipeline replaces them, and POSINT patterns omit zero ports.
   EvidenceForge preserves these raw values; structured indexing needs upstream parser work and
   renewed compatibility gates. No upstream changes are part of this branch.
-- [ ] **P1 — deferred** Investigate the existing iteration-scenario temporal-integrity failure
+- [x] **P1 — deferred** Investigate the existing iteration-scenario temporal-integrity failure
   (40/48 visible events, 83.33%, below the unchanged 85% gate). Separate expected-time matching,
   ordering, missing traces, and source-observation timing before assigning fixes to their owning
   layer. Baseline/candidate evidence bytes match; this predates the validation refactor and is
   deferred from this branch by user decision. See the same worklog for the eight findings.
+  Closed November 17: superseded by canonical source-timing evaluation; loop 98 scores temporal
+  integrity 100 (20,135/20,135).
 - [ ] **P2** Investigate generation coverage for Zeek packet-filter/reporter/weird diagnostic
   sources separately from their dedicated renderer/parser/validator fixture coverage.
 
@@ -867,18 +883,24 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   side effects to host role/cohort; avoid repeated writes to static uninstall
   metadata such as `DisplayName`, `Publisher`, and `DisplayVersion`, especially
   on server and domain-controller roles.
-- [ ] **P2** Improve eCAR `FLOW` actor semantics so rows with PIDs either carry
+- [x] **P2** Improve eCAR `FLOW` actor semantics so rows with PIDs either carry
   coherent process/principal context or intentionally omit actor identity when
   endpoint attribution is unavailable.
+  Closed November 17: FLOW rows project only the canonical host-local actor and omit
+  PID/TID/principal together when none exists (`286cf8bb`, PR #358).
 - [x] **P2** Enforce Zeek file/connection timing contracts so `files.log` rows
   referencing a connection UID land inside that visible connection interval, or
   the connection timing expands to cover the file observation.
-- [ ] **P2** Improve Linux eCAR thread semantics so `tid` is populated from a
+- [x] **P2** Improve Linux eCAR thread semantics so `tid` is populated from a
   plausible thread model or omitted when unavailable instead of copying `pid`
   across every Linux flow/file/process row.
-- [ ] **P2** Make SSH eCAR session login/logout tuple fields symmetric when the
+  Closed November 17: `tid` renders only for process-lifecycle rows or explicit thread
+  identities; dependent rows omit it (`aef80375`).
+- [x] **P2** Make SSH eCAR session login/logout tuple fields symmetric when the
   transport tuple is known, including `src_port` on both sides of the same
   `objectID`.
+  Closed November 17: the SSH session contract requires the exact source tuple on logout and
+  both rows render `src_port` (`92a0ee2b`).
 - [ ] **P2** Tighten Linux SSH command/process-to-transport timing so most LAN
   SSH commands reach the TCP/22 connection in sub-second to low-single-digit
   seconds, reserving longer gaps for DNS, retries, or explicit delay.
@@ -890,19 +912,26 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P2** Reduce direct root/password SSH volume and model routine Linux
   administration through bastions, named admin users, sudo, and service
   automation instead of repeated polished interactive root access.
-- [ ] **P2** Align DHCP syslog renewal promises with the next DHCPREQUEST/ACK
+- [x] **P2** Align DHCP syslog renewal promises with the next DHCPREQUEST/ACK
   schedule and vary source-native syslog timestamp suffixes within renewal
   triplets.
-- [ ] **P2** Add per-host endpoint observation jitter for paired source and
+  Closed November 17: renewal text derives from the realized renewal interval with per-phase
+  timestamps (`0e6350c9`, `759a46b3`).
+- [x] **P2** Add per-host endpoint observation jitter for paired source and
   destination eCAR `FLOW` rows so cross-host endpoint observations do not land
   on the same millisecond by default.
-- [ ] **P2** Normalize eCAR service-process principal attribution so the same
+  Closed November 17: paired endpoint FLOW rows receive per-host texture (`3864057b`).
+- [x] **P2** Normalize eCAR service-process principal attribution so the same
   actor/pid does not alternate between missing and populated principal identity
   without an explicit collection profile reason; for proxies, separate local
   daemon ownership from original client/user attribution.
-- [ ] **P2** Enforce monotonic bash-history timestamps per file unless modeling
+  Closed November 17: principals come only from frozen canonical process identity; proxy daemon
+  ownership is separated (`d2089f12`, `bf4a07f2`).
+- [x] **P2** Enforce monotonic bash-history timestamps per file unless modeling
   multiple shell sessions explicitly, and filter incomplete shell constructs
   such as standalone `if` from generic command pools.
+  Closed November 17: journal reads are ordered by epoch/sequence and generic pools contain no
+  standalone shell constructs.
 - [ ] **P2** Diversify LDAP discovery command texture by tool, filter, user,
   host role, and result/failure pattern so repeated `ldapsearch` reconnaissance
   does not appear as one procedural command pool across many hosts.
@@ -976,15 +1005,20 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   `.eforge-generation/` workspace. Active spools intentionally remain in their established
   runtime locations for the initial checkpoint release; revisit placement only after production
   experience confirms the incremental adapters are stable.
-- [ ] Additional skills: create-persona, create-log-format, create-network, and
+- [x] Additional skills: create-persona, create-log-format, create-network, and
   analyze-output.
+  Closed November 17: superseded by the config, industry-pack, organization-pack, scenario and
+  evaluate skills; new log formats remain a source-code task.
 - [ ] Example scenario collection for ransomware, credential stuffing, and
   insider threat.
-- [ ] Design easier delivery and discovery of example scenarios, including Studio.
+- [x] Design easier delivery and discovery of example scenarios, including Studio.
   Contributed exercises belong under the existing `scenarios/` directory for now;
   repository examples are not a bundled installer library. See the
   [Issue 478 review](docs/worklog/2026-11-12-issue478-macos-es-review.md).
-- [ ] Config file inheritance/templating.
+  Closed November 17: five portable examples ship in the package and Studio's Example Scenarios
+  project (`86d74702`, `f50a520b`).
+- [x] Config file inheritance/templating.
+  Closed November 17: superseded by pack layering and stacked overlay contexts.
 - [ ] Overlay `_replace: true` recursive propagation for nested lists.
 - [ ] Overlay `_delete: true` for removing built-in entries.
 - [ ] Subset sensor format support, such as `log_formats: [zeek, -zeek_dns]`.
@@ -1053,7 +1087,7 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   All CLI/skill changes must preserve traditional command-line and native-harness workflows.
   New configuration scopes must be optional, file-based, independently usable without Studio,
   and preserve existing root selection and family-specific merge contracts.
-- [ ] Package standalone Studio with a private Python runtime, CLI/service, resources and skills.
+- [x] Package standalone Studio with a private Python runtime, CLI/service, resources and skills.
   Initial field test targets Apple Silicon macOS 26; Developer ID signing/notarization are
   deferred by user decision. Universal macOS delivery is blocked by the locked cryptography
   dependency's missing Intel wheel. macOS is the only supported GUI platform for now; explore
@@ -1064,6 +1098,9 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   [Studio handoff](docs/worklog/2026-10-02-studio-handoff.md) retains workflow-stage decisions.
   Automatic runtime retention, configurable rollback days, and visible uncertain-removal warnings
   are implemented; see the [runtime cleanup worklog](docs/worklog/2026-10-06-studio-runtime-cleanup.md).
+  Closed November 17: macOS, Linux ARM64/x86_64 and Windows x86_64 installers with private
+  runtimes ship with releases. Intel macOS, clean-machine/other-distro acceptance and
+  signing/notarization remain explicit release limits.
 - [x] Add Studio scenario YAML import with dependency review, nested includes and supporting
   assets, optional advisory validation, and persistent missing-pack findings. Add pack-panel
   import/export with exact versions, selectable reviewed packs, and locked dependency closure;
@@ -1099,7 +1136,9 @@ is tracked here.
 - [ ] DGA algorithm presets for known malware families.
 - [ ] Dictionary-based DGA using word-combination domains.
 - [ ] `active_hours` / `active_days` on periodic event types.
-- [ ] Connection to non-listening host (`REJ`/`S0` without firewall deny).
+- [x] Connection to non-listening host (`REJ`/`S0` without firewall deny).
+  Closed November 17: storyline `connection`/`beacon` accept explicit `S0`/`REJ` and scan probes
+  infer them from target services.
 
 ### Resolved Clusters
 
