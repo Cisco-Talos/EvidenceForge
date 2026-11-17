@@ -1,0 +1,15 @@
+# Commands whose execution destroys the issuing user's Bash history file.
+#
+# Shell-command producers classify each command once with these patterns and record the
+# canonical effect on the occurrence; the Bash history emitter and ground truth both follow
+# that classification. A matching command erases itself and every entry ordered before it
+# in the same user's history file. Per-shell in-memory history and write-at-exit semantics
+# are not yet modeled. zsh extended history is outside this append-only profile.
+# Project overlays append patterns; see commands/eforge/references/config-host-activity.md.
+destroy_prior_patterns:
+  - 'history\s+-c'
+  - '>\s*~/\.bash_history'
+  - 'cat\s+/dev/null\s*>\s*~/\.bash_history'
+  - 'truncate\s+-s\s+0\s+.*\.bash_history'
+  - 'rm\s+((-[rf]+\s+)?.*)?\.bash_history'
+  - 'shred\s+.*(-u|--remove).*\.bash_history'

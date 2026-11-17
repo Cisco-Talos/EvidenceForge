@@ -91,6 +91,14 @@ redirections dropped, home shortcuts expanded), `posix_shell_program` (`<shell> 
 rules from the exact authored text reproduces it; an unrecorded change remains a
 disagreement. A derivation is provenance and is not part of process identity.
 
+Bash history is collected as the file that remains at the end of collection. Commands whose
+canonical `shell.history_effect` is `destroy_prior` (classified once from
+`config/activity/shell_history_effects.yaml`, the same rule the history emitter applies) erase
+themselves and every earlier entry in that user's file. Those entries are expected absent with a
+`retention` stage excluded as `destroyed_by_later_action` and `provenance.retention.destroyed_by`
+naming the clear; agreement independently requires exactly those entries to be excluded. Per-shell
+in-memory history and write-at-exit behavior are not yet modeled.
+
 Samba-served sessions carry no Windows logon ID; eCAR session expectations key them by the SMB
 session reference, and SMB file expectations take server and client paths from SMB facts.
 

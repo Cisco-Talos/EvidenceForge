@@ -59,7 +59,14 @@ class GroundTruthCondition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     stage: Literal[
-        "deployment", "placement", "capability", "window", "loss", "source_filter", "export"
+        "deployment",
+        "placement",
+        "capability",
+        "window",
+        "loss",
+        "source_filter",
+        "export",
+        "retention",
     ]
     state: Literal["eligible", "excluded", "unknown"]
     reason: str | None = None

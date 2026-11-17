@@ -147,6 +147,9 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         },
         "list_fields": {"scheduled_tasks": None},
     },
+    "activity/shell_history_effects.yaml": {
+        "string_list_fields": {"destroy_prior_patterns"},
+    },
     "activity/systemd_schedules.yaml": {
         "list_fields": {"schedules": "service"},
     },

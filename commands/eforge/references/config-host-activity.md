@@ -19,7 +19,7 @@ Inspect the matching packaged YAML and existing overlay before editing; validati
 
 Deep-merges command roles and models: `common`, persona/shared roles, `storyline_friction`, `workflow_model`, `workflows`, `typo_model`, `package_manager_model`, `keyboard_adjacency`, and `params`.
 
-Runtime maps personas to reusable roles, including developer → `dba`/`webadmin` and security analyst → `security`. Do not duplicate pools under persona names. Keep baseline commands inert and legitimate; use packaged placeholders and OS-native paths. Probabilities must be 0-1 and count/range bounds ordered.
+Runtime maps personas to reusable roles, including developer → `dba`/`webadmin` and security analyst → `security`. Do not duplicate pools under persona names. Keep baseline commands inert and legitimate; use packaged placeholders and OS-native paths. Probabilities must be 0-1 and count/range bounds ordered. `shell_history_effects.yaml` `destroy_prior_patterns` append regexes for commands that erase the user's Bash history file, including themselves; ground truth marks those entries absent.
 
 ### `systemd_schedules.yaml`
 

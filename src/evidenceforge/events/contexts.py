@@ -605,6 +605,8 @@ class ShellContext:
     """Shell command execution details (bash_history)."""
 
     command: str
+    # Canonical history effect of running this command, e.g. "destroy_prior" for a clear.
+    history_effect: str | None = None
 
 
 # --- Zeek protocol-layer contexts (Phase: Zeek expansion) ---

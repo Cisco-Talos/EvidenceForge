@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 525
+current_revision: 526
 history_start_revision: 1
-behavior_surface_sha256: cda28c85b2732d050ee94506ed250974e48c66f120d14749127e4b52e2a417fc
+behavior_surface_sha256: a9bed2157373909b25d26fe020ad90c062e54adc7b7d4ae346ae7ce53823f1dd
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6043,3 +6043,13 @@ changes:
   - ecar
   summary: eCAR truth keys Samba sessions by their SMB session reference, takes SMB server and
     client paths from SMB facts, and uses native PROCESS OPEN and THREAD REMOTE_CREATE actions.
+- revision: 526
+  id: record-canonical-history-destruction
+  impact: localized
+  domains:
+  - ground-truth
+  - shell-history
+  formats:
+  - bash_history
+  summary: Shell commands record their canonical history effect from shared data; ground truth
+    expects entries destroyed by a later clear of the same history file to be absent.

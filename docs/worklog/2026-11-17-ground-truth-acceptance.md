@@ -13,7 +13,8 @@ default target) must meet the 95% schema-v5 Ground Truth Agreement gate. Work is
 | Re-run on dev | 522 | 139,906 | 88.32 | 96.52 | 1,928 |
 | `r523b` (this branch) | 523 | 143,433 | 92.24 | 97.54 | 413 |
 | `r524` + NAT root match | 524 | 143,433 | 93.59 | 97.81 | 400 |
-| `r525` | 525 | 143,433 | **94.98** | 98.10 | 341 |
+| `r525` | 525 | 143,433 | 94.98 | 98.10 | 341 |
+| `r526` | 526 | 143,433 | **96.37 (PASS)** | 98.37 | 327 |
 
 The agreement score is the mean of 222 per-action scores, so many small actions with one to
 three misses dominate; failure counts alone do not predict it. Diagnostics used an evaluation
@@ -78,7 +79,20 @@ the parents' published create receipts (likely a later visibility-floor repair o
 create time), `runas` children pair the interactive group's login time with the new-credentials
 logon ID, and a few frontier/children anchors have no matching point.
 
-## Remaining scope (r523b, updated by r524/r525)
+## Repaired in behavior revision 526 (history clears; user kept the destruction rule)
+
+13. **Canonical history destruction.** `config/activity/shell_history_effects.yaml` (overlayable
+    `append-list` family) owns the destructive-command patterns. Bash/zsh history producers record
+    `ShellContext.history_effect` on the occurrence; the emitter's clear check applies the same
+    function to the same canonical command (no journal or exact-publication envelope change).
+    Ledger finalization marks entries destroyed by a later admitted clear of the same file absent
+    (`retention` stage, `destroyed_by_later_action`, `provenance.retention.destroyed_by`); the
+    evaluator builds its own clears index and requires exactly those exclusions. Rendered history
+    is byte-identical; 14 expectations became verified absences.
+
+The canonical benchmark now passes acceptance (agreement 96.37 against 95; overall 98.37).
+
+## Remaining scope (r523b, updated by r524-r526)
 
 At r525 (94.98), single-family estimates: bash history 96.38, Windows Security 95.83, timing
 anchors 95.54, ASA 95.52, authored facts 95.50, syslog 95.39.

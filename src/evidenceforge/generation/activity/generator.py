@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 from urllib.parse import urlsplit
 
 from evidenceforge.generation.actions.process_support import policy as process_policy
+from evidenceforge.generation.activity.shell_history_effects import bash_history_effect
 from evidenceforge.generation.command_derivation import step as derivation_step
 
 if TYPE_CHECKING:
@@ -26767,7 +26768,10 @@ class ActivityGenerator:
             event_type=kind,
             src_host=self._build_host_context(system),
             auth=AuthContext(username=user.username, logon_id=logon_id),
-            shell=ShellContext(command=command),
+            shell=ShellContext(
+                command=command,
+                history_effect=bash_history_effect(command) if kind == "bash_command" else None,
+            ),
             identity_plan=EventIdentityPlan(
                 actor=self.state_manager.get_process_identity(system.hostname, shell_pid),
                 session=self.state_manager.get_session_identity(logon_id),
@@ -26810,7 +26814,7 @@ class ActivityGenerator:
             event_type="bash_command",
             src_host=self._build_host_context(system),
             auth=AuthContext(username=user.username, logon_id=logon_id),
-            shell=ShellContext(command=command),
+            shell=ShellContext(command=command, history_effect=bash_history_effect(command)),
         )
 
         self.dispatcher.dispatch_builder(event)

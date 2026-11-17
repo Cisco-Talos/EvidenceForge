@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -131,6 +133,28 @@ def ecar_smb_projection_phases(
     if upload and smb.get("operation") == "move":
         phases.append("client_delete")
     return tuple(phases)
+
+
+HISTORY_DESTROYED_REASON = "destroyed_by_later_action"
+
+
+def history_entry_admitted(expected: str, excluded_stages: Sequence[str]) -> bool:
+    """Return whether a history entry reached its file before any later destruction."""
+    return expected == "present" or (
+        bool(excluded_stages) and all(stage == "retention" for stage in excluded_stages)
+    )
+
+
+def destroying_history_clear(
+    entry_time: datetime, clears: Sequence[tuple[datetime, str]]
+) -> str | None:
+    """Return the first admitted clear ordered at or after an entry in the same history file.
+
+    A clear erases itself and every entry ordered before it, so the entry is absent from the
+    collected file. ``clears`` holds (time, occurrence_id) pairs for one host/user file.
+    """
+    later = [(time, occurrence) for time, occurrence in clears if time >= entry_time]
+    return min(later)[1] if later else None
 
 
 def ecar_samba_session(

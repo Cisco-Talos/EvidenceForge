@@ -573,6 +573,63 @@ def _sensor_visible(scenario: Scenario, source_host: str, facts: dict, *, denied
     return visible
 
 
+def _collect_history_clear(
+    row: GroundTruthOccurrence,
+    clears: dict[tuple[str, str], list[tuple[datetime, str]]],
+) -> None:
+    """Index admitted Bash history clears by history file, independently of the ledger."""
+    from evidenceforge.events.evidence_source_rules import history_entry_admitted
+
+    if (
+        row.kind != "bash_command"
+        or (row.facts.get("shell") or {}).get("history_effect") != "destroy_prior"
+    ):
+        return
+    username = str((row.facts.get("auth") or {}).get("username") or "")
+    for expectation in row.source_expectations:
+        excluded = [item.stage for item in expectation.conditions if item.state == "excluded"]
+        if expectation.format == "bash_history" and history_entry_admitted(
+            expectation.expected, excluded
+        ):
+            clears[(expectation.source_instance, username)].append((row.time, row.occurrence_id))
+
+
+def _history_retention_errors(
+    row: GroundTruthOccurrence,
+    expectation: GroundTruthSourceExpectation,
+    clears: dict[tuple[str, str], list[tuple[datetime, str]]],
+) -> list[str]:
+    """Require exactly the entries a later admitted clear destroys to be retention-excluded."""
+    from evidenceforge.events.evidence_source_rules import (
+        HISTORY_DESTROYED_REASON,
+        destroying_history_clear,
+        history_entry_admitted,
+    )
+
+    if expectation.format != "bash_history" or row.kind != "bash_command":
+        return []
+    retention = next((item for item in expectation.conditions if item.stage == "retention"), None)
+    marked = retention is not None and retention.state == "excluded"
+    excluded = [item.stage for item in expectation.conditions if item.state == "excluded"]
+    username = str((row.facts.get("auth") or {}).get("username") or "")
+    clear = (
+        destroying_history_clear(row.time, clears.get((expectation.source_instance, username), []))
+        if history_entry_admitted(expectation.expected, excluded)
+        else None
+    )
+    recorded = (expectation.provenance.get("retention") or {}).get("destroyed_by")
+    if marked != (clear is not None) or (
+        marked
+        and (
+            recorded != clear
+            or retention.reason != HISTORY_DESTROYED_REASON
+            or expectation.expected != "absent"
+        )
+    ):
+        return ["invalid_retention_decision"]
+    return []
+
+
 def _derived_command_agrees(authored: str, process: dict) -> bool:
     """Accept a native command only as the replay of its recorded authored derivation."""
     from evidenceforge.events.command_derivation import CommandDerivation
@@ -1049,8 +1106,10 @@ def evaluate_ground_truth(
 
     timing_points = TimingPoints()
     owned_records = bounded_set()
+    history_clears: dict[tuple[str, str], list[tuple[datetime, str]]] = defaultdict(list)
     if document.event_stream is not None:
         for point in read_ground_truth_occurrences(root, document.event_stream):
+            _collect_history_clear(point, history_clears)
             for source in point.source_expectations:
                 if source.expected != "present":
                     continue
@@ -1527,6 +1586,7 @@ def evaluate_ground_truth(
                     "decisions; regenerate for complete source verification."
                 )
             errors = _expectation_errors(row, expectation, scenario, inventory)
+            errors.extend(_history_retention_errors(row, expectation, history_clears))
             if expectation.format == "ecar" and (
                 row.kind.startswith("process_") or row.kind == "system_process_create"
             ):
