@@ -96,9 +96,9 @@ The fourth alpha improves Studio conversations and discovery of published enviro
 
 - **EvidenceForge Studio:** A desktop workspace for authoring scenarios and packs,
   generating logs, and reviewing evaluations.
-- **Standalone installers:** An Apple Silicon macOS DMG and Ubuntu 24.04 ARM64/x86_64
-  AppImages bundle Python, the engine, resources, and skills. Codex-assisted authoring
-  requires a separate Codex installation.
+- **Standalone installers:** An Apple Silicon macOS DMG, Ubuntu 24.04 ARM64/x86_64
+  AppImages and a Windows 11 x86_64 setup bundle Python, the engine, resources, and skills.
+  Codex-assisted authoring requires a separate Codex installation.
 - **Portable authored releases:** Version, freeze, export, and share scenarios
   and packs with their dependencies and release history.
 
@@ -220,7 +220,7 @@ For the packaged desktop app, follow the [Studio guide](docs/studio.md#install-a
 The commands below cover the traditional source-checkout CLI and chat-skill workflow.
 
 > [!IMPORTANT]
-> **Windows Studio preview:** Keep active workspaces and generated runs on local NTFS storage, such as `%USERPROFILE%\EvidenceForge`; OneDrive and other cloud-synced locations are unsupported. See [storage guidance](docs/studio.md#start-with-a-workspace).
+> **Windows Studio:** Keep active workspaces and generated runs on local NTFS storage, such as `%USERPROFILE%\EvidenceForge`; OneDrive and other cloud-synced locations are unsupported. See [storage guidance](docs/studio.md#start-with-a-workspace).
 
 macOS and Linux are the primary supported host platforms. Native Windows runs Python directly,
 without WSL; generation output, checkpoint workspaces, and temporary storage must use local NTFS
@@ -403,8 +403,8 @@ uv run eforge eval ./output
 
 EvidenceForge Studio is the local Tauri desktop app for scenario authoring and generation jobs.
 Native developer builds target Apple Silicon macOS, Ubuntu 24.04 ARM64/x86_64 and Windows 11
-x86_64. Linux installers remain previews pending desktop acceptance. Windows NSIS builds are
-unsigned test previews, with Windows 11 desktop acceptance still pending.
+x86_64. Linux installers remain previews pending desktop acceptance. The Windows NSIS installer
+is published unsigned, with remaining Windows 11 desktop acceptance checks tracked in `TODO.md`.
 Engine and CLI platform support is described above.
 
 See [Contributing](CONTRIBUTING.md#development-setup) for all build/test environment setup,

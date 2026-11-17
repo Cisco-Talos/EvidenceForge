@@ -117,9 +117,11 @@ builds and desktop acceptance currently target these native hosts:
 | macOS Apple Silicon | macOS with Xcode command-line tools | `aarch64-apple-darwin` |
 | Linux ARM64 | Ubuntu Desktop 24.04 LTS, `aarch64` | `aarch64-unknown-linux-gnu` |
 | Linux x86_64 | Ubuntu Desktop 24.04 LTS, `x86_64` | `x86_64-unknown-linux-gnu` |
+| Windows x86_64 | Windows 11, `x86_64` | `x86_64-pc-windows-msvc` |
 
 Linux AppImages use the Ubuntu 24.04/glibc 2.39 baseline. Build on the target architecture;
-other distro/desktop acceptance and Windows/Intel macOS Studio installers remain outstanding.
+other distro/desktop acceptance, Windows ARM and Intel macOS Studio installers remain outstanding.
+See the [Studio guide](docs/studio.md#windows-x86_64-installation) for the Windows build commands.
 Allow space for both debug/release Rust caches and the bundled runtime. For a VM, check the
 host's backing-disk space as well as guest free space. Packaging defaults to two Cargo jobs.
 

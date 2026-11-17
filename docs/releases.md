@@ -1,9 +1,10 @@
 # Product releases and installers
 
 EvidenceForge and Studio share the version in `pyproject.toml`. The Release workflow delivers
-the macOS Apple Silicon DMG and native Linux ARM64/x86_64 AppImages, each with a SHA256 file.
-Codex remains a separate install for authoring. The macOS installer has no Developer ID signature
-or notarization; Intel macOS and Windows installers are not enabled. For 2.2.0a2, the user accepted
+the macOS Apple Silicon DMG, native Linux ARM64/x86_64 AppImages and the Windows 11 x86_64 NSIS
+setup, each with a SHA256 file. Codex remains a separate install for authoring. The macOS
+installer has no Developer ID signature or notarization, and the Windows installer is not
+code-signed; Intel macOS and Windows ARM installers are not enabled. For 2.2.0a2, the user accepted
 recent testing on all systems and explicitly waived repeating interactive smoke tests on October 12.
 Automated release and packaged-installer checks remain required. See the
 [release worklog](worklog/2026-10-12-release-2.2.0a2.md).
@@ -71,12 +72,15 @@ latest. Do not manually push a stable tag to initiate this path.
 ## What the pipeline requires
 
 1. Version/metadata consistency, a matching changelog entry and valid source/tag provenance.
-2. Routine CI, 70% Linux routine coverage, native macOS and both Linux architectures' Studio/state
-   recovery, all four slow shards without coverage, and Python checkpoint portability.
+2. Routine CI, 70% Linux routine coverage, native macOS, both Linux architectures' and Windows
+   Studio/state recovery, all four slow shards without coverage, and Python checkpoint portability.
 3. Native macOS Apple Silicon and Ubuntu 24.04 ARM64/x86_64 builds with locked Python/npm/Cargo
    dependencies, isolated packaged CLI/resource and checkpoint-enabled generation verification,
    a positive Mac-native CLI generation/evaluation smoke (ES/ULF/history and process census),
    bundled GStreamer appsink/scanner checks for AppImages, DMG integrity and all checksums.
+   The native Windows x86_64 build installs the NSIS setup in both scopes on a disposable
+   runner, verifies the packaged runtime, authoring guard, maintenance pages and uninstall
+   cleanup inventory, and publishes only after its native service/recovery gate also passes.
 4. Downloading this run's installer artifacts, staging a draft release, uploading missing assets,
    downloading and verifying them against the build, then publishing.
 
@@ -85,9 +89,13 @@ or Unix syscalls and run in macOS/Linux CI. Portable Mac simulation and record-c
 tests remain included in Windows routine checks. Specific reference-operation tests
 declare their POSIX requirement; Windows does not provide a native Mac collector gate.
 
-The publisher requires all six assets: `EvidenceForge-Studio-VERSION-aarch64.dmg`,
+The publisher requires all eight assets: `EvidenceForge-Studio-VERSION-aarch64.dmg`,
 `EvidenceForge-Studio-VERSION-aarch64.AppImage`, `EvidenceForge-Studio-VERSION-x86_64.AppImage`,
-and each installer's adjacent `.sha256`. Developer test builds retain the `-test` suffix.
+`EvidenceForge-Studio-VERSION-windows-x86_64-setup.exe`, and each installer's adjacent `.sha256`.
+Developer test builds retain the `-test` suffix. Each snapshot's own `scripts/release_pipeline.py`
+defines its required set, so tags created before Windows releases keep their six-asset contract.
+Recovering such a tag through the manual entry point with a current dev workflow fails closed,
+because its source tree cannot build a Windows release installer; rerun its original Actions run.
 Installer environment setup, local macOS/Linux build and verification commands, and
 build-only CI dispatch/download instructions are maintained in
 [CONTRIBUTING.md](../CONTRIBUTING.md#development-setup).

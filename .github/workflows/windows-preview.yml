@@ -21,6 +21,10 @@ on:
       diagnostic-probes:
         type: boolean
         default: false
+      release:
+        description: Build release filenames and upload the release installer artifact
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -181,9 +185,16 @@ jobs:
           uv run --no-sync ruff format --check .
           npm --prefix desktop-ui run types:check
           npm --prefix desktop-ui run build
-      - name: Build unsigned dual-scope NSIS preview
+      - name: Build unsigned dual-scope NSIS installer
         id: package-build
-        run: uv run --no-sync python scripts/package_studio_windows.py
+        env:
+          BUILD_RELEASE: ${{ inputs.release && 'true' || 'false' }}
+        run: |
+          if ($env:BUILD_RELEASE -eq 'true') {
+            uv run --no-sync python scripts/package_studio_windows.py --release
+          } else {
+            uv run --no-sync python scripts/package_studio_windows.py
+          }
       - name: Run focused NSIS wizard navigation
         if: ${{ !inputs.build-only || inputs.diagnostic-probes }}
         run: uv run --no-sync pytest --no-cov tests/integration/test_studio_nsis_cleanup.py
@@ -271,6 +282,20 @@ jobs:
         run: >-
           cargo +stable test --locked --target x86_64-pc-windows-msvc
           --features tauri/custom-protocol --release
+      - name: Verify exact installer and checksum set
+        if: ${{ !inputs.build-only }}
+        env:
+          BUILD_RELEASE: ${{ inputs.release && 'true' || 'false' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $staging = 'build/studio-windows/release-assets'
+          New-Item -ItemType Directory -Force $staging | Out-Null
+          Copy-Item dist/windows/*-setup.exe, dist/windows/*-setup.exe.sha256 $staging
+          $previewFlags = @()
+          if ($env:BUILD_RELEASE -ne 'true') { $previewFlags = @('--preview') }
+          uv run --no-sync python -m scripts.release_pipeline verify-installer `
+            --platform windows-x86_64 --directory $staging @previewFlags
       - name: Upload installer candidate pending native service checks
         if: ${{ !inputs.build-only }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -345,9 +370,28 @@ jobs:
           }
           $report | ConvertTo-Json -Depth 20 | Set-Content -Encoding utf8 $reportPath
       - name: Upload verified Windows preview
+        if: ${{ !inputs.release }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: preview-installer-windows-x86_64
           path: dist/windows/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload verified Windows release installer and checksum
+        if: ${{ inputs.release }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: release-installer-windows-x86_64
+          path: |
+            dist/windows/*-setup.exe
+            dist/windows/*-setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Windows release verification report
+        if: ${{ inputs.release }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-release-verification-x86_64
+          path: dist/windows/*.verification.json
           if-no-files-found: error
           retention-days: 14

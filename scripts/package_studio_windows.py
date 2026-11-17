@@ -1,4 +1,4 @@
-"""Build the unsigned dual-scope NSIS preview on native Windows x86_64."""
+"""Build the unsigned dual-scope NSIS installer on native Windows x86_64."""
 
 from __future__ import annotations
 
@@ -18,13 +18,14 @@ else:
 
 
 def main() -> None:
-    """Assemble/build a preview without release credentials, tags or publication."""
+    """Build an installer without release credentials, tags or publication."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-directory", type=Path)
     parser.add_argument("--assemble-only", action="store_true")
+    parser.add_argument("--release", action="store_true", help="Use release installer filenames")
     arguments = parser.parse_args()
     if sys.platform != "win32" or platform.machine().lower() not in {"amd64", "x86_64"}:
-        parser.error("Build this preview on native Windows x86_64")
+        parser.error("Build this installer on native Windows x86_64")
     root = Path(__file__).resolve().parents[1]
     build = (arguments.build_directory or root / "build/studio-windows").resolve()
     config = assemble(root, build, ["x86_64"], platform="windows")
@@ -62,7 +63,8 @@ def main() -> None:
     version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     destination = root / "dist/windows"
     destination.mkdir(parents=True, exist_ok=True)
-    installer = destination / f"EvidenceForge-Studio-{version}-windows-x86_64-test-setup.exe"
+    suffix = "" if arguments.release else "-test"
+    installer = destination / f"EvidenceForge-Studio-{version}-windows-x86_64{suffix}-setup.exe"
     shutil.copy2(candidates[0], installer)
     installer.with_suffix(".exe.sha256").write_text(
         f"{digest(installer)}  {installer.name}\n", encoding="utf-8"

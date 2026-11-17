@@ -199,7 +199,8 @@ def test_publishes_only_after_upload_and_download_verification(
     commands = github["commands"]
     assert commands[-1][:3] == ["gh", "release", "edit"]
     assert "--latest=false" in commands[-1] and "--prerelease=true" in commands[-1]
-    assert sum(command[:3] == ["gh", "release", "upload"] for command in commands) == 6
+    complete = 2 * len(release.INSTALLER_TARGETS)  # Each installer and its checksum.
+    assert sum(command[:3] == ["gh", "release", "upload"] for command in commands) == complete
     assert "--draft" in next(command for command in commands if "create" in command)
     assert any(command[:3] == ["gh", "release", "download"] for command in commands)
 
@@ -259,7 +260,7 @@ def test_partial_draft_retry_uploads_only_missing_asset(
     shutil.copyfile(assets / plan.dmg_name, github["uploaded"] / plan.dmg_name)
     release.publish(tmp_path, assets, plan, "testing/project")
     uploads = [command for command in github["commands"] if "upload" in command]
-    assert len(uploads) == 5
+    assert len(uploads) == 2 * len(release.INSTALLER_TARGETS) - 1
     assert plan.dmg_name not in {Path(command[4]).name for command in uploads}
 
 
@@ -429,3 +430,55 @@ def test_cli_cannot_use_builder_options_to_publish_or_verify_a_partial_release(
         release.main()
     assert error.value.code == 1
     assert "only valid for verify-installer" in capsys.readouterr().err
+
+
+def test_windows_installer_is_part_of_the_complete_release(plan: release.ReleasePlan) -> None:
+    assert plan.installer_names("windows-x86_64") == [
+        f"EvidenceForge-Studio-{plan.version}-windows-x86_64-setup.exe"
+    ]
+    assert plan.installer_names("windows-x86_64", preview=True) == [
+        f"EvidenceForge-Studio-{plan.version}-windows-x86_64-test-setup.exe"
+    ]
+    assert plan.installer_names()[-1] == plan.installer_names("windows-x86_64")[0]
+    assert plan.installer_names("linux-x86_64") == [
+        f"EvidenceForge-Studio-{plan.version}-x86_64.AppImage"
+    ]
+
+
+def test_release_notes_describe_the_unsigned_windows_installer(
+    tmp_path: Path, assets: Path, plan: release.ReleasePlan, github: dict[str, Any]
+) -> None:
+    (tmp_path / "CHANGELOG.md").write_text("## v2.2.0a1 (2026-10-09)\n\nAlpha changes.\n")
+    release.publish(tmp_path, assets, plan, "testing/project")
+    notes = github["release"]["body"]
+    assert "### Windows installer" in notes
+    assert "not code-signed" in notes and "SmartScreen" in notes
+    assert sorted(path.name for path in github["uploaded"].iterdir()) == sorted(
+        name for image in plan.installer_names() for name in (image, f"{image}.sha256")
+    )
+
+
+def test_release_builds_and_publishes_the_qualified_windows_installer() -> None:
+    root = Path(__file__).resolve().parents[2]
+    installers = yaml.safe_load((root / ".github/workflows/installers.yml").read_text())
+    windows_job = installers["jobs"]["windows-preview"]
+    assert windows_job["if"].startswith("${{ inputs.release ||")
+    assert windows_job["with"]["release"] == "${{ inputs.release || false }}"
+    windows = yaml.safe_load((root / ".github/workflows/windows-preview.yml").read_text())
+    assert windows[True]["workflow_call"]["inputs"]["release"]["default"] is False
+    assert "release" not in windows[True]["workflow_dispatch"]["inputs"]
+    build = {step["name"]: step for step in windows["jobs"]["preview"]["steps"]}
+    package = build["Build unsigned dual-scope NSIS installer"]["run"]
+    assert "package_studio_windows.py --release" in package
+    verify = build["Verify exact installer and checksum set"]["run"]
+    assert "verify-installer" in verify and "--platform windows-x86_64" in verify
+    qualify = {step["name"]: step for step in windows["jobs"]["qualify"]["steps"]}
+    upload = qualify["Upload verified Windows release installer and checksum"]
+    assert upload["if"] == "${{ inputs.release }}"
+    assert upload["with"]["name"] == "release-installer-windows-x86_64"
+    assert upload["with"]["path"].split() == [
+        "dist/windows/*-setup.exe",
+        "dist/windows/*-setup.exe.sha256",
+    ]
+    assert qualify["Upload verified Windows preview"]["if"] == "${{ !inputs.release }}"
+    assert windows["jobs"]["qualify"]["needs"] == ["preview", "native-tests"]
