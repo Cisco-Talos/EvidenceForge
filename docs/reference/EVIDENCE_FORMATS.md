@@ -15,17 +15,17 @@ This document lists every evidence type EvidenceForge can generate, where to fin
 [email](#email-artifacts-and-zeek-smtp) · [Windows Security](#windows-security-events) ·
 [Sysmon](#windows-sysmon-events) · [Zeek](#zeek-network-logs) ·
 [eCAR](#ecar-format-simulated-edr-telemetry) · [Linux syslog](#linux-syslog) ·
-[bash](#bash-history) · [zsh](#zsh-history-experimental) · [IDS](#snortsuricata-ids-alerts) ·
+[bash](#bash-history) · [zsh](#zsh-history) · [IDS](#snortsuricata-ids-alerts) ·
 [Cisco ASA](#cisco-asa-firewall-syslog) · [web](#web-access-log) ·
-[proxy](#http-proxy-log) · [Mac ULF](#experimental-macos-unified-log-ndjson) ·
-[Mac ES](#experimental-macos-endpoint-security-ndjson)
+[proxy](#http-proxy-log) · [Mac ULF](#macos-unified-log-ndjson) ·
+[Mac ES](#macos-endpoint-security-ndjson)
 
 ## Platform and source matrix
 
 This reference describes the current source checkout. Release notes define a published
 installer's capabilities. The simulated platform is independent of the generation host;
 macOS generation currently admits only macOS 27 arm64 workstations. See the
-[Mac guide](../macos.md) for its experimental scope.
+[Mac guide](../macos.md) for its scope.
 
 | Canonical format ID | Windows host | Linux host | Mac host | Other source owner |
 | --- | --- | --- | --- | --- |
@@ -79,11 +79,11 @@ output/
       windows_event_security.xml           # Windows Security XML document, or splunk XML event stream
       windows_event_sysmon.xml             # Sysmon XML document, or splunk XML event stream
       ecar.json                            # Simulated EDR telemetry in eCAR format (NDJSON)
-      macos_endpoint_security.ndjson       # Experimental v11 process and bounded file events
-      macos_unified_log.ndjson             # Experimental selected workspace/policy/SSH messages
+      macos_endpoint_security.ndjson       # v11 process and bounded file events
+      macos_unified_log.ndjson             # Selected workspace/policy/SSH messages
       syslog.log                           # Linux syslog (default/splunk target; RFC5424)
       bash_history/<username>.bash_history # Per-user explicit Bash history (Linux/Mac)
-      zsh_history/<username>.zsh_history   # Experimental Mac extended incremental history
+      zsh_history/<username>.zsh_history   # Mac extended incremental history
       web_access.log                       # Web server access log on web_server hosts
       proxy_access.log                     # Forward proxy access log on forward_proxy hosts
       <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 (sof-elk target)
@@ -684,7 +684,7 @@ companions appear according to normal visibility rules.
 See [the shared record contract](RECORD_VALIDATION.md) for typed predicates, Windows aliases,
 parser failure accounting, and exact schema/correctness acceptance gates.
 
-## Zsh history (experimental)
+## Zsh history
 
 `<host>/zsh_history/<username>.zsh_history` contains independently modeled interactive submissions in native `: epoch:0;command` form. The initial profile represents EXTENDED_HISTORY with incremental append, so zero elapsed time means persistence at submission. Canonical session/shell ownership is required; arbitrary or noninteractive process creation never implies history. Only single-line ASCII records are supported. Multiline/metafied records, history clearing, session-exit-only persistence and SIEM ingestion mappings remain unvalidated. The parser reports unsupported records explicitly. See [zsh history options](https://zsh.sourceforge.io/Doc/Release/Options.html#History).
 
@@ -700,9 +700,9 @@ The PID and `objectID` remain those of the existing lifetime; `actorID` identifi
 
 The internal Mac `process_audit_bind` and `process_privilege_drop` occurrences use the same `PROCESS/MODIFY` extension, with `operation=audit_bind` and `operation=privilege_drop`. Audit adoption changes audit attribution while preserving privileged POSIX credentials. A child privilege drop changes the process principal and real/effective IDs while preserving its authenticated audit origin. Both preserve PID, object identity, execution identity, image and thread identity. `principal` remains the acting pre-transition principal; `process_principal` and `previous_process_principal` expose the resulting and previous process principals. Known numeric credentials remain string properties and unknown audit facts are absent. These are aggregate canonical transitions, not a claim about individual native setuid callbacks, Endpoint Security collection, or external SIEM compatibility. Each observation must match its exact authenticated State patch; neither is an authored event type. Source timing orders activity using the resulting credential snapshot after the transition without applying that barrier to historical snapshots. The separate internal `process_service_drop` uses `operation=service_drop` for pre-authentication `_sshd` adoption; it changes the principal and real/effective IDs while keeping audit UID/session absent. It shares the exact publication, omission and recovery contract without implying user authentication.
 
-The experimental Mac SSH receiver projects canonical login/logout, flow and helper-process transitions through eCAR and existing network sources. It emits no Linux PAM/systemd-logind messages. Qualified native SSH authentication also has the separately described Unified Log projection. Its shared continuation executes automatic or paired authored logout, including recovery after interrupted publication and checkpoint restore. SCP/SFTP receiver helpers remain unavailable. Native-format validation remains separate from this canonical/eCAR coverage.
+The Mac SSH receiver projects canonical login/logout, flow and helper-process transitions through eCAR and existing network sources. It emits no Linux PAM/systemd-logind messages. Qualified native SSH authentication also has the separately described Unified Log projection. Its shared continuation executes automatic or paired authored logout, including recovery after interrupted publication and checkpoint restore. SCP/SFTP receiver helpers remain unavailable. Native-format validation remains separate from this canonical/eCAR coverage.
 
-### Experimental macOS Unified Log NDJSON
+### macOS Unified Log NDJSON
 
 `macos_unified_log` writes `<host>/macos_unified_log.ndjson` in UTC. The modeled macOS 27 arm64 profile renders `logEvent` records for loginwindow entering `-[Login1 launchWorkspace]` and explicit app-policy refusals. A successful local interactive login requests this separate canonical stage; service sessions, failed authentication and SSH do not request a workspace entry. Method entry is not proof of completed desktop startup. The writer is the modeled loginwindow process with its own effective UID, thread, deployed main-image UUID and boot uptime. Source collection and wall-clock adjustments use the existing observation/timing owners; absent collection does not undo the action.
 
@@ -742,7 +742,7 @@ does not by itself establish Gatekeeper denial meaning. Separately reviewed refu
 
 `process.outcome: policy_refused` is a separate macOS 27 arm64 app-policy observation. Supply an absolute `.app/Contents/MacOS/<executable>` path and `parent_ref` naming an earlier live same-host/actor initiator. Here that reference identifies the initiator, not proven target parentage. `process_ref` is forbidden. The canonical attempt reserves the reported target PID in the shared host namespace without creating a running process, successful image replacement, fork, exit, command effects or history. Optional `command_line` documents intent only. Select `macos_unified_log` on that host to observe the bounded AppleSystemPolicy kernel refusal. The record has kernel PID/UID zero, a boot-owned kernel image exported as `/kernel` (separate from its installed artifact path), a distinct policy sender, an absolute-style callsite and a separately allocated logging TID. Target PID/path come from the attempt; the native message does not include the supplied command arguments. Build UUIDs and offsets are independently modeled, not captured values. The specific cause and target allocation/exec stage stay unclassified. `denied` and `exec_failed` keep their existing meanings. Missing native metadata or source collection never becomes a fabricated record.
 
-### Experimental macOS Endpoint Security NDJSON
+### macOS Endpoint Security NDJSON
 
 The active generation target is an explicit **macOS 27 arm64 workstation**. An optional
 `os_build` identifies a modeled build; other unqualified Mac targets, including macOS 26,

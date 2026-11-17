@@ -300,7 +300,7 @@ pack, project overlay, then scenario-local fields. Peer pack collisions fail det
 project overlay cannot change engine-owned safety, evaluation, resource, runtime, or OOB policy.
 
 
-## Experimental Mac source and workload configuration
+## Mac source and workload configuration
 
 The current source tree's Mac target is macOS 27 arm64 workstations; see the
 [Mac guide](../macos.md) for admitted process/file families and remaining limits.

@@ -260,7 +260,7 @@ outside scope. See the repository's `docs/macos.md` and format reference for cur
 ## Other evidence and interpretation
 
 Mac file populations use existing `environment.storage.file_sets` with absolute POSIX
-roots. Experimental mounted SMB clients reuse existing mappings with automatic/mounted
+roots. Mounted Mac SMB clients reuse existing mappings with automatic/mounted
 path presentation; they do not make a Mac an SMB server. Client eCAR and selected network/
 Windows/Samba server evidence remain owned by their actual platforms. Native Mac SMB
 messages and broader APFS alias/case behavior are unavailable.

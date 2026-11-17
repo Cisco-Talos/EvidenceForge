@@ -22,7 +22,7 @@ Splunk-specific JSON records.
 | eCAR | `<host>/ecar.json` | Custom simulated EDR NDJSON. |
 | Snort/Suricata | `<ids-sensor>/snort_alert.log` | Fast alert style, emitted only for configured IDS sensors. |
 | Bash history | `<host>/bash_history/<user>.bash_history` | Explicit interactive Bash on Linux/Mac. |
-| Zsh history | `<host>/zsh_history/<user>.zsh_history` | Experimental interactive Mac submissions. |
+| Zsh history | `<host>/zsh_history/<user>.zsh_history` | Interactive Mac submissions. |
 | Mac Endpoint Security | `<host>/macos_endpoint_security.ndjson` | Qualified v11 process and bounded regular-file events. |
 | Mac Unified Log | `<host>/macos_unified_log.ndjson` | Selected workspace, policy-refusal and SSH authentication messages. |
 
