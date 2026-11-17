@@ -99,13 +99,21 @@ without turning `TODO.md` back into a high-conflict work journal.
   the rejected handle/operation without weakening isolation, locks or durability.
   Ordinary Studio generation succeeds; that does not qualify this separate path.
   See the [laptop trace](docs/worklog/2026-11-11-studio-windows-x86_64.md#successful-scenario-pipeline-with-authoring-and-ui-follow-ups-november-13).
+  November 17: a native probe isolated the cause. The MXC sandbox rejects every RootDirectory-
+  relative rename (files and directories) with STATUS_INVALID_HANDLE while allowing absolute-
+  path renames. replace_child now retries by the pinned parent's own NT path and verifies the
+  object landed beneath that parent; the probe's equivalent passes inside MXC. Close after a
+  packaged sandbox retest. See the [MXC rename probe](docs/worklog/2026-11-11-studio-
+  windows-x86_64.md#mxc-rejects-handle-relative-renames-november-17).
 
-- [ ] **P2 — Studio "Forge" UI redesign:** Implementation is complete on
+- [x] **P2 — Studio "Forge" UI redesign:** Implementation is complete on
   `feature/studio-forge-ui`: tokens and themes with an Appearance setting, shared components and
   vocabulary, sidebar projects and flat libraries, the workspace readiness strip with tabs, and the
   Activity timeline. Remaining: a PR into `dev` and native Tauri acceptance (Appearance
   persistence, About window). Rules are in `AGENTS.md` § Studio UI Design Patterns. See the
   [worklog](docs/worklog/2026-11-16-studio-forge-ui.md).
+  Closed November 17: merged in PR #486 and shipped in the rc1 notes; the user verified
+  Appearance persistence and the About window in the native app.
 
 - [ ] **P2 — Unrequested command menu after New Scenario:** Reproduce the repeated
   laptop report that creating a scenario opens its chat with the command menu over
@@ -178,8 +186,11 @@ without turning `TODO.md` back into a high-conflict work journal.
   external-tool and SQLite paths; review remaining direct I/O boundaries without
   leaking device-prefixed paths into public metadata or weakening containment.
   See the [filesystem review](docs/worklog/2026-11-11-studio-windows-x86_64.md#laptop-generation-failure-and-filesystem-review).
+  November 17: artifact release snapshots and writes now use the long-path spelling and fail on
+  unreadable directories; bundled examples beneath the private runtime exceeded MAX_PATH and
+  were silently omitted, failing example installation after an upgrade.
 
-- [ ] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
+- [x] **P1 — Windows 11 x86_64 desktop acceptance:** Test browser-downloaded unsigned
   setup, both scopes, UAC cancellation/alternate administrator credentials, intended-user
   ownership, ordinary-user GUI workflows, and successful packaged authoring with MXC.
   The user accepted the tested install/uninstall flows on November 16; retain
@@ -194,6 +205,8 @@ without turning `TODO.md` back into a high-conflict work journal.
   Legacy separate-account Codex authoring is unsupported; runtime ACLs remain private.
   The Windows release excludes ARM support, signing and automatic runtime pruning. See the
   [Windows preview worklog](docs/worklog/2026-11-11-studio-windows-x86_64.md).
+  Closed November 17: the user accepted all Windows 11 desktop acceptance checks. The separate
+  authoring smoke-generation failure (WinError 6) remains its own P1 item.
 
 - [x] **P1 — Publish the Windows x86_64 installer with releases:** The Release workflow now
   builds the NSIS setup in release mode, runs the same native installed-scope and
@@ -849,11 +862,13 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P3** Add TLS client-certificate/mTLS profiles with client chains,
   `client_cert_chain_fuids`, X.509/file projection, and TLS-version-specific
   visibility semantics.
-- [ ] **P3** Remove the 2.x public-identity compatibility adapters and legacy overlay filenames in
-  EvidenceForge 3.0 after migration telemetry and documentation have had a full major-version
-  window.
+- [ ] **P3** Remove the deprecated public-identity compatibility adapters and legacy overlay
+  filenames (`external_actor_profiles.yaml`, `mail_public_identities.yaml`) in a later major
+  release. On November 17 the user deferred removal past 3.0: the product has no migration
+  telemetry, and published scenarios and resolved runs freeze these files in their effective
+  configuration. Removal needs a migration path for those frozen artifacts first.
 - [ ] **P3** Evaluate a typed Scenario schema field for scenario-local public identity bindings in
-  a future schema revision; 2.0 intentionally keeps this project-wide registry overlay-only.
+  a future schema revision; Scenario 2.0 and 3.0 keep this project-wide registry overlay-only.
 - [ ] **P2** Add friction and timing texture to staged intrusion/exfiltration
   chains, including retries, failed commands, dwell-time slack, partial cleanup,
   tool residue, competing benign traffic, and less perfectly staged large-file
