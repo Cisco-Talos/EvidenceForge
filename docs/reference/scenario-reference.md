@@ -863,6 +863,12 @@ Validation warns when a network topology has no firewall entry. Requesting `cisc
         - {src: servers, dst: servers}
 ```
 
+A firewall forwards traffic between its interfaces. Segments mapped to the **same** interface
+(`workstations` and `servers` above both use `inside`) reach each other without crossing the
+firewall, so it neither logs nor enforces policy for that traffic. The exception is traffic
+addressed to a static-NAT `mapped_ip` (including hairpin access from inside). Map segments to
+distinct interfaces to place the firewall between them.
+
 **Policy rules** (`FirewallRule`):
 - `src` / `dst`: segment name, `"external"` (IPs not in any segment), specific IP, CIDR notation, or `"any"`
 - `ports`: list of port numbers, or empty list / `"any"` for all ports

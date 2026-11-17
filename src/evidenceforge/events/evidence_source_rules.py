@@ -133,6 +133,57 @@ def ecar_smb_projection_phases(
     return tuple(phases)
 
 
+def ecar_samba_session(
+    server_os_category: str | None,
+    session_kind: str | None,
+    smb_provider: str | None,
+    smb_server_platform: str | None,
+) -> bool:
+    """Return whether a session is owned by a Linux Samba server rather than a Windows LSA.
+
+    Samba sessions carry no Windows logon ID; eCAR keys them by their SMB session reference.
+    """
+    return server_os_category == "linux" and (
+        session_kind == "smb" or smb_provider == "samba" or smb_server_platform == "linux"
+    )
+
+
+def ecar_samba_session_reference(auth_session_ref: str | None, smb_session_id: str | None) -> str:
+    """Return the durable SMB session reference eCAR renders for a Samba session."""
+    return auth_session_ref or smb_session_id or ""
+
+
+ECAR_PORT_BEARING_PROTOCOLS = frozenset({"tcp", "udp", "sctp"})
+
+
+def endpoint_local_destination_ip(dst_ip: str | None, mapped_dst_ip: str | None) -> str | None:
+    """Return the destination host's own address for a possibly translated transport.
+
+    Host-based telemetry on the responder sees its interface address, not the static-NAT
+    VIP the client addressed.
+    """
+    return mapped_dst_ip if mapped_dst_ip and mapped_dst_ip != dst_ip else dst_ip
+
+
+def ecar_flow_endpoint_fields(
+    protocol: str | None,
+    src_ip: str | None,
+    src_port: int | None,
+    dst_ip: str | None,
+    dst_port: int | None,
+) -> dict[str, object]:
+    """Return eCAR FLOW endpoint properties: ports only for port-bearing protocols."""
+    fields: dict[str, object] = {"src_ip": src_ip, "dst_ip": dst_ip}
+    normalized = (protocol or "").lower()
+    if normalized in ECAR_PORT_BEARING_PROTOCOLS:
+        fields["src_port"] = src_port
+        fields["dst_port"] = dst_port
+    elif normalized == "icmp":
+        fields["icmp_type"] = 8
+        fields["icmp_code"] = 0
+    return fields
+
+
 def native_zeek_connection_state(protocol: str, state: str | None) -> str | None:
     """Project transport outcome into native Conn::conn_state semantics."""
     return "OTH" if protocol == "icmp" else state

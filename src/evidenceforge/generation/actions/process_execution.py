@@ -30,6 +30,7 @@ from enum import StrEnum
 from inspect import getattr_static
 from typing import TYPE_CHECKING, Literal, Protocol
 
+from evidenceforge.events.command_derivation import CommandDerivation
 from evidenceforge.events.content_identity import canonical_native_path
 from evidenceforge.events.identity import ProcessIdentity, validate_process_arguments
 from evidenceforge.events.lifecycle import SessionEndPlan
@@ -285,6 +286,7 @@ class ProcessExecutionRequest:
     preserve_requested_time: bool = field(default=False, kw_only=True)
     new_posix_session: bool = field(default=False, kw_only=True)
     arguments: tuple[str, ...] | None = field(default=None, kw_only=True)
+    command_derivation: CommandDerivation | None = field(default=None, kw_only=True)
     exec_script: MacosExecScript | None = field(default=None, kw_only=True)
     macos_launch_kind: Literal["user", "system", "finder"] | None = field(
         default=None, kw_only=True

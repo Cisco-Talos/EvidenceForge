@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
+from evidenceforge.events.command_derivation import CommandDerivation
 from evidenceforge.events.content_identity import (
     FileContentIdentity,
     LocalArtifactIdentity,
@@ -151,6 +152,8 @@ class ProcessContext:
     target_security_context: ProcessTargetSecurityContext | None = None
     binary_identity: ProcessBinaryIdentity | None = None
     exit_outcome: PosixProcessExit | None = None
+    # Provenance of command_line for authored steps; not part of process identity or equality.
+    command_derivation: CommandDerivation | None = field(default=None, compare=False)
 
 
 @dataclass(slots=True)

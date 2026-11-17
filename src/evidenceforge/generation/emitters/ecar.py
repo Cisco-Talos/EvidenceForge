@@ -29,6 +29,12 @@ from typing import Any
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.collection_policy import CollectionCapability, ProjectionRole
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.evidence_source_rules import (
+    ecar_flow_endpoint_fields,
+    ecar_samba_session,
+    ecar_samba_session_reference,
+    endpoint_local_destination_ip,
+)
 from evidenceforge.events.identity import ProcessIdentity, ThreadIdentity
 from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
@@ -70,8 +76,6 @@ _ECAR_FAILURE_REASON_BY_WINDOWS_CODE = {
     "%%2313": "authentication_failure",
 }
 
-_PORT_BEARING_PROTOCOLS = {"tcp", "udp", "sctp"}
-
 
 def _ecar_sort_key(line: str) -> tuple[int, int, str]:
     """Extract timestamp_ms for chronological per-host eCAR output sorting."""
@@ -109,20 +113,16 @@ def _ecar_flow_endpoint_properties(
     direction: str,
 ) -> dict[str, Any]:
     """Return source-native FLOW endpoint properties for eCAR rendering."""
-    protocol = (net.protocol or "").lower()
-    properties: dict[str, Any] = {
-        "src_ip": net.src_ip,
-        "dst_ip": dst_ip or net.dst_ip,
+    endpoints = ecar_flow_endpoint_fields(
+        net.protocol, net.src_ip, net.src_port, dst_ip or net.dst_ip, net.dst_port
+    )
+    return {
+        "src_ip": endpoints.pop("src_ip"),
+        "dst_ip": endpoints.pop("dst_ip"),
         "protocol": net.protocol,
         "direction": direction,
+        **endpoints,
     }
-    if protocol in _PORT_BEARING_PROTOCOLS:
-        properties["src_port"] = net.src_port
-        properties["dst_port"] = net.dst_port
-    elif protocol == "icmp":
-        properties["icmp_type"] = 8
-        properties["icmp_code"] = 0
-    return properties
 
 
 def _ecar_remote_auth_transport_properties(event: CanonicalOccurrence) -> dict[str, Any]:
@@ -145,13 +145,13 @@ def _ecar_remote_auth_transport_properties(event: CanonicalOccurrence) -> dict[s
 def _is_linux_smb_event(event: CanonicalOccurrence) -> bool:
     """Return whether eCAR is projecting a session owned by a Samba server."""
     host = event.dst_host
-    if host is None or host.os_category != "linux":
-        return False
     auth = event.auth
     smb = event.smb
-    return bool(
-        (auth is not None and auth.session_kind == "smb")
-        or (smb is not None and (smb.provider == "samba" or smb.server_platform == "linux"))
+    return host is not None and ecar_samba_session(
+        host.os_category,
+        auth.session_kind if auth is not None else None,
+        smb.provider if smb is not None else None,
+        smb.server_platform if smb is not None else None,
     )
 
 
@@ -441,9 +441,9 @@ class EcarEmitter(HostMultiplexEmitter):
         auth = event.auth
         process = event.process
         if auth is not None and _is_linux_smb_event(event):
-            auth_session_ref = auth.auth_session_ref
-            if not auth_session_ref and event.smb is not None:
-                auth_session_ref = event.smb.session_id
+            auth_session_ref = ecar_samba_session_reference(
+                auth.auth_session_ref, event.smb.session_id if event.smb is not None else None
+            )
             if auth_session_ref:
                 event_data["auth_session_ref"] = auth_session_ref
                 event_data["session_id"] = auth_session_ref
@@ -1140,10 +1140,9 @@ class EcarEmitter(HostMultiplexEmitter):
                 seed_parts=inbound_seed,
                 paired_endpoint=event.src_host is not None,
             )
-            # Host-based EDR sees the local interface IP, not the NAT VIP
-            dst_ip = net.dst_ip
-            if event.nat and event.nat.mapped_dst_ip and event.nat.mapped_dst_ip != net.dst_ip:
-                dst_ip = event.nat.mapped_dst_ip
+            dst_ip = endpoint_local_destination_ip(
+                net.dst_ip, event.nat.mapped_dst_ip if event.nat else None
+            )
             event_data = {
                 "timestamp": event_ts,
                 "hostname": event.dst_host.hostname,

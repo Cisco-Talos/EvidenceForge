@@ -6,6 +6,7 @@
 from dataclasses import replace
 from datetime import datetime
 
+from evidenceforge.events.command_derivation import CommandDerivation
 from evidenceforge.events.content_identity import BinaryReleaseIdentity
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
@@ -47,6 +48,7 @@ class MacosBrowserHelperStartup(MacosFinderStartup):
         lifecycle_group_id: str,
         concurrency_group_id: str,
         storyline: bool,
+        command_derivation: CommandDerivation | None = None,
     ) -> None:
         current = state.process_directory_at(parent, event_time=times[0])
         table = state.process_descriptors_at(parent, event_time=times[0])
@@ -87,6 +89,7 @@ class MacosBrowserHelperStartup(MacosFinderStartup):
         self._arguments, self._app_environment, self._spawn_io = arguments, environment, spawn_io
         self._times, self._lifecycle_group_id = times, lifecycle_group_id
         self._concurrency_group_id, self._storyline = concurrency_group_id, storyline
+        self._command_derivation = command_derivation
         self._fork_directory = metadata.directory(parent.hostname, current.native_path, times[0])
         self._app_directory = metadata.directory(parent.hostname, current.native_path, times[1])
         self._phase = 0
@@ -129,6 +132,7 @@ class MacosBrowserHelperStartup(MacosFinderStartup):
                 host=self._host, before=before, after=after, integrity_level="Medium"
             )
             event.process.binary_identity = self._app
+            event.process.command_derivation = self._command_derivation
             root = f"process-exec:{after.execution_id}"
         events = (event,)
         return PendingMacosStartupPhase(

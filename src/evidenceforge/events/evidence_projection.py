@@ -517,19 +517,57 @@ def native_requirements(
                     }
                 )
         elif obj == "FLOW":
+            from evidenceforge.events.evidence_source_rules import (
+                ecar_flow_endpoint_fields,
+                endpoint_local_destination_ip,
+            )
+
             selector["direction"] = "INBOUND" if role == "destination_endpoint" else "OUTBOUND"
+            dst_ip = network.get("dst_ip")
+            if role == "destination_endpoint":
+                dst_ip = endpoint_local_destination_ip(
+                    dst_ip, (facts.get("nat") or {}).get("mapped_dst_ip")
+                )
+            endpoints = ecar_flow_endpoint_fields(
+                network.get("protocol"),
+                network.get("src_ip"),
+                network.get("src_port"),
+                dst_ip,
+                network.get("dst_port"),
+            )
             required = {
-                "src_ip": network.get("src_ip"),
-                "dst_ip": network.get("dst_ip"),
-                "src_port": network.get("src_port"),
-                "dst_port": network.get("dst_port"),
+                key: endpoints[key]
+                for key in ("src_ip", "dst_ip", "src_port", "dst_port")
+                if key in endpoints
             }
         elif obj == "USER_SESSION":
-            required = {"principal": auth.get("username"), "logon_id": auth.get("logon_id")}
+            from evidenceforge.events.evidence_source_rules import (
+                ecar_samba_session,
+                ecar_samba_session_reference,
+            )
+
+            smb = facts.get("smb") or {}
+            if ecar_samba_session(
+                (facts.get("dst_host") or {}).get("os_category"),
+                auth.get("session_kind"),
+                smb.get("provider"),
+                smb.get("server_platform"),
+            ):
+                # A Samba server owns no Windows logon ID; its session reference is the key.
+                required = {
+                    "principal": auth.get("username"),
+                    "session_id": ecar_samba_session_reference(
+                        auth.get("auth_session_ref"), smb.get("session_id")
+                    ),
+                }
+            else:
+                required = {"principal": auth.get("username"), "logon_id": auth.get("logon_id")}
             if action == "LOGIN":
                 required["outcome"] = "failure" if kind == "failed_logon" else "success"
         elif obj == "FILE":
-            file = facts.get("file") or facts.get("smb") or {}
+            # SMB occurrences also carry a generic file view of the server object; the SMB
+            # facts own the server and client paths each endpoint actually renders.
+            file = facts.get("smb") or facts.get("file") or {}
             required = {
                 "file_path": file.get("path") or file.get("local_path") or file.get("client_path")
                 if role != "destination_endpoint"
@@ -592,30 +630,53 @@ def native_requirements(
                 ]
     elif format_name == "cisco_asa":
         firewall = facts.get("firewall") or {}
+        protocol = network.get("protocol")
         if firewall.get("action") == "deny":
             selector = {"msg_id": 106023}
+        elif protocol == "icmp":
+            selector = {"msg_id": 302020}
         else:
-            selector = {"msg_id": 302013 if network.get("protocol") == "tcp" else 302015}
+            selector = {"msg_id": 302013 if protocol == "tcp" else 302015}
         required = {
             "src_ip": network.get("src_ip"),
             "src_port": network.get("src_port"),
             "dst_ip": network.get("dst_ip"),
             "dst_port": network.get("dst_port"),
         }
+        built_required = dict(required)
+        nat = (source_view or {}).get("nat") if firewall.get("action") != "deny" else None
+        if nat:
+            # The firewall's own translation view owns which address is real and which
+            # is mapped: Built rows show both, teardown rows only the real endpoints.
+            if nat["direction"] == "destination":
+                required["dst_ip"] = nat["local_ip"]
+                required["dst_port"] = nat["local_port"]
+                built_required = {
+                    **required,
+                    "mapped_dst_ip": nat["global_ip"],
+                    "mapped_dst_port": nat["global_port"],
+                }
+            else:
+                built_required = {
+                    **required,
+                    "mapped_src_ip": nat["global_ip"],
+                    "mapped_src_port": nat["global_port"],
+                }
+        if protocol == "icmp" and firewall.get("action") != "deny":
+            # ICMP lifecycle rows carry addresses, not transport ports.
+            required = {key: required[key] for key in ("src_ip", "dst_ip")}
+            built_required = {
+                key: value for key, value in built_required.items() if not key.endswith("_port")
+            }
         selector.update(required)
-        if (
-            firewall.get("action") != "deny"
-            and source_view
-            and network.get("protocol") in {"tcp", "udp"}
-        ):
-            selector.update(required)
+        if firewall.get("action") != "deny" and source_view and protocol in {"tcp", "udp", "icmp"}:
+            teardown_id = {"tcp": 302014, "udp": 302016, "icmp": 302021}[protocol]
             return [
-                NativeEvidenceRequirement(selector=selector, required=required),
                 NativeEvidenceRequirement(
-                    selector={
-                        **required,
-                        "msg_id": 302014 if network.get("protocol") == "tcp" else 302016,
-                    },
+                    selector={**selector, **built_required}, required=built_required
+                ),
+                NativeEvidenceRequirement(
+                    selector={**required, "msg_id": teardown_id},
                     required=required,
                     expected="present"
                     if source_view.get("firewall_teardown_time")
@@ -742,9 +803,12 @@ def native_requirements(
     elif format_name == "ecar" and selector.get("object") == "FLOW":
         selector.update(required)
     elif format_name == "ecar" and selector.get("object") == "USER_SESSION":
-        if auth.get("logon_id"):
+        if required.get("session_id"):
+            selector["session_id"] = required["session_id"]
+        elif auth.get("logon_id"):
             selector["logon_id"] = auth["logon_id"]
-        elif auth.get("source_ip"):
+        elif auth.get("source_ip") not in (None, "", "-"):
+            # "-" is the native no-source placeholder, not an address to select on.
             selector["src_ip"] = auth["source_ip"]
     if format_name == "ecar" and selector.get("object") != "FLOW":
         subject = facts.get("subject_identity") or {}

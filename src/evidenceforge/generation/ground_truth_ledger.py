@@ -219,6 +219,9 @@ def _facts(event: CanonicalOccurrence) -> dict[str, JsonValue]:
                 for field in names
                 if hasattr(context, field)
             }
+    derivation = event.process.command_derivation if event.process is not None else None
+    if derivation is not None and isinstance(result.get("process"), dict):
+        result["process"]["command_derivation"] = _json_value(derivation.to_facts())
     for name in (
         "smb",
         "remote_thread",

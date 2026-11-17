@@ -98,11 +98,32 @@ class NetworkVisibilityEngine:
         sensor = self.get_sensor(hostname)
         if sensor is None:
             return ""
+        return self._interface_for(sensor, ip)
+
+    def _interface_for(self, sensor: NetworkSensor, ip: str) -> str:
+        """Return the interface whose real-address segment contains ``ip``."""
         address = ipaddress.ip_address(self._vip_to_real_ip.get(ip, ip))
         for name, network in self._segment_networks.items():
             if address in network:
                 return sensor.interfaces.get(name, name)
         return sensor.interfaces.get("_default", "outside")
+
+    def firewall_traverses(self, sensor: NetworkSensor, src_ip: str, dst_ip: str) -> bool:
+        """Return whether a firewall is on the forwarding path between two endpoints.
+
+        A firewall forwards traffic between its interfaces. Segments assigned to the
+        same interface reach each other without crossing it, unless the destination
+        is one of the firewall's translated addresses (including hairpin access to
+        a static-NAT VIP). Non-firewall sensors are unaffected.
+        """
+        if sensor.type != "firewall" or not src_ip or not dst_ip:
+            return True
+        if src_ip in self._vip_to_real_ip or dst_ip in self._vip_to_real_ip:
+            return True
+        try:
+            return self._interface_for(sensor, src_ip) != self._interface_for(sensor, dst_ip)
+        except ValueError:
+            return True
 
     def infer_sensor_path_role(
         self,
@@ -333,7 +354,9 @@ class NetworkVisibilityEngine:
         dst_segments = self._resolve_ip_segments(dst_ip)
 
         return any(
-            self._sensor_can_observe(sensor, src_segments, dst_segments) for sensor in self._sensors
+            self._sensor_can_observe(sensor, src_segments, dst_segments)
+            and self.firewall_traverses(sensor, src_ip, dst_ip)
+            for sensor in self._sensors
         )
 
     def get_observing_sensors(self, src_ip: str, dst_ip: str) -> list[NetworkSensor]:
@@ -351,6 +374,7 @@ class NetworkVisibilityEngine:
             sensor
             for sensor in self._sensors
             if self._sensor_can_observe(sensor, src_segments, dst_segments)
+            and self.firewall_traverses(sensor, src_ip, dst_ip)
         ]
 
     def get_link_local_sensors(self, src_ip: str) -> list[NetworkSensor]:
@@ -438,6 +462,7 @@ class NetworkVisibilityEngine:
             sensor
             for sensor in self._sensors
             if self._sensor_can_observe(sensor, src_segments, set())
+            and self.firewall_traverses(sensor, src_ip, dst_ip)
         ]
 
     def get_log_formats_for_source_only(self, src_ip: str, dst_ip: str = "") -> set[str]:

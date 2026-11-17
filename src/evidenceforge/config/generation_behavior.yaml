@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 522
+current_revision: 525
 history_start_revision: 1
-behavior_surface_sha256: a3e5ba02803490c1506b6a2203e4ea2534bded4b6337a3e6e9a87f25164cdd9b
+behavior_surface_sha256: cda28c85b2732d050ee94506ed250974e48c66f120d14749127e4b52e2a417fc
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6010,3 +6010,36 @@ changes:
   summary: Retain OCSP analyzer facts, qualify source roles and phases, publish browser
     exits and persistent SMB firewall lifecycles, qualify SMB endpoint roles, and advance
     endpoint process clocks only for SMB phases actually rendered.
+- revision: 523
+  id: route-firewall-observation-through-interfaces-and-nat
+  impact: localized
+  domains:
+  - firewall
+  - ground-truth
+  - network-visibility
+  - source-timing
+  formats:
+  - cisco_asa
+  - ecar
+  summary: Firewalls observe only interface-crossing or translated traffic; ASA and eCAR
+    FLOW truth follow NAT and ICMP views; process timing receipts name host-clock
+    projections of predecessor births.
+- revision: 524
+  id: record-authored-command-derivations
+  impact: localized
+  domains:
+  - ground-truth
+  - process-execution
+  formats: []
+  summary: Authored process occurrences record the ordered shell, launch-contract and
+    service-host rules that produced their native command so ground truth can replay them.
+- revision: 525
+  id: align-ecar-session-and-smb-file-truth
+  impact: localized
+  domains:
+  - ground-truth
+  - smb
+  formats:
+  - ecar
+  summary: eCAR truth keys Samba sessions by their SMB session reference, takes SMB server and
+    client paths from SMB facts, and uses native PROCESS OPEN and THREAD REMOTE_CREATE actions.
