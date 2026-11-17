@@ -220,18 +220,29 @@ exact instances and independent restrictions. Validation and comparison evidence
   Closed November 17: PR #471 (`4df3c2ae`) removed corpus ceilings; `EvaluationLimits` and
   `--allow-large-evaluation` remain only as deprecated no-ops, with memory gates in CI.
 
-- [ ] **P0 — Reconcile full mixed-fleet ground-truth acceptance (release blocker):** The unchanged
-  canonical iteration benchmark fails schema-v5 agreement despite strong blind
-  source reviews. Qualify remaining native projection requirements, missing or
-  duplicate evidence, capability/filter decisions and timing dependencies against
-  exact records; repair their owners without lowering the 95% gate or changing
-  the workload. Current repairs and residual evidence are in the
-  [assessment worklog](docs/worklog/2026-11-11-iteration-test-loops89-98.md).
-  The Windows laptop report also exposes shared SMTP boolean comparison, DNS SRV
-  projection and HTTP proxy CONNECT-expectation defects reproduced on macOS. Track
-  those as general data-quality work, separately from Windows installer/Studio
-  acceptance; remaining capability/filter disagreements still need exact-bundle
-  diagnosis. See the [laptop report analysis](docs/worklog/2026-11-11-studio-windows-x86_64.md#shared-evidence-disagreements-reproduced-on-macos-november-13).
+- [x] **P0 — Reconcile full mixed-fleet ground-truth acceptance (release blocker):** Closed
+  November 17: the unchanged canonical `iteration-test` benchmark passes acceptance at 96.37
+  schema-v5 agreement (gate 95; overall 98.37) after owner-level repairs in behavior
+  revisions 523–526: firewall interface/NAT routing, ASA and eCAR NAT/ICMP views,
+  host-clock-aware predecessor proofs, recorded authored command derivations, Samba session
+  and SMB file truth, and canonical Bash history destruction. The SMTP boolean defect was
+  fixed earlier. See the [acceptance worklog](docs/worklog/2026-11-17-ground-truth-acceptance.md).
+
+- [ ] **P2 — Residual mixed-fleet ground-truth disagreements:** The passing benchmark (r526)
+  retains 327 incorrect checks. Diagnose each against exact records and repair its owner
+  without lowering the gate:
+  - proxy_access missing/duplicate evidence (222), including the HTTP CONNECT expectation set
+    for plain HTTP (`tunnel_status_code`) from the Windows laptop report;
+  - Zeek DNS factual disagreements (17), including SRV answers projected as
+    `priority weight port host` while Zeek renders the target only;
+  - generation-side eCAR timing anchors (11): Mac SSH fork parents whose anchor no longer
+    matches the published create receipt, `runas` children pairing the interactive login time
+    with the new-credentials logon ID, and unmatched frontier/children points;
+  - syslog unexpected expectations (30) and factual disagreements (7);
+  - smaller Windows Security/Sysmon, Zeek files/conn/ssl capability and loss decisions, ASA
+    scan denies to a VIP, and the `runas` logon-type and deny-enforcement authored facts.
+  Current counts and diagnostics are in the
+  [acceptance worklog](docs/worklog/2026-11-17-ground-truth-acceptance.md).
 
 - [ ] **P2 — Remove the shared Linux PID churn floor:** Ten hosts share a
   940-PID ten-minute mode caused by clipping hidden churn to temporal reorder
