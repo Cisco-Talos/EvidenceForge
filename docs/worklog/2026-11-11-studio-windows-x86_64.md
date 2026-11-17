@@ -2618,3 +2618,34 @@ CI; no test gate needs to be weakened or re-enabled in source. Dispatch only the
 additional slow/portability and full installer qualification workflows absent from
 a PR targeting dev. Reuse authenticated matching-input evidence normally; do not
 force duplicate suites. Merge only after the required integration checks pass.
+
+### MXC rejects handle-relative renames (November 17)
+
+A packaged laptop reproduction ran the draft-local consumer generation through the Studio agent
+and failed exactly as traced: RunLock.acquire -> WindowsCheckpointIO.mkdir -> replace_child ->
+NtSetInformationFile, WinError 6. `scripts/windows_rename_probe.py`, run with the installed
+runtime once inside MXC (via the agent) and once from ordinary PowerShell, compared publication
+forms in the same draft folder:
+
+| Variant | MXC | Ordinary shell |
+|---|---|---|
+| Checkpoint mkdir; RootDirectory-relative directory rename (write-through or not, ADD access on the target parent); RootDirectory-relative file replace | invalid handle | OK |
+| Absolute-path rename (`\??\` or handle-derived `\Device\...`), with post-rename location verification | OK | OK |
+| MoveFileExW write-through; direct write-through directory create | OK | OK |
+
+MXC rejects the RootDirectory form of FileRenameInformation for files and directories while
+permitting the same rename by absolute name, so every protected-storage rename (directory
+publication, atomic writes, checkpoints) fails there. `replace_child` keeps the handle-relative
+rename as its primary form; on STATUS_INVALID_HANDLE it renames by the pinned target parent's own
+NT path (GetFinalPathNameByHandleW, VOLUME_NAME_NT) and requires the renamed object's final path
+to equal that parent's current path plus the target name. Flags, write-through and flushing are
+unchanged. Native tests simulate the rejection and a redirected publication. Close the P1 after a
+packaged sandbox retest.
+
+The same laptop upgrade also exposed an empty Example Scenarios project: Settings reported
+"published file inventory changed". 50 of 107 bundled example files exceed MAX_PATH beneath the
+171-character private runtime prefix; Python 3.12 `Path.rglob` silently skips directories it
+cannot open, so release verification saw a partial inventory. CI runners enable long paths.
+Artifact snapshots and writes now use the long-path spelling and fail on unreadable directories.
+Windows authoring turns also tell the agent that ripgrep and other POSIX tools are unavailable.
+
