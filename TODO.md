@@ -987,8 +987,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [x] Add Windows 4778/4779 RDP reconnect/disconnect evidence.
 - [ ] Model integrity levels well enough that Mimikatz at Medium integrity does
   not appear to succeed unrealistically.
-- [ ] Add configurable per-host/source log deployment coverage for named host
-  groups, disabled sensors, partial deployments, and collection windows.
+- [ ] **P3** Add named host-group selectors for per-host/source log deployment coverage. Exact
+  per-source `observation_overrides` and `deployment_overrides` already cover disabled sources,
+  partial deployments and collection windows, including macOS Endpoint Security and Unified Log
+  sources since November 17; group and role selectors remain deliberately unsupported.
 - [x] **P2** Profiled long-scenario generation and removed duration-growing
   connection, session, process/thread, expiry, Linux PID, logind, and
   multi-host syslog retention paths. See

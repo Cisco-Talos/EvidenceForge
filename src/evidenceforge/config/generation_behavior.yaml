@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 526
+current_revision: 527
 history_start_revision: 1
-behavior_surface_sha256: a9bed2157373909b25d26fe020ad90c062e54adc7b7d4ae346ae7ce53823f1dd
+behavior_surface_sha256: ec95fc2d5cd9f685549c55bfbcc7d1122560e40ab0488c105502c5bf7126f5c0
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6053,3 +6053,14 @@ changes:
   - bash_history
   summary: Shell commands record their canonical history effect from shared data; ground truth
     expects entries destroyed by a later clear of the same history file to be absent.
+- revision: 527
+  id: admit-macos-observation-overrides
+  impact: none
+  domains:
+  - collection-policy
+  - macos
+  formats:
+  - macos_endpoint_security
+  - macos_unified_log
+  summary: One shared source table defines catalog families and the authored observation
+    vocabulary, admitting macOS Endpoint Security and Unified Log overrides; outputs are unchanged.

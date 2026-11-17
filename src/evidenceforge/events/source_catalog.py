@@ -19,6 +19,7 @@ from types import MappingProxyType
 
 from evidenceforge.events.collection_policy import CollectionCapability
 from evidenceforge.models.exceptions import ConfigurationError
+from evidenceforge.source_families import SOURCE_FORMATS
 from evidenceforge.utils.platforms import platform_for_os
 
 
@@ -274,9 +275,19 @@ _NETWORK_DIRECTIONS = (
 _ENDPOINT_ACTOR = CollectionCapability.SOURCE_ENDPOINT | CollectionCapability.COHERENT_ACTOR
 
 
+def _table_family(name: str, owner: SourceOwnerKind) -> str:
+    """Return a format's family from the shared source table, requiring its owner kind."""
+    entry = SOURCE_FORMATS.get(name)
+    if entry is None or entry[1] != owner.value:
+        raise SourceCatalogError(
+            f"source format {name!r} must be declared as a {owner.value} format in "
+            "evidenceforge.source_families.SOURCE_FORMATS"
+        )
+    return entry[0]
+
+
 def _host(
     name: str,
-    family: str,
     capabilities: CollectionCapability,
     platforms: frozenset[str],
     *,
@@ -284,7 +295,7 @@ def _host(
 ) -> SourceFormatDescriptor:
     return SourceFormatDescriptor(
         name=name,
-        family=family,
+        family=_table_family(name, SourceOwnerKind.HOST),
         owner=SourceOwnerKind.HOST,
         capabilities=capabilities,
         platforms=platforms,
@@ -294,13 +305,12 @@ def _host(
 
 def _sensor(
     name: str,
-    family: str,
     capabilities: CollectionCapability,
     sensor_type: str,
 ) -> SourceFormatDescriptor:
     return SourceFormatDescriptor(
         name=name,
-        family=family,
+        family=_table_family(name, SourceOwnerKind.SENSOR),
         owner=SourceOwnerKind.SENSOR,
         capabilities=capabilities,
         sensor_types=frozenset({sensor_type}),
@@ -315,7 +325,6 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
     descriptors=(
         _host(
             "windows_event_security",
-            "windows_security",
             CollectionCapability.PROCESS
             | CollectionCapability.AUTHENTICATION
             | CollectionCapability.SESSION
@@ -331,7 +340,6 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         ),
         _host(
             "windows_event_sysmon",
-            "sysmon",
             CollectionCapability.PROCESS
             | CollectionCapability.NETWORK
             | CollectionCapability.DNS
@@ -341,7 +349,6 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
             _WINDOWS,
         ),
         _host(
-            "ecar",
             "ecar",
             CollectionCapability.PROCESS
             | CollectionCapability.AUTHENTICATION
@@ -360,7 +367,6 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         ),
         _host(
             "syslog",
-            "syslog",
             CollectionCapability.PROCESS
             | CollectionCapability.AUTHENTICATION
             | CollectionCapability.SESSION
@@ -374,18 +380,15 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         ),
         _host(
             "bash_history",
-            "bash_history",
             CollectionCapability.PROCESS | CollectionCapability.COHERENT_ACTOR,
             frozenset({"linux", "macos"}),
         ),
         _host(
             "zsh_history",
-            "zsh_history",
             CollectionCapability.PROCESS | CollectionCapability.COHERENT_ACTOR,
             frozenset({"macos"}),
         ),
         _host(
-            "macos_unified_log",
             "macos_unified_log",
             CollectionCapability.SESSION
             | CollectionCapability.AUTHENTICATION
@@ -395,7 +398,6 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         ),
         _host(
             "macos_endpoint_security",
-            "macos_endpoint_security",
             CollectionCapability.PROCESS
             | CollectionCapability.FILE
             | CollectionCapability.COHERENT_ACTOR,
@@ -403,7 +405,6 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         ),
         _host(
             "proxy_access",
-            "proxy",
             CollectionCapability.AUTHENTICATION
             | CollectionCapability.NETWORK
             | CollectionCapability.HTTP
@@ -413,7 +414,6 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         ),
         _host(
             "web_access",
-            "web",
             CollectionCapability.AUTHENTICATION
             | CollectionCapability.NETWORK
             | CollectionCapability.HTTP
@@ -421,35 +421,30 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
             _ENDPOINT_PLATFORMS,
             roles=frozenset({"web-server"}),
         ),
-        _sensor("zeek_conn", "zeek", _NETWORK_DIRECTIONS, "network"),
+        _sensor("zeek_conn", _NETWORK_DIRECTIONS, "network"),
         _sensor(
             "zeek_dns",
-            "zeek",
             _NETWORK_DIRECTIONS | CollectionCapability.DNS | CollectionCapability.DNS_ANALYZER,
             "network",
         ),
         _sensor(
             "zeek_http",
-            "zeek",
             _NETWORK_DIRECTIONS | CollectionCapability.HTTP | CollectionCapability.HTTP_ANALYZER,
             "network",
         ),
-        _sensor("zeek_smtp", "zeek", _NETWORK_DIRECTIONS, "network"),
+        _sensor("zeek_smtp", _NETWORK_DIRECTIONS, "network"),
         _sensor(
             "zeek_ssl",
-            "zeek",
             _NETWORK_DIRECTIONS | CollectionCapability.TLS | CollectionCapability.TLS_ANALYZER,
             "network",
         ),
         _sensor(
             "zeek_files",
-            "zeek",
             _NETWORK_DIRECTIONS | CollectionCapability.FILE | CollectionCapability.FILE_ANALYZER,
             "network",
         ),
         _sensor(
             "zeek_smb_files",
-            "zeek",
             _NETWORK_DIRECTIONS
             | CollectionCapability.SMB
             | CollectionCapability.FILE
@@ -459,35 +454,31 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         ),
         _sensor(
             "zeek_smb_mapping",
-            "zeek",
             _NETWORK_DIRECTIONS | CollectionCapability.SMB | CollectionCapability.SMB_ANALYZER,
             "network",
         ),
         _sensor(
             "zeek_x509",
-            "zeek",
             _NETWORK_DIRECTIONS | CollectionCapability.TLS | CollectionCapability.TLS_ANALYZER,
             "network",
         ),
-        _sensor("zeek_dhcp", "zeek", _NETWORK_DIRECTIONS, "network"),
-        _sensor("zeek_ntp", "zeek", _NETWORK_DIRECTIONS, "network"),
-        _sensor("zeek_weird", "zeek", _NETWORK_DIRECTIONS, "network"),
+        _sensor("zeek_dhcp", _NETWORK_DIRECTIONS, "network"),
+        _sensor("zeek_ntp", _NETWORK_DIRECTIONS, "network"),
+        _sensor("zeek_weird", _NETWORK_DIRECTIONS, "network"),
         _sensor(
             "zeek_ocsp",
-            "zeek",
             _NETWORK_DIRECTIONS | CollectionCapability.TLS | CollectionCapability.TLS_ANALYZER,
             "network",
         ),
         _sensor(
             "zeek_pe",
-            "zeek",
             _NETWORK_DIRECTIONS | CollectionCapability.FILE | CollectionCapability.FILE_ANALYZER,
             "network",
         ),
-        _sensor("zeek_packet_filter", "zeek", _NETWORK_DIRECTIONS, "network"),
-        _sensor("zeek_reporter", "zeek", _NETWORK_DIRECTIONS, "network"),
-        _sensor("snort_alert", "ids", _NETWORK_DIRECTIONS | CollectionCapability.IDS, "ids"),
-        _sensor("cisco_asa", "asa", _NETWORK_DIRECTIONS, "firewall"),
+        _sensor("zeek_packet_filter", _NETWORK_DIRECTIONS, "network"),
+        _sensor("zeek_reporter", _NETWORK_DIRECTIONS, "network"),
+        _sensor("snort_alert", _NETWORK_DIRECTIONS | CollectionCapability.IDS, "ids"),
+        _sensor("cisco_asa", _NETWORK_DIRECTIONS, "firewall"),
     ),
     groups={
         "windows": ("windows_event_security", "windows_event_sysmon"),
@@ -511,6 +502,12 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         ),
     },
 )
+
+if set(DEFAULT_SOURCE_CATALOG.format_names) != set(SOURCE_FORMATS):
+    raise SourceCatalogError(
+        "The default source catalog must declare exactly the formats in "
+        "evidenceforge.source_families.SOURCE_FORMATS"
+    )
 
 
 def source_family_for_format(format_name: str) -> str:

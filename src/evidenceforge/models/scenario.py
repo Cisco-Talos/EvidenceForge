@@ -54,6 +54,12 @@ from evidenceforge.config.compatibility import warn_legacy_config
 from evidenceforge.models.http import HttpMultipartEntitySpec
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
 from evidenceforge.naming import SCENARIO_NAME_PATTERN
+from evidenceforge.source_families import (
+    FORMAT_FAMILIES,
+    HOST_SOURCE_FAMILIES,
+    SOURCE_FAMILY_NAMES,
+    SOURCE_FORMAT_NAMES,
+)
 
 MAX_HTTP_RESPONSE_BODY_LEN = 10_000_000_000
 
@@ -3246,77 +3252,10 @@ CollectionCapabilityName = Literal[
     "batching",
 ]
 
-ObservationSourceFamily = Literal[
-    "windows_security",
-    "sysmon",
-    "ecar",
-    "syslog",
-    "bash_history",
-    "zsh_history",
-    "zeek",
-    "proxy",
-    "web",
-    "asa",
-    "ids",
-]
-
-ObservationFormatName = Literal[
-    "windows_event_security",
-    "windows_event_sysmon",
-    "ecar",
-    "syslog",
-    "bash_history",
-    "zsh_history",
-    "zeek_conn",
-    "zeek_dns",
-    "zeek_http",
-    "zeek_smtp",
-    "zeek_ssl",
-    "zeek_files",
-    "zeek_smb_files",
-    "zeek_smb_mapping",
-    "zeek_x509",
-    "zeek_dhcp",
-    "zeek_ntp",
-    "zeek_weird",
-    "zeek_ocsp",
-    "zeek_pe",
-    "zeek_packet_filter",
-    "zeek_reporter",
-    "proxy_access",
-    "web_access",
-    "cisco_asa",
-    "snort_alert",
-]
-
-_OBSERVATION_FORMAT_FAMILIES: dict[str, str] = {
-    "windows_event_security": "windows_security",
-    "windows_event_sysmon": "sysmon",
-    "ecar": "ecar",
-    "syslog": "syslog",
-    "bash_history": "bash_history",
-    "zsh_history": "zsh_history",
-    "zeek_conn": "zeek",
-    "zeek_dns": "zeek",
-    "zeek_http": "zeek",
-    "zeek_smtp": "zeek",
-    "zeek_ssl": "zeek",
-    "zeek_files": "zeek",
-    "zeek_smb_files": "zeek",
-    "zeek_smb_mapping": "zeek",
-    "zeek_x509": "zeek",
-    "zeek_dhcp": "zeek",
-    "zeek_ntp": "zeek",
-    "zeek_weird": "zeek",
-    "zeek_ocsp": "zeek",
-    "zeek_pe": "zeek",
-    "zeek_packet_filter": "zeek",
-    "zeek_reporter": "zeek",
-    "proxy_access": "proxy",
-    "web_access": "web",
-    "cisco_asa": "asa",
-    "snort_alert": "ids",
-}
+# The authored observation vocabulary is derived from the one shared source table.
+ObservationSourceFamily = Literal[SOURCE_FAMILY_NAMES]
+ObservationFormatName = Literal[SOURCE_FORMAT_NAMES]
+_OBSERVATION_FORMAT_FAMILIES: Mapping[str, str] = FORMAT_FAMILIES
 
 _EXACT_DEPLOYMENT_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]*$")
 _EXACT_SOURCE_INSTANCE_RE = re.compile(
@@ -3811,16 +3750,7 @@ class Environment(BaseModel):
                 "environment.observation_overrides source_instance values must be unique"
             )
 
-        host_source_families = {
-            "windows_security",
-            "sysmon",
-            "ecar",
-            "syslog",
-            "bash_history",
-            "zsh_history",
-            "proxy",
-            "web",
-        }
+        host_source_families = HOST_SOURCE_FAMILIES
         sensor_source_families: dict[str, set[str]] = {}
         if self.network is not None:
             for sensor in self.network.sensors:

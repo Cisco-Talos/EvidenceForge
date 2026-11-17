@@ -45,8 +45,9 @@ patch fields are `enabled`, `capabilities`, `missingness`, `format_missingness`,
 
 `source_instance` uses exact `<family>:<owner>[:<local-name>]` identity and is normalized to lower
 case. Entries must be unique and must resolve against the compiled collection registry.
-`family` is one of `windows_security`, `sysmon`, `ecar`, `syslog`, `bash_history`, `zeek`, `proxy`,
-`web`, `asa`, or `ids`.
+`family` is one of `windows_security`, `sysmon`, `ecar`, `syslog`, `bash_history`, `zsh_history`,
+`macos_endpoint_security`, `macos_unified_log`, `zeek`, `proxy`, `web`, `asa`, or `ids`. Disabling
+or windowing a Mac's `macos_endpoint_security` source requires `macos_process_coverage: partial`.
 
 ```yaml
 environment:
