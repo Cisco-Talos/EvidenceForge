@@ -25,9 +25,10 @@ from tests.support.macos_ssh import assert_native_ssh_receiver_lifecycle, macos_
 def test_nonempty_native_cli_is_deterministic_filter_independent_and_ingestible(
     tmp_path: Path, scenarios_dir: Path
 ) -> None:
-    data = macos_ssh_scenario(scenarios_dir, macos_receiver=True).model_dump(
-        mode="json", exclude_none=True
-    )
+    # The receiver lifecycle below is the still-open shape, so close after the 1h window.
+    data = macos_ssh_scenario(
+        scenarios_dir, macos_receiver=True, authored_close=True, close_at="+75m"
+    ).model_dump(mode="json", exclude_none=True)
     for system in data["environment"]["systems"]:
         system["os_build"] = "26A100"
     data["output"]["logs"].append({"format": "macos_endpoint_security"})

@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -991,35 +992,81 @@ def test_real_ssh_caller_materializes_fully_suppressed_warmup_session(
     assert exact.reserved_rows == exact.reserved_bytes == 0
 
 
-def test_real_ssh_mixed_warmup_and_visible_members_still_require_positive_targets(
+def _assert_straddling_session_rows(
+    ecar_rows: list[dict[str, object]], zeek_rows: list[dict[str, object]]
+) -> None:
+    """Only the in-window receiver members render; the warm-up transport has no row."""
+
+    window_start_ms = int((_START + timedelta(seconds=1)).timestamp() * 1_000)
+    assert [(row["object"], row["action"]) for row in ecar_rows] == [
+        ("PROCESS", "CREATE"),
+        ("USER_SESSION", "LOGIN"),
+    ]
+    assert all(cast(int, row["timestamp_ms"]) >= window_start_ms for row in ecar_rows)
+    assert zeek_rows == []
+
+
+def test_real_ssh_session_straddling_window_start_publishes_in_window_members(
     tmp_path: Path,
 ) -> None:
-    """A suppressed transport cannot admit later visible session members without proof."""
+    """A transport opened in warm-up leaves its visible session members publishable."""
 
     reset_thread_rng(42)
     fixture = _fixture(
         tmp_path,
         output_start_time=_START + timedelta(seconds=1),
     )
-    before = (
-        fixture.state.materialization_digest(),
-        fixture.generator._lifecycle_authority.registry.census(),
-        fixture.generator._ssh_channel_manager.census(),
-    )
 
-    with pytest.raises(EventContractError, match="positive exact target"):
+    uid, logon_id = _execute_real_caller(fixture)
+
+    assert uid
+    session = fixture.state.get_session(logon_id)
+    assert session is not None and session.session_kind == "ssh"
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    _assert_straddling_session_rows(*fixture.close_and_read())
+
+
+@pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
+def test_real_ssh_straddling_session_sink_failure_recovers_exactly_once(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partially suppressed batch recovers its visible rows without duplicates."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(
+        tmp_path,
+        output_start_time=_START + timedelta(seconds=1),
+    )
+    original = ExternalSortedLineWriter._commit_exact_row
+    attempts = 0
+
+    def inject(
+        writer: ExternalSortedLineWriter,
+        key: object,
+        digest: str,
+        frozen: object,
+    ) -> None:
+        nonlocal attempts
+        if writer.output_path.name == "ecar.json" and attempts == 0:
+            attempts += 1
+            if failure_mode == "lost-return":
+                original(writer, key, digest, frozen)
+            raise OSError(f"injected straddling {failure_mode}")
+        original(writer, key, digest, frozen)
+
+    monkeypatch.setattr(ExternalSortedLineWriter, "_commit_exact_row", inject)
+    with pytest.raises(OSError, match=f"straddling {failure_mode}"):
         _execute_real_caller(fixture)
 
-    after = (
-        fixture.state.materialization_digest(),
-        fixture.generator._lifecycle_authority.registry.census(),
-        fixture.generator._ssh_channel_manager.census(),
-    )
-    assert after == before
+    recovery = fixture.generator.dispatcher.exact_projection_recovery_census()
+    assert recovery.unresolved_recoveries == 1
+    results = fixture.generator.dispatcher.drain_exact_projection_recoveries()
+    assert len(results) == 1
+    assert all(outcome.status == "succeeded" for outcome in results[0].projections)
     _assert_no_dispatcher_residue(fixture.generator.dispatcher)
-    ecar_rows, zeek_rows = fixture.close_and_read()
-    assert ecar_rows == []
-    assert zeek_rows == []
+    _assert_straddling_session_rows(*fixture.close_and_read())
 
 
 @pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))

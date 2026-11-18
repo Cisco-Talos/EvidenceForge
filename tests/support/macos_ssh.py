@@ -24,9 +24,18 @@ MACOS_NATIVE_QUERY_COMMANDS: tuple[str, ...] = (
 
 
 def macos_ssh_scenario(
-    scenarios_dir: Path, *, macos_receiver: bool = False, authored_close: bool = False
+    scenarios_dir: Path,
+    *,
+    macos_receiver: bool = False,
+    authored_close: bool = False,
+    close_at: str = "+30m",
 ) -> Scenario:
-    """Build existing authored intent without new platform configuration fields."""
+    """Build existing authored intent without new platform configuration fields.
+
+    The session has no authored duration, so its sampled end moves whenever any earlier
+    generation draw changes. Tests asserting a closed, released or still-open session must
+    pass ``authored_close`` with an explicit ``close_at`` instead of relying on that draw.
+    """
     data = load_yaml(scenarios_dir / "minimal.yaml")
     data["generation_seed"] = 99
     # Legacy compatibility diagnostics retain partial coverage; public CLI acceptance
@@ -90,7 +99,7 @@ def macos_ssh_scenario(
         data["storyline"].append(
             {
                 "id": "remote-close",
-                "time": "+30m",
+                "time": close_at,
                 "actor": "test_user",
                 "system": "SSH-TEST",
                 "activity": "Close the remote session at its authored deadline",

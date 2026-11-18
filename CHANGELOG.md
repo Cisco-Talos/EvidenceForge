@@ -4,7 +4,7 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
-## v3.0.0rc1 (2026-11-17)
+## v3.0.0rc1 (2026-11-18)
 
 First release candidate for EvidenceForge 3.0. The 3.0 version marks the Studio desktop
 workflow and mixed Windows, Linux and macOS simulation developed through the 2.2 alpha series.

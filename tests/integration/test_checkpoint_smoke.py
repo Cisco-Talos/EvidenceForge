@@ -126,6 +126,20 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ).model_dump(mode="json", exclude_none=True)
         if macos_receiver:
             scenario_data["storyline"][1]["time"] = "+50m"
+        if macos_receiver and not authored_close:
+            # The checkpoint must catch this unauthored close still pending. A command
+            # 30 minutes into the session requires it to outlast the hour boundary, while
+            # its end stays sampled with no authored owner.
+            scenario_data["storyline"][1]["event_spacing"] = {"mode": "interval", "interval": "30m"}
+            # A qualified literal query is valid under complete native coverage and PTY.
+            scenario_data["storyline"][1]["events"].append(
+                {
+                    "type": "process",
+                    "process_name": "/usr/bin/id",
+                    "command_line": "/usr/bin/id",
+                    "supplementary": "none",
+                }
+            )
         if authored_close:
             scenario_data["storyline"][1]["time"] = "+1h50m"
             scenario_data["storyline"][2]["time"] = "+2h20m"
@@ -572,6 +586,10 @@ def test_short_generation_checkpoint_suspension_and_resume(
         if authored_close:
             assert any(len(row) == 32 and row[31] is not None for row in head["ssh_lifecycles"]), (
                 "The active continuation must retain its authored end owner"
+            )
+        else:
+            assert all(len(row) != 32 or row[31] is None for row in head["ssh_lifecycles"]), (
+                "An unauthored continuation must not gain an authored end owner"
             )
     retained_helpers: set[str] = set()
     if native_system_job:
