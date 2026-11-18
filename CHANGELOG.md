@@ -110,6 +110,9 @@ independent of scenario and storage schema versions. Changes since 2.2.0a6:
   skills; only Codex is installed separately for authoring. The CLI and agent-skill workflows
   remain supported. The macOS installer has no Developer ID signature or notarization, and the
   Windows installer is not code-signed.
+- Windows generation is much slower than on macOS and Linux, mostly after the simulated
+  hours finish: one 24-hour example took about 1h40m on a Windows 11 laptop inside the
+  authoring sandbox. Investigation is planned for 3.0.0.
 
 ## v2.2.0a6 (2026-11-09)
 

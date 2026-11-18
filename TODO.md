@@ -108,14 +108,14 @@ without turning `TODO.md` back into a high-conflict work journal.
   Closed November 18: the packaged retest (eb3d85fc) generated the Alderbrook draft inside MXC
   with no errors after the long-path SQLite, scratch-folder and deferred-session fixes.
 
-- [ ] **P1 — Windows generation finalization time:** The same packaged MXC run took about
-  1h40m end to end, but only 11m48s in tracked simulated hours. Roughly 88 minutes passed in
-  untracked finalization (source sorting/rendering, Windows journal publication, ground
-  truth and the staged swap); macOS spends about 1.5 minutes there for the same draft. First
-  measure the same draft with Studio's Generate (outside MXC) to separate the sandbox and
-  Defender from the engine, then profile the phase on Windows. Decide whether the result
-  blocks stable 3.0.0 or ships as a known limitation; finalization should also report
-  progress.
+- [ ] **P1 — Windows generation time (3.0.0 stable; not an rc1 blocker):** Investigate why
+  Windows generation is so much slower and whether it can be brought near macOS/Linux times.
+  A packaged MXC run of the Alderbrook draft took about 1h40m end to end but only 11m48s in
+  tracked simulated hours; roughly 88 minutes passed in untracked finalization (source
+  sorting/rendering, Windows journal publication, ground truth and the staged swap). macOS
+  spends about 1.5 minutes there for the same draft. First time the same draft with Studio's
+  Generate (outside MXC) to separate the sandbox and Defender from the engine, then profile
+  finalization on Windows. Finalization should also report progress.
 
 - [x] **P2 — Studio "Forge" UI redesign:** Implementation is complete on
   `feature/studio-forge-ui`: tokens and themes with an Appearance setting, shared components and
