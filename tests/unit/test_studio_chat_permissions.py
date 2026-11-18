@@ -128,7 +128,7 @@ def test_retained_chat_becomes_read_only_and_new_draft_requires_new_chat(
         assert started["config"]["shell_environment_policy.set"] == {
             name: str(scratch) for name in ("TMPDIR", "TEMP", "TMP")
         }
-        assert str(scratch) in started["developerInstructions"]
+        assert repr(str(scratch)) in started["developerInstructions"]
         release = publish(source, project_root=workspace, accept_warnings=True)
         client.portal.call(studio.scan)
         receipt = verify_release(release.parent.parent)
