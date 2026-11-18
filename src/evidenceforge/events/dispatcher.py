@@ -14546,9 +14546,11 @@ class EventDispatcher:
         proven_members = {proof.member_ordinal for proof in proofs}
         ssh_receiver = self._is_ssh_receiver_projection_cohort(dispatches)
         required_members = (
-            {target[0] for target in expected} if ssh_receiver else set(range(len(dispatches)))
+            {target[0] for target in expected}
+            if ssh_receiver
+            else set(range(len(dispatches))) - self._deferred_session_unobserved_members(dispatches)
         )
-        if proven_members != required_members:
+        if (not ssh_receiver and not required_members) or proven_members != required_members:
             raise EventContractError(
                 "Deferred-session publication requires a positive exact target for every member"
             )
@@ -14693,8 +14695,19 @@ class EventDispatcher:
             ) in expected
             if member_ordinal == 0
         )
+        # A transport opened before the output window has no row; its canonical time still
+        # bounds every visible dependent, which the window start already places after it.
+        warmup_transport = (
+            self._projection_is_exact_warmup_suppressed(dispatches[0]._projection)
+            if dispatches
+            else False
+        )
+        transport_floor: tuple[datetime, ...] = (
+            (dispatches[0]._occurrence.timestamp,) if warmup_transport else ()
+        )
         if (
             not ssh_receiver
+            and not warmup_transport
             and any(member_ordinal > 0 for member_ordinal, *_rest in expected)
             and not (transport_targets)
         ):
@@ -14731,6 +14744,8 @@ class EventDispatcher:
                 continue
             if not transport_ecar_keys and ssh_receiver:
                 continue
+            if not transport_ecar_keys and transport_floor:
+                transport_ecar_keys = (int(transport_floor[0].timestamp() * 1_000),)
             if not transport_ecar_keys or min(proof.source_order_keys) <= max(transport_ecar_keys):
                 raise EventContractError(
                     "Deferred-session eCAR source-native ordering does not place FLOW "
@@ -14745,7 +14760,7 @@ class EventDispatcher:
                 for value in transport_ecar_keys
             )
             if transport_ecar_keys
-            else cast(tuple[datetime, ...], transport_targets)
+            else transport_floor or cast(tuple[datetime, ...], transport_targets)
         )
         for proof in proofs:
             if proof.member_ordinal == 0 or proof.format_name != "windows_event_security":
@@ -14762,6 +14777,43 @@ class EventDispatcher:
                     "Deferred-session Windows source-native ordering does not place transport "
                     "before its dependent"
                 )
+
+    def _deferred_session_unobserved_members(
+        self,
+        dispatches: tuple[PreparedDispatch, ...],
+    ) -> set[int]:
+        """Return members whose exact projection legitimately renders no source row.
+
+        A session can straddle a collection boundary: members before the output window are
+        warm-up suppressed and members past its end are collection suppressed, so they form a
+        leading and a trailing run. Coherent source missingness may omit any member. These are
+        the same exact dispositions the action-cohort projection facts accept.
+        """
+
+        warmup = [
+            self._projection_is_exact_warmup_suppressed(prepared._projection)
+            for prepared in dispatches
+        ]
+        collection = [
+            self._projection_is_exact_collection_suppressed(prepared._projection)
+            for prepared in dispatches
+        ]
+        leading = next((index for index, value in enumerate(warmup) if not value), len(warmup))
+        trailing = next(
+            (index for index, value in enumerate(reversed(collection)) if not value),
+            len(collection),
+        )
+        if any(warmup[leading:]) or any(collection[: len(collection) - trailing]):
+            raise EventContractError(
+                "Deferred-session collection-boundary suppression is not a boundary run"
+            )
+        return {
+            ordinal
+            for ordinal, prepared in enumerate(dispatches)
+            if warmup[ordinal]
+            or collection[ordinal]
+            or self._projection_is_exact_observation_suppressed(prepared._projection)
+        }
 
     def _projection_is_exact_warmup_suppressed(
         self,

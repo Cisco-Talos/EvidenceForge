@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 528
+current_revision: 529
 history_start_revision: 1
-behavior_surface_sha256: be9f2c8353948a9f07c1913229674c3e5e8a954c71d93bd17011d0d8115d417e
+behavior_surface_sha256: cf7e65b778bbeb4595a193f92dd50a6c89b803b24350d4e82edea38a729fec3f
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6072,3 +6072,14 @@ changes:
   formats: []
   summary: Every SQLite database opens through one helper that uses the Windows extended-length
     path spelling; database contents and generated output are unchanged.
+- revision: 529
+  id: deferred-session-collection-boundary-members
+  impact: none
+  domains:
+  - rdp-session-lifecycle
+  - ssh-session-lifecycle
+  - source-observation
+  formats: []
+  summary: Deferred SSH/RDP sessions accept exactly warm-up, collection or observation
+    suppressed members, so a session straddling the window start no longer aborts
+    generation. Successful runs are unchanged.

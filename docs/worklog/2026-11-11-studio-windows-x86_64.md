@@ -2674,3 +2674,26 @@ Windows startup check), and agent turns use the draft as cwd, so Studio access i
 
 Pending on the Windows laptop with a new installer: generation from the alderbrook draft
 end-to-end, and a second writable root under MXC. Close the WinError 6 P1 after both pass.
+
+### Draft generation: deferred RDP session at the window start (November 18)
+
+With the scratch build, the laptop retest got past the run lock and journals. The agent wrote its
+output to the scratch folder, so MXC accepted the second writable root. Generation then failed in
+warm-up hour 1: "Deferred-session publication requires a positive exact target for every member".
+This is not Windows-specific. A CLI draft of the Alderbrook example fails the same way on macOS,
+while the published example passes. A release generates from its frozen effective configuration;
+a draft resolves current packaged defaults. Those are equal key for key, but their YAML ordering
+differs, which changes random draws, so only the draft's trajectory reaches the defect. Release
+output is byte-identical whatever the output path or project root (41 files).
+
+The failing batch was a baseline RDP session to ABL-DC-01 that straddled the window start: the
+transport, two process creates and the Type 10 logon were warm-up suppressed, and userinit.exe
+and explorer.exe were visible. The deferred-session proof check accepted only a fully suppressed
+warm-up batch or the SSH receiver cohort. It now uses the same exact dispositions as the
+action-cohort projection facts: warm-up suppression as a leading run, collection suppression as
+a trailing run, and observation suppression anywhere. A non-SSH batch still needs at least one
+proven member. A warm-up-suppressed transport bounds dependent eCAR and Windows ordering by its
+canonical time (behavior revision 529). The published example remains byte-identical. A
+shortened draft (1h, one storyline step) reproduces it in about 25 seconds and is now a slow
+regression test. The slow tier also generates a draft of every shipping example, a path it
+previously did not cover.
