@@ -123,3 +123,21 @@ eCAR residue 94.25 → + ASA residue 95.18 → + authored typed facts 97.03 → 
 - Smaller: Windows Security unjustified source time / missing, syslog unexpected expectations,
   proxy, Zeek DNS (SRV projection still requires `priority weight port host`; HTTP CONNECT
   expectation on plain HTTP is still set at `generator.py` `tunnel_status_code`).
+
+## Release slow-tier findings (November 18)
+
+The rc1 slow tier on the gated `dev` tree passed 2,228 cases and failed four; the coverage gate
+passed at 78.75%. Three macOS SSH cases bisected to 447a7087. Its corrected firewall traversal
+rule removes firewall-observation draws for traffic the firewall never carries, which moves every
+later draw from the shared generation stream. An unauthored SSH session's sampled duration moved
+with it: the client held the shell until 10:29 instead of 10:22. Reverting only the rule restores
+the old outcome, so the tests, not generation, were fragile: they asserted released, still-open
+or checkpoint-open sessions without authoring the end they depended on. They now author that
+close, or (for the unauthored-close checkpoint case) require the session through the checkpoint
+with a later in-step command while its end stays sampled with no owner. The shared stream feeds
+85 call sites in 12 generation modules; any unrelated draw change can move unauthored samples.
+
+The fourth case asserted that a warm-up transport with visible SSH members must be rejected,
+the shape eb3d85fc admits. History says only that the rejection was preserved. It is replaced by
+a positive test (only the in-window receiver process and login render; no FLOW or Zeek row) and
+fail-before/lost-return eCAR sink recovery that drains exactly once.
