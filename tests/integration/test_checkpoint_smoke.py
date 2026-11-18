@@ -131,8 +131,14 @@ def test_short_generation_checkpoint_suspension_and_resume(
             # 30 minutes into the session requires it to outlast the hour boundary, while
             # its end stays sampled with no authored owner.
             scenario_data["storyline"][1]["event_spacing"] = {"mode": "interval", "interval": "30m"}
+            # A qualified literal query is valid under complete native coverage and PTY.
             scenario_data["storyline"][1]["events"].append(
-                {"type": "process", "process_name": "/usr/bin/uptime", "command_line": "uptime"}
+                {
+                    "type": "process",
+                    "process_name": "/usr/bin/id",
+                    "command_line": "/usr/bin/id",
+                    "supplementary": "none",
+                }
             )
         if authored_close:
             scenario_data["storyline"][1]["time"] = "+1h50m"
