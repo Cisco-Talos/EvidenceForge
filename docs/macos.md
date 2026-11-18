@@ -1,9 +1,8 @@
 # Simulating macOS workstations
 
-This guide describes the **current source checkout's experimental macOS 27 arm64
-workstation model**. Published installers contain the capabilities of their own
-release; check that release's notes and installed `eforge info formats --json`.
-The source checkout has not yet completed its next release acceptance gates.
+This guide describes the **macOS 27 arm64 workstation model**. Published installers
+contain the capabilities of their own release; check that release's notes and installed
+`eforge info formats --json`.
 
 ## Simulation target and execution host
 

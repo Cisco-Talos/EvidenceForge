@@ -43,7 +43,7 @@ Other app/helper activations and unsupported job definitions retain gates; compl
 
 A simulated system's OS determines its eligible host logs; it is independent of the OS running
 EvidenceForge. See the [platform/source matrix](EVIDENCE_FORMATS.md#platform-and-source-matrix)
-for Windows, Linux, experimental macOS 27 arm64, network and application/server sources.
+for Windows, Linux, macOS 27 arm64, network and application/server sources.
 Selecting a format does not deploy the source or guarantee a record; roles, activity, collection
 and sensor visibility still apply.
 
@@ -602,8 +602,8 @@ and `C:` remains the local system drive. Automatic Windows allocation uses `H:` 
 automatic Linux allocation uses `/mnt/<mapping-id>` and Mac allocation uses `/Volumes/<mapping-id>`.
 A mixed Linux/Mac audience needs an explicit common `mount` or separate audience mappings.
 Mac workstation clients use the existing `client_access: auto` and `path_style: auto|mounted`
-with a compatible mapping. Native operation actors, eCAR and existing network/server evidence
-are experimental; native Mac SMB logs and Mac SMB serving remain unavailable.
+with a compatible mapping. Mac clients produce native operation actors, eCAR and existing network/server evidence;
+native Mac SMB logs and Mac SMB serving remain unavailable.
 `credential_mode: per_user` is the default and
 uses the activity's resolved SMB principal. `credential_mode: fixed` requires `principal`; a
 per-user mapping forbids it. A fixed mapping principal is a credential identity, not proof that the
@@ -1932,7 +1932,7 @@ output:
 writes the bundle beside the scenario by default; pass `eforge generate --output <bundle-root>` to
 choose another location explicitly.
 
-Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `zsh_history` (experimental Mac history), `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
+Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `zsh_history` (Mac history), `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
 Output formats here are canonical and target-neutral. Choose target-specific
 file shapes, such as SOF-ELK® Snare Windows events or year-partitioned RFC3164
@@ -2014,7 +2014,7 @@ The environment must retain at least one regular user. Queued generation inputs
 remain immutable; resolved scenarios contain the effective accounts and directory
 links rather than authoring history, so generation needs no transition-specific logic.
 
-## Experimental modeled macOS workstations
+## Modeled macOS workstations
 
 The application catalog contains Apple Terminal (`macos-terminal`) and iTerm2
 (`macos-iterm2`, `/Applications/iTerm.app/Contents/MacOS/iTerm2`). Both use the shared
@@ -2044,7 +2044,7 @@ canonical terminal outcomes can render exit rows; unknown results remain unexpor
 unexecuted command is reported as skipped. Complete coverage applies to the modeled in-window
 starts and eligible collection, not an arbitrary real endpoint's entire process vocabulary.
 
-The initial `zsh_history` format records only modeled interactive zsh submissions, with incremental extended-history semantics. Mac Bash requires an explicit Bash session. Internal `zsh_command` occurrences are engine-owned, not new authored storyline event types. An existing local interactive Mac session can own a native SSH client to a Linux or bounded Mac receiver: use `ssh_session` on the receiver with the Mac's existing `source_ip`. The shared bundle owns transport, client lifecycle and platform-specific canonical receiver behavior. Experimental Mac receivers require `architecture: arm64`, `type: workstation`, `services: [ssh]` and an actor placed locally through `assigned_user` or `primary_system`. Use `ssh_session`, not Type 10 `logon`; an existing paired `logoff` can set the close deadline while the SSH continuation owns terminal execution. SCP/SFTP receiver helpers remain unavailable. Experimental `macos_unified_log` NDJSON can be selected through existing `output.logs` entries. It covers a separate workspace-method entry after a local interactive Mac login; it is not proof of desktop completion. `macos_workspace_request` is internal and must not be authored. Bounded native v11 process phases, system-domain launch items and pre-spawn denial are documented below. Explicit `process.outcome: policy_refused` adds the bounded kernel app-policy refusal described below. Qualified native SSH receivers also emit accepted authentication through the same action in both PTY modes: observed keyboard-interactive/PAM success for password intent, or source-derived plain-public-key success with complete canonical type/SHA256 fingerprint. The latter reuses the native-qualified common logger envelope; it is not a separate local public-key observation. Certificates, incomplete keys, PAM open/close, disconnect and launchd messages remain gated. Ordinary SSH daemon verbosity is preserved; VERBOSE session messages are outside this profile. Other Unified Log families remain unavailable; consult the [implementation worklog](../worklog/2026-10-15-macos-workstation-implementation.md) before designing an exercise around them.
+The initial `zsh_history` format records only modeled interactive zsh submissions, with incremental extended-history semantics. Mac Bash requires an explicit Bash session. Internal `zsh_command` occurrences are engine-owned, not new authored storyline event types. An existing local interactive Mac session can own a native SSH client to a Linux or bounded Mac receiver: use `ssh_session` on the receiver with the Mac's existing `source_ip`. The shared bundle owns transport, client lifecycle and platform-specific canonical receiver behavior. Mac receivers require `architecture: arm64`, `type: workstation`, `services: [ssh]` and an actor placed locally through `assigned_user` or `primary_system`. Use `ssh_session`, not Type 10 `logon`; an existing paired `logoff` can set the close deadline while the SSH continuation owns terminal execution. SCP/SFTP receiver helpers remain unavailable. `macos_unified_log` NDJSON can be selected through existing `output.logs` entries. It covers a separate workspace-method entry after a local interactive Mac login; it is not proof of desktop completion. `macos_workspace_request` is internal and must not be authored. Bounded native v11 process phases, system-domain launch items and pre-spawn denial are documented below. Explicit `process.outcome: policy_refused` adds the bounded kernel app-policy refusal described below. Qualified native SSH receivers also emit accepted authentication through the same action in both PTY modes: observed keyboard-interactive/PAM success for password intent, or source-derived plain-public-key success with complete canonical type/SHA256 fingerprint. The latter reuses the native-qualified common logger envelope; it is not a separate local public-key observation. Certificates, incomplete keys, PAM open/close, disconnect and launchd messages remain gated. Ordinary SSH daemon verbosity is preserved; VERBOSE session messages are outside this profile. Other Unified Log families remain unavailable; consult the [implementation worklog](../worklog/2026-10-15-macos-workstation-implementation.md) before designing an exercise around them.
 
 History requires canonical interactive invocation: terminal-backed stdin or an explicit
 interactive shell flag. Login mode such as `-zsh` alone does not make a non-PTY shell
@@ -2074,7 +2074,7 @@ A `process` event defaults to `outcome: success`. Explicit `outcome: denied` on 
 `process.outcome: policy_refused` is a separate macOS 27 arm64 app-policy observation. Supply an absolute `.app/Contents/MacOS/<executable>` path and `parent_ref` naming an earlier live same-host/actor initiator. Here that reference identifies the initiator, not proven target parentage. `process_ref` is forbidden. The canonical attempt reserves the reported target PID in the shared host namespace without creating a running process, successful image replacement, fork, exit, command effects or history. Optional `command_line` documents intent only. Select `macos_unified_log` on that host to observe the bounded AppleSystemPolicy kernel refusal. The record has kernel PID/UID zero, a boot-owned kernel image, a distinct policy sender, an absolute-style callsite and a separately allocated logging TID. Target PID/path come from the attempt; the native message does not include the supplied command arguments. Build UUIDs and offsets are independently modeled, not captured values. The specific cause and target allocation/exec stage stay unclassified. `denied` and `exec_failed` keep their existing meanings. Missing native metadata or source collection never becomes a fabricated record.
 
 
-### `macos_launch_item` — experimental system-domain persistence
+### `macos_launch_item` — system-domain persistence
 This typed event supports explicit root-owned stages on modeled macOS 27 arm64 workstations. It reuses the environment's deployment, collection and observation configuration. No native plist file is exported.
 | Field | Meaning |
 | --- | --- |
@@ -2098,7 +2098,7 @@ A file write does not register or activate a job. Bootstrap retains the current 
 
 Under the current execution policy, an unparented authored Mac `root` process assumes a pre-existing root shell in initial inventory. Its in-window child receives a canonical fork/exec without adding an elevation or authentication event. Use `parent_ref` to supply a different explicit parent. The selected root audit origin, non-TTY standards and runtime validation are model choices, not captured attack facts. See the [catalog metadata boundaries](../design/macos-workstation-feasibility/catalog-native-metadata.md).
 
-Experimental `output.logs: [{format: macos_endpoint_security}]` selects the macOS 27 arm64
+`output.logs: [{format: macos_endpoint_security}]` selects the macOS 27 arm64
 v11 fork/exec/known-exit profile. Selecting ES defaults `macos_process_coverage` to `complete`:
 every eligible in-window canonical fork/exec must reconcile with native output or generation
 fails with the missing requirements. Missing signing, entitlement or descriptor facts cannot
@@ -2114,7 +2114,7 @@ an exact declared invocation and completion after owned work. These are explicit
 choices, not measured automatic macOS logoff behavior. Unsupported command results and legacy
 profiles remain unknown. Collection cutoff does not itself terminate surviving processes.
 Existing collection settings govern
-eligibility. See the [native format contract](EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson)
+eligibility. See the [native format contract](EVIDENCE_FORMATS.md#macos-endpoint-security-ndjson)
 for remaining gaps and the distinction between decoding and generation admission.
 
 Existing `process` events for qualified literal local-terminal and non-PTY SSH commands can

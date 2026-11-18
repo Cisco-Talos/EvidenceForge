@@ -45,9 +45,9 @@ Fields: `type`, optional `source_ip`, `pty`, `ids_alerts`, `technique`, and `des
 bundle owns TCP/22, authentication, shell/session evidence, command ownership, and teardown; do
 not add an independent `logon` or port-22 `connection` for the same session.
 
-Experimental Mac clients require an existing local interactive session for native client process
+Mac clients require an existing local interactive session for native client process
 and history evidence. Set the event's system to the receiver and `source_ip` to the modeled
-client address. Experimental arm64 Mac workstation receivers require an explicitly placed local
+client address. Arm64 Mac workstation receivers require an explicitly placed local
 actor and SSH service. `pty: true` requests a qualified terminal-backed receiver; the default
 uses pipe-backed command streams. The bundle owns automatic or paired authored logoff and accepted
 authentication messages; SCP/SFTP receiver helpers remain unavailable. See

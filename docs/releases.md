@@ -17,10 +17,9 @@ supported; product numbering is independent of scenario and storage schema versi
 
 ## Source capabilities and release scope
 
-Installer host support is separate from simulated OS/log-source support. The current
-source tree adds experimental macOS 27 workstation process/helper and bounded
-filesystem evidence; older published installers do not gain those capabilities merely
-because the product version has not yet been bumped. Release notes must state the
+Installer host support is separate from simulated OS/log-source support. Releases since
+2.2.0a6 include macOS 27 workstation process/helper and bounded filesystem evidence;
+older installers do not gain capabilities added after their release. Release notes must state the
 snapshot's admitted source profile and limits. Use the [platform/log matrix](../README.md#supported-log-formats)
 and [Mac guide](macos.md) when preparing those notes.
 

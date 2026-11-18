@@ -4,36 +4,98 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
-## v3.0.0rc1 (2026-11-10)
+## v3.0.0rc1 (2026-11-17)
 
-First release candidate for EvidenceForge 3.0. The user selected a new major
-version to mark the Studio desktop workflow and mixed Windows, Linux and macOS
-simulation capabilities developed through the 2.2 alpha series. Traditional CLI
-and legacy-scenario workflows remain supported. Product numbering is independent
-of scenario and storage schema versions.
+First release candidate for EvidenceForge 3.0. The 3.0 version marks the Studio desktop
+workflow and mixed Windows, Linux and macOS simulation developed through the 2.2 alpha series.
+Traditional CLI and legacy-scenario workflows remain supported; product numbering stays
+independent of scenario and storage schema versions. Changes since 2.2.0a6:
 
-**Product milestone**
+**Redesigned Studio**
 
-- Carry forward Studio's scenario/pack authoring, validation, generation,
-  evaluation, immutable artifact publication and recovery workflows.
-- Include experimental macOS 27 workstation simulation alongside Windows and
-  Linux, with native process evidence, selected Unified Log messages and bounded
-  filesystem operations. Full capability notes are in
-  [alpha 6](https://github.com/Cisco-Talos/EvidenceForge/releases/tag/v2.2.0a6).
-- Retain Apple Silicon macOS and Ubuntu 24.04 ARM64/x86_64 installer targets.
-  Codex remains separately installed for authoring; the macOS installer has no
-  Developer ID signature or notarization. Documented macOS simulation limits
-  continue to apply.
+- New themes for both light and dark modes, built on shared design tokens with an ember accent;
+  Studio follows the system or a Settings → Appearance choice (`7c5dd272`, `744098ec`, `9c4ce5ec`).
+- One shared dialog component, consistent action names and menu order, shared status pills
+  and feedback, and Reveal in Finder (`51659438`, `9a0e588d`).
+- Libraries organized around sidebar projects and sortable tables; each scenario or pack's
+  versions collapse into one row, with badges for unpublished drafts
+  (`6dabb988`, `261ff2ff`, `4222ead7`, `b27818b4`).
+- Scenario workspace readiness strip with one next action, section tabs, and labeled status
+  in section headers (`cc24d571`, `5168c87f`).
+- Activity as one timeline, and bundles as one newest-first list of runs (`596142e1`, `d3af4f73`).
+- A queued chat message can steer the running turn (`3eab9fe2`).
+- Studio UI rules for contributors in AGENTS.md and the Studio guide
+  (`d57b1abf`, `30288217`, `09a442e8`, `e655aa85`).
 
-**Changes since 2.2.0a6**
+**Windows installer**
 
-- Allow the release publisher to run after the unused modern/legacy policy
-  branch is skipped, while explicitly requiring successful version validation
-  and publication gates and excluding cancelled runs (`3944d47a`).
-- Retain verified alpha-6 publication, installer/checksum and failed-job recovery
-  evidence; track bounded Ubuntu package setup and mirror fallback as follow-up
-  work (`d008bb2c`).
-- Synchronize Python and Studio release-candidate metadata for the 3.0 milestone.
+- Unsigned Windows 11 x86_64 NSIS installer with "Just me" and "Everyone" scopes, bundled
+  Python and runtime, and private per-account state (`602ab2ec`).
+- Published with releases beside the macOS and Linux installers after native install,
+  uninstall and service/recovery qualification (`9ccfeeb3`).
+- Uninstall preserves data by default and offers three reviewed opt-in cleanup choices with
+  progress in the wizard (`8eacd6c6`, `f650f283`, `12d0e75e`, `eac59e9b`, `922129e4`,
+  `a5d5ff98`, `c6b15412`).
+- Native Windows Codex authoring through MXC, with Codex discovery and PowerShell-safe
+  commands (`7e3cf951`, `18fbee49`, `5eb4edd3`, `b99cb31e`, `d15127cd`).
+- Windows startup, storage and generation reliability: slow-start waits, idle socket
+  shutdown, nested and long generation/checkpoint paths, workspace storage hardening and
+  retried output opens (`d77aeaef`, `40aab0c8`, `5daed0fe`, `031c77ad`, `718af5db`,
+  `c1186030`, `e021a95f`).
+- Native CI qualification of Windows Studio service, recovery and installed scopes
+  (`eb83f6b4`, `4534aba0`).
+
+**Bundled example scenarios**
+
+- Five portable example scenarios ship with Studio and the source distribution (`86d74702`).
+- First launch creates an Example Scenarios project. Settings installs or updates examples in
+  any workspace, and Duplicate or New draft copies one into your own project (`f50a520b`),
+  using the redesigned Studio dialogs (`78db6f84`).
+
+**Ground truth improvements**
+
+- Ground-truth schema 5 adds the deterministic `GROUND_TRUTH_EVENTS.jsonl` stream: each
+  authored occurrence, its consequences and per-source expectations (`9d105bb5`).
+- A new Ground Truth Agreement evaluation pillar (95% minimum), so schema-5 bundles score
+  five equally weighted pillars; legacy bundles keep four. Studio scorecards show ground-truth
+  diagnostics (`9d105bb5`).
+- Preserve authored occurrences and retryable truth finalization (`8f0365cd`); match
+  expectations by exact identity and shared source-admission rules (`394eeb80`).
+
+**Evaluation**
+
+- Evaluate complete datasets without fixed corpus caps, within a configurable memory budget
+  that spills to disk (`--memory-budget-mib`, `--scratch-dir`) (`65fa5c73`, `e2b7593b`).
+- Evaluator corrections found with the bundled examples: typed Boolean and DNS TXT comparison,
+  one-to-one HTTP matching, IDS threshold awareness, and eligible-observation sampling for
+  anomaly and cadence measures (`394eeb80`).
+- Evaluator memory and correctness gates in CI (`11a74d5e`, `c11c2176`).
+
+**Realism fixes**
+
+- Assessment loops 89–98: process timing proofs, pipeline protocol intent, RDP reconnect
+  admission, mail recipients and provenance, and Zeek ICMP expectations (`c44d7a72`).
+- Browser exits now render Security 4689 under declared source policy, and ASA participates
+  in persistent SMB publication (`394eeb80`).
+- LDAP process lifetimes, sub-second scheduling and natural Mac exits, authored foreground and
+  lifecycle frontiers, pre-collection exit timing, syslog spillage consequences, and escaped
+  solidus in macOS Endpoint Security JSON (`51629cd7`, `6e486fec`, `8404cfcd`, `887367c7`,
+  `15b85996`, `3a01cbea`).
+
+**Dependencies and release maintenance**
+
+- pydantic 2.14.3, pytest 9.2.0, websockets 17.4, platformdirs 4.14.5 and python-dotenv
+  1.2.4 (`36bef307`, `b3708e1a`, `ec1a2f8e`, `a171976b`, `64242b4f`).
+- Release publishing proceeds after the unused modern/legacy policy branch is skipped
+  (`3944d47a`); dev CI repairs for the bundled examples (`6487c094`).
+
+**Installers and known limits**
+
+- Studio installers for Apple Silicon macOS (DMG) and Linux ARM64 (AppImage), and for Linux
+  (AppImage) and Windows 11 (setup EXE) on x86_64. Each bundles Python, the engine, resources and
+  skills; only Codex is installed separately for authoring. The CLI and agent-skill workflows
+  remain supported. The macOS installer has no Developer ID signature or notarization, and the
+  Windows installer is not code-signed.
 
 ## v2.2.0a6 (2026-11-09)
 

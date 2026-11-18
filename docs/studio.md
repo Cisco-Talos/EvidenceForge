@@ -11,7 +11,7 @@ macOS 26 and 27.0.1; the configured macOS 13 deployment floor is not acceptance 
 See [release platforms and validation](releases.md).
 
 These are the computers that run Studio. They are independent of the Windows, Linux or
-experimental macOS 27 arm64 systems being simulated. See the
+macOS 27 arm64 systems being simulated. See the
 [platform/log matrix](../README.md#supported-log-formats) and [Mac guide](macos.md).
 This guide follows the current source tree; features added since a published installer require
 a newer build. Release notes define the installed version's capabilities.
