@@ -334,6 +334,12 @@ _FAMILIES = (
         "System process, service, module, and scheduled-task pools.",
     ),
     _family(
+        "activity/shell_history_effects.yaml",
+        "append-list",
+        "config-host-activity.md",
+        "Shell commands whose execution destroys Bash history.",
+    ),
+    _family(
         "activity/systemd_schedules.yaml",
         "append-list",
         "config-host-activity.md",

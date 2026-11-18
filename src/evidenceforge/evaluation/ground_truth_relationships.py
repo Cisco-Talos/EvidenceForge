@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import tempfile
 from collections import defaultdict
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.events.ground_truth_occurrence import (
     GroundTruthEventStream,
     read_ground_truth_occurrences,
@@ -20,7 +20,7 @@ def relationship_violations(root: Path, reference: GroundTruthEventStream) -> di
     """Return bounded relationship diagnostics per action without retaining occurrences."""
     result: dict[str, list[dict]] = defaultdict(list)
     with tempfile.TemporaryDirectory(prefix="eforge-eval-relations-") as directory:
-        with closing(sqlite3.connect(Path(directory) / "relationships.sqlite")) as db:
+        with closing(connect_sqlite(Path(directory) / "relationships.sqlite")) as db:
             db.executescript(
                 "CREATE TABLE dns (id TEXT PRIMARY KEY, facts TEXT); CREATE TABLE used (id TEXT, ip TEXT, UNIQUE(id,ip));"
             )

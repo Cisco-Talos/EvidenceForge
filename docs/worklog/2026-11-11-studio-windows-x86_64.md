@@ -2618,3 +2618,92 @@ CI; no test gate needs to be weakened or re-enabled in source. Dispatch only the
 additional slow/portability and full installer qualification workflows absent from
 a PR targeting dev. Reuse authenticated matching-input evidence normally; do not
 force duplicate suites. Merge only after the required integration checks pass.
+
+### MXC rejects handle-relative renames (November 17)
+
+A packaged laptop reproduction ran the draft-local consumer generation through the Studio agent
+and failed exactly as traced: RunLock.acquire -> WindowsCheckpointIO.mkdir -> replace_child ->
+NtSetInformationFile, WinError 6. `scripts/windows_rename_probe.py`, run with the installed
+runtime once inside MXC (via the agent) and once from ordinary PowerShell, compared publication
+forms in the same draft folder:
+
+| Variant | MXC | Ordinary shell |
+|---|---|---|
+| Checkpoint mkdir; RootDirectory-relative directory rename (write-through or not, ADD access on the target parent); RootDirectory-relative file replace | invalid handle | OK |
+| Absolute-path rename (`\??\` or handle-derived `\Device\...`), with post-rename location verification | OK | OK |
+| MoveFileExW write-through; direct write-through directory create | OK | OK |
+
+MXC rejects the RootDirectory form of FileRenameInformation for files and directories while
+permitting the same rename by absolute name, so every protected-storage rename (directory
+publication, atomic writes, checkpoints) fails there. `replace_child` keeps the handle-relative
+rename as its primary form; on STATUS_INVALID_HANDLE it renames by the pinned target parent's own
+NT path (GetFinalPathNameByHandleW, VOLUME_NAME_NT) and requires the renamed object's final path
+to equal that parent's current path plus the target name. Flags, write-through and flushing are
+unchanged. Native tests simulate the rejection and a redirected publication. Close the P1 after a
+packaged sandbox retest.
+
+The same laptop upgrade also exposed an empty Example Scenarios project: Settings reported
+"published file inventory changed". 50 of 107 bundled example files exceed MAX_PATH beneath the
+171-character private runtime prefix; Python 3.12 `Path.rglob` silently skips directories it
+cannot open, so release verification saw a partial inventory. CI runners enable long paths.
+Artifact snapshots and writes now use the long-path spelling and fail on unreadable directories.
+Windows authoring turns also tell the agent that ripgrep and other POSIX tools are unavailable.
+
+
+### Draft generation journals and sandbox temp (November 18)
+
+The retest got past the run lock and failed opening a native Windows journal: "unable to open
+database file". `scripts/windows_journal_probe.py` ruled out DACLs (private and inherited ACLs
+both reopen under MXC). The journal path was 282 characters; SQLite's Windows VFS does not add
+the extended prefix, so ordinary paths and URIs fail beyond MAX_PATH while the quoted
+`file:%5C%5C%3F%5C...` URI works (L1 FAIL, L2-L4 OK on SQLite 3.50.4). Every file-backed SQLite
+open now goes through `evidenceforge._sqlite_files.connect_sqlite`, and a unit test rejects new
+direct `sqlite3.connect` calls (e4f23d35).
+
+Studio excludes TMPDIR and /tmp from chat writable roots on every platform, so Python's
+`tempfile` silently fell back to the draft folder. Draft conversations now get
+`<workspace>/.eforge/tmp/chat/<conversation id>` as a second writable root, with TMPDIR, TEMP
+and TMP set through `shell_environment_policy.set` (only that table is overridden). Codex echoes
+the extra root in `thread/start`, and verification requires exactly {draft, scratch}. Orphans are
+pruned at turn start; conversation removal deletes its folder. Codex 0.169 on macOS: native probe
+passes (scratch writable, its parent denied, shell env reaches thread commands).
+
+Observed while probing: `command/exec` also grants writes to the app-server process's own
+working directory, whatever the policy says. Studio uses `command/exec` only read-only (the
+Windows startup check), and agent turns use the draft as cwd, so Studio access is not widened.
+
+Pending on the Windows laptop with a new installer: generation from the alderbrook draft
+end-to-end, and a second writable root under MXC. Close the WinError 6 P1 after both pass.
+
+### Draft generation: deferred RDP session at the window start (November 18)
+
+With the scratch build, the laptop retest got past the run lock and journals. The agent wrote its
+output to the scratch folder, so MXC accepted the second writable root. Generation then failed in
+warm-up hour 1: "Deferred-session publication requires a positive exact target for every member".
+This is not Windows-specific. A CLI draft of the Alderbrook example fails the same way on macOS,
+while the published example passes. A release generates from its frozen effective configuration;
+a draft resolves current packaged defaults. Those are equal key for key, but their YAML ordering
+differs, which changes random draws, so only the draft's trajectory reaches the defect. Release
+output is byte-identical whatever the output path or project root (41 files).
+
+The failing batch was a baseline RDP session to ABL-DC-01 that straddled the window start: the
+transport, two process creates and the Type 10 logon were warm-up suppressed, and userinit.exe
+and explorer.exe were visible. The deferred-session proof check accepted only a fully suppressed
+warm-up batch or the SSH receiver cohort. It now uses the same exact dispositions as the
+action-cohort projection facts: warm-up suppression as a leading run, collection suppression as
+a trailing run, and observation suppression anywhere. A non-SSH batch still needs at least one
+proven member. A warm-up-suppressed transport bounds dependent eCAR and Windows ordering by its
+canonical time (behavior revision 529). The published example remains byte-identical. A
+shortened draft (1h, one storyline step) reproduces it in about 25 seconds and is now a slow
+regression test. The slow tier also generates a draft of every shipping example, a path it
+previously did not cover.
+
+### Packaged MXC draft generation passes; finalization is slow (November 18)
+
+The eb3d85fc installer generated the Alderbrook draft from a Studio chat inside MXC with exit
+code 0 and only the expected encrypted-HTTP validation warning. This closes the WinError 6 P1.
+The agent reported about 1h40m from launch to the final manifest, of which the CLI's tracked
+hours took 11m48s. The roughly 88 untracked minutes are finalization; the same draft spends
+about 1.5 minutes there on macOS. Next: time the same draft through Studio's Generate outside
+MXC, then profile finalization on Windows (new P1). Agent-run generation shows no progress
+because Rich renders only on a terminal (new P2 for `--progress-jsonl` in skills).

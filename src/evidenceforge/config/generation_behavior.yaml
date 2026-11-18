@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 522
+current_revision: 529
 history_start_revision: 1
-behavior_surface_sha256: a3e5ba02803490c1506b6a2203e4ea2534bded4b6337a3e6e9a87f25164cdd9b
+behavior_surface_sha256: cf7e65b778bbeb4595a193f92dd50a6c89b803b24350d4e82edea38a729fec3f
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6010,3 +6010,76 @@ changes:
   summary: Retain OCSP analyzer facts, qualify source roles and phases, publish browser
     exits and persistent SMB firewall lifecycles, qualify SMB endpoint roles, and advance
     endpoint process clocks only for SMB phases actually rendered.
+- revision: 523
+  id: route-firewall-observation-through-interfaces-and-nat
+  impact: localized
+  domains:
+  - firewall
+  - ground-truth
+  - network-visibility
+  - source-timing
+  formats:
+  - cisco_asa
+  - ecar
+  summary: Firewalls observe only interface-crossing or translated traffic; ASA and eCAR
+    FLOW truth follow NAT and ICMP views; process timing receipts name host-clock
+    projections of predecessor births.
+- revision: 524
+  id: record-authored-command-derivations
+  impact: localized
+  domains:
+  - ground-truth
+  - process-execution
+  formats: []
+  summary: Authored process occurrences record the ordered shell, launch-contract and
+    service-host rules that produced their native command so ground truth can replay them.
+- revision: 525
+  id: align-ecar-session-and-smb-file-truth
+  impact: localized
+  domains:
+  - ground-truth
+  - smb
+  formats:
+  - ecar
+  summary: eCAR truth keys Samba sessions by their SMB session reference, takes SMB server and
+    client paths from SMB facts, and uses native PROCESS OPEN and THREAD REMOTE_CREATE actions.
+- revision: 526
+  id: record-canonical-history-destruction
+  impact: localized
+  domains:
+  - ground-truth
+  - shell-history
+  formats:
+  - bash_history
+  summary: Shell commands record their canonical history effect from shared data; ground truth
+    expects entries destroyed by a later clear of the same history file to be absent.
+- revision: 527
+  id: admit-macos-observation-overrides
+  impact: none
+  domains:
+  - collection-policy
+  - macos
+  formats:
+  - macos_endpoint_security
+  - macos_unified_log
+  summary: One shared source table defines catalog families and the authored observation
+    vocabulary, admitting macOS Endpoint Security and Unified Log overrides; outputs are unchanged.
+- revision: 528
+  id: open-sqlite-through-long-path-helper
+  impact: none
+  domains:
+  - storage
+  formats: []
+  summary: Every SQLite database opens through one helper that uses the Windows extended-length
+    path spelling; database contents and generated output are unchanged.
+- revision: 529
+  id: deferred-session-collection-boundary-members
+  impact: none
+  domains:
+  - rdp-session-lifecycle
+  - ssh-session-lifecycle
+  - source-observation
+  formats: []
+  summary: Deferred SSH/RDP sessions accept exactly warm-up, collection or observation
+    suppressed members, so a session straddling the window start no longer aborts
+    generation. Successful runs are unchanged.

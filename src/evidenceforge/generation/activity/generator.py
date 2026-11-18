@@ -51,6 +51,8 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 from urllib.parse import urlsplit
 
 from evidenceforge.generation.actions.process_support import policy as process_policy
+from evidenceforge.generation.activity.shell_history_effects import bash_history_effect
+from evidenceforge.generation.command_derivation import step as derivation_step
 
 if TYPE_CHECKING:
     from evidenceforge.generation.actions.process_execution_service import (
@@ -92,6 +94,7 @@ from evidenceforge.events.authentication import (
     windows_logon_has_local_source,
 )
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.command_derivation import CommandDerivation
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
@@ -17296,6 +17299,7 @@ class ActivityGenerator:
         preserve_requested_time: bool = False,
         new_posix_session: bool = False,
         arguments: tuple[str, ...] | None = None,
+        command_derivation: CommandDerivation | None = None,
         exec_script: MacosExecScript | None = None,
         macos_launch_kind: Literal["user", "system", "finder"] | None = None,
         macos_terminal: Literal["allocate", "absent"] | None = None,
@@ -17403,6 +17407,12 @@ class ActivityGenerator:
             parent_pid = 1
             require_exact_parent = True
             arguments = catalog_direct_exec_arguments(process_name, command_line)
+            if command_derivation is not None:
+                command_derivation = command_derivation.then(
+                    command_line,
+                    shlex.join(arguments),
+                    derivation_step("catalog_direct_exec", image=process_name),
+                )
             command_line = shlex.join(arguments)
             macos_launch_kind = "finder"
             allow_browser_launch_spacing = False
@@ -17434,6 +17444,7 @@ class ActivityGenerator:
             preserve_requested_time=preserve_requested_time,
             new_posix_session=new_posix_session,
             arguments=arguments,
+            command_derivation=command_derivation,
             exec_script=exec_script,
             macos_launch_kind=macos_launch_kind,
             macos_terminal=macos_terminal,
@@ -26757,7 +26768,10 @@ class ActivityGenerator:
             event_type=kind,
             src_host=self._build_host_context(system),
             auth=AuthContext(username=user.username, logon_id=logon_id),
-            shell=ShellContext(command=command),
+            shell=ShellContext(
+                command=command,
+                history_effect=bash_history_effect(command) if kind == "bash_command" else None,
+            ),
             identity_plan=EventIdentityPlan(
                 actor=self.state_manager.get_process_identity(system.hostname, shell_pid),
                 session=self.state_manager.get_session_identity(logon_id),
@@ -26800,7 +26814,7 @@ class ActivityGenerator:
             event_type="bash_command",
             src_host=self._build_host_context(system),
             auth=AuthContext(username=user.username, logon_id=logon_id),
-            shell=ShellContext(command=command),
+            shell=ShellContext(command=command, history_effect=bash_history_effect(command)),
         )
 
         self.dispatcher.dispatch_builder(event)

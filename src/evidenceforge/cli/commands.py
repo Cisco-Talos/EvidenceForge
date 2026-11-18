@@ -1221,8 +1221,8 @@ def _legacy_public_identity_deprecation_issues(
             field_path=f".eforge/config/{path}",
             message=(
                 f"Consumed deprecated user overlay {path}; move {description} to "
-                "activity/public_identity_profiles.yaml. Legacy identity overlays remain "
-                "compatible throughout 2.x and will be removed in EvidenceForge 3.0."
+                "activity/public_identity_profiles.yaml. Legacy identity overlays are "
+                "deprecated and will be removed in a later major release."
             ),
             suggestion=(
                 "Translate this file into .eforge/config/activity/"

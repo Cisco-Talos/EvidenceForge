@@ -59,7 +59,14 @@ class GroundTruthCondition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     stage: Literal[
-        "deployment", "placement", "capability", "window", "loss", "source_filter", "export"
+        "deployment",
+        "placement",
+        "capability",
+        "window",
+        "loss",
+        "source_filter",
+        "export",
+        "retention",
     ]
     state: Literal["eligible", "excluded", "unknown"]
     reason: str | None = None
@@ -135,6 +142,18 @@ class GroundTruthRelationship(BaseModel):
     facts: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class GroundTruthNatView(BaseModel):
+    """The sensor-local address translation a firewall renders for one transport."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    nat_type: Literal["dynamic_pat", "static"]
+    direction: Literal["source", "destination"]
+    local_ip: str
+    local_port: int = Field(ge=0, le=65535)
+    global_ip: str
+    global_port: int = Field(ge=0, le=65535)
+
+
 class GroundTruthSensorView(BaseModel):
     """One frozen sensor capture receipt, shared across its format expectations."""
 
@@ -150,6 +169,7 @@ class GroundTruthSensorView(BaseModel):
     close_time: datetime | None = None
     firewall_teardown_time: datetime | None = None
     firewall_teardown_observed: bool = False
+    nat: GroundTruthNatView | None = None
 
 
 class GroundTruthOccurrence(BaseModel):

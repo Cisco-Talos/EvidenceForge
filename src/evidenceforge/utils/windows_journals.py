@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.generation.emitters.base import ExactPublicationError
 from evidenceforge.utils import windows_filesystem as filesystem
 
@@ -252,9 +253,7 @@ def finish_private_journal_initialization(owner: SourceOwner) -> None:
                 os.close(descriptor)
     validate_spool_file(owner)
     if owner._spool_conn is None:
-        owner._spool_conn = sqlite3.connect(
-            f"{path.as_uri()}?mode=rw", uri=True, check_same_thread=False
-        )
+        owner._spool_conn = connect_sqlite(path, mode="rw", check_same_thread=False)
     owner._initialize_spool_schema_unlocked(owner._spool_conn)
     validate_spool_file(owner)
     owner._spool_file_initialization_pending = False

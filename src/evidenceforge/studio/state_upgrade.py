@@ -22,6 +22,7 @@ import psutil
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from evidenceforge import __version__
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.studio.paths import StudioPaths
 from evidenceforge.studio.runtime import runtime_id
 from evidenceforge.studio.settings import SETTINGS_VERSION
@@ -744,7 +745,7 @@ class StateCoordinator:
                     self.io.write(target, b"")
                     with (
                         closing(open_readonly(path)) as source,
-                        closing(sqlite3.connect(target)) as output,
+                        closing(connect_sqlite(target)) as output,
                     ):
                         self.io.backup(source, output)
                     # Publish database bytes durably after closing the backup connection.
@@ -1018,7 +1019,7 @@ class StateCoordinator:
                             # replacement must leave the original logical state retryable.
                             publication_guard()
                             self.boundary("database.before_checkpoint")
-                            with closing(sqlite3.connect(destination, timeout=0)) as connection:
+                            with closing(connect_sqlite(destination, timeout=0)) as connection:
                                 busy, _, _ = connection.execute(
                                     "PRAGMA wal_checkpoint(TRUNCATE)"
                                 ).fetchone()

@@ -491,3 +491,65 @@ def test_native_append_preserves_existing_output_after_seek(tmp_path: Path) -> N
     finally:
         os.close(descriptor)
     assert path.read_bytes() == b"existing\nnext\n"
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_native_rename_falls_back_when_container_rejects_root_directory_targets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: bool
+) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    original = filesystem._rename
+    roots: list[bool] = []
+
+    def container(descriptor: int, target: str, root: int | None, *args: int) -> int:
+        roots.append(root is not None)
+        if root is not None:  # Windows MXC rejects RootDirectory-relative rename targets.
+            return filesystem._STATUS_INVALID_HANDLE
+        return original(descriptor, target, root, *args)
+
+    monkeypatch.setattr(filesystem, "_rename", container)
+    parent = filesystem.open_directory(tmp_path)
+    try:
+        if directory:
+            filesystem.mkdir_child(parent, "pending")
+        else:
+            os.close(filesystem.open_child(parent, "pending", os.O_RDWR | os.O_CREAT | os.O_EXCL))
+        filesystem.replace_child(
+            parent,
+            "pending",
+            parent,
+            "finished",
+            replace=False,
+            directory=directory,
+            write_through=True,
+        )
+        assert roots == [True, False]
+        assert filesystem.list_directory(parent) == ["finished"]
+    finally:
+        os.close(parent)
+
+
+def test_native_rename_fallback_rejects_publication_outside_the_pinned_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    original = filesystem._rename
+    (tmp_path / "elsewhere").mkdir()
+
+    def redirected(descriptor: int, target: str, root: int | None, *args: int) -> int:
+        if root is not None:
+            return filesystem._STATUS_INVALID_HANDLE
+        return original(
+            descriptor, target.replace("\\finished", "\\elsewhere\\finished"), root, *args
+        )
+
+    monkeypatch.setattr(filesystem, "_rename", redirected)
+    parent = filesystem.open_directory(tmp_path)
+    try:
+        os.close(filesystem.open_child(parent, "pending", os.O_RDWR | os.O_CREAT | os.O_EXCL))
+        with pytest.raises(OSError, match="beneath its pinned parent"):
+            filesystem.replace_child(parent, "pending", parent, "finished", replace=False)
+    finally:
+        os.close(parent)

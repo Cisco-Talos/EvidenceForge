@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.desktop.library import LibraryItem
 from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 from evidenceforge.studio.search import SearchMatch, index_sources, matching_excerpts, yaml_entries
@@ -211,7 +212,7 @@ class StudioStore:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._db = sqlite3.connect(path, check_same_thread=False, timeout=30)
+        self._db = connect_sqlite(path, check_same_thread=False, timeout=30)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=FULL")

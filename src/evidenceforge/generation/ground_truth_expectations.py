@@ -18,6 +18,7 @@ from evidenceforge.events.ground_truth_occurrence import (
     GroundTruthCondition,
     GroundTruthCoverageGap,
     GroundTruthExpectationContract,
+    GroundTruthNatView,
     GroundTruthSensorView,
     GroundTruthSourceExpectation,
 )
@@ -175,6 +176,16 @@ class GroundTruthExpectationPlanner:
                         close_time=view.observed_close_time,
                         firewall_teardown_time=view.firewall_teardown_time,
                         firewall_teardown_observed=view.firewall_teardown_observed,
+                        nat=GroundTruthNatView(
+                            nat_type=view.nat.nat_type,
+                            direction=view.nat.direction,
+                            local_ip=view.nat.local_ip,
+                            local_port=view.nat.local_port,
+                            global_ip=view.nat.global_ip,
+                            global_port=view.nat.global_port,
+                        )
+                        if view.nat is not None
+                        else None,
                     )
         for target in projection.compiled_targets:
             envelope = target.envelope

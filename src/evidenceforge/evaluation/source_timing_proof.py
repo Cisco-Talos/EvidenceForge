@@ -35,6 +35,7 @@ class TimingAnchor(BaseModel):
     identity: str
     time: datetime
     logon_id: str | None = None
+    clock_adjustment_us: float | None = None
 
     @field_validator("time")
     @classmethod
@@ -233,13 +234,28 @@ def verify_process_timing(
             for record in records
         )
         inherited_entity = False
+        create_maximum = (
+            float(rules.get("source.ecar_process_create", {}).get("max_ms", 100)) / 1000 + 0.008
+        )
         if anchor.kind == "parent_create" and actor.get("start_time"):
             entity_start = datetime.fromisoformat(str(actor["start_time"]))
-            inherited_entity = (
-                entity_start.tzinfo is not None
-                and -2 <= (anchor.time - entity_start).total_seconds() <= 2
-                and entity_start < row.time
-            )
+            if anchor.clock_adjustment_us is not None:
+                # The timing owner names the host-clock projection of the parent's own
+                # canonical birth; its unexported create must follow within source latency.
+                latency = (
+                    anchor.time - entity_start
+                ).total_seconds() - anchor.clock_adjustment_us / 1_000_000
+                inherited_entity = (
+                    entity_start.tzinfo is not None
+                    and -0.001 <= latency <= create_maximum
+                    and entity_start < row.time
+                )
+            else:
+                inherited_entity = (
+                    entity_start.tzinfo is not None
+                    and -2 <= (anchor.time - entity_start).total_seconds() <= 2
+                    and entity_start < row.time
+                )
         elif (
             anchor.kind == "process_create"
             and row.kind == "process_terminate"
@@ -251,14 +267,14 @@ def verify_process_timing(
             # create row. Qualify only its own pre-window birth and bounded
             # source-create latency; an in-window missing predecessor still fails.
             entity_start = datetime.fromisoformat(str(process["start_time"]))
-            create_maximum = (
-                float(rules.get("source.ecar_process_create", {}).get("max_ms", 100)) / 1000 + 0.008
-            )
+            adjustment = (anchor.clock_adjustment_us or 0.0) / 1_000_000
             inherited_entity = (
                 entity_start.tzinfo is not None
                 and entity_start < collection_start
                 and entity_start < row.time
-                and 0 <= (anchor.time - entity_start).total_seconds() <= create_maximum
+                and (0.0 if anchor.clock_adjustment_us is None else -0.001)
+                <= (anchor.time - entity_start).total_seconds() - adjustment
+                <= create_maximum
             )
         if not canonical and not observed and not inherited_entity:
             errors.append("unverifiable_timing_dependency")

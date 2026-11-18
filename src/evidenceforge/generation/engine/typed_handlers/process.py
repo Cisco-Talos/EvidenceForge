@@ -10,6 +10,7 @@ import shlex
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge.events.command_derivation import CommandDerivation
 from evidenceforge.events.content_identity import FileContentIdentity
 from evidenceforge.generation.activity.direct_exec import catalog_direct_exec_arguments
 from evidenceforge.generation.activity.helpers import _get_os_category
@@ -25,6 +26,11 @@ from evidenceforge.generation.activity.process_helpers import (
     _macos_foreground_lifetime,
     _macos_process_uses_shell,
 )
+from evidenceforge.generation.command_derivation import (
+    posix_shell_argv,
+    posix_shell_program,
+)
+from evidenceforge.generation.command_derivation import step as derivation_step
 from evidenceforge.models.scenario import (
     CreateRemoteThreadEventSpec,
     ProcessAccessEventSpec,
@@ -50,7 +56,6 @@ def handle_process(
     from evidenceforge.generation.engine.storyline_helpers.process import (
         _estimate_process_lifetime,
         _extract_schtasks_option,
-        _linux_shell_process_command_line,
         _normalize_storyline_process_image,
     )
 
@@ -94,6 +99,7 @@ def handle_process(
         username=process_actor.username,
     )
     command_line = spec.command_line or process_name
+    command_derivation = CommandDerivation(command_line)
     provider = self.activity_generator.macos_execution_metadata if os_category == "macos" else None
     launch_session = self.state_manager.get_session_at(logon_id, time) if provider else None
     finder = getattr(spec, "launch_method", None) == "finder" or (
@@ -112,33 +118,39 @@ def handle_process(
     shell_key = (system.hostname, process_actor.username)
 
     if "<base64_encoded_command>" in command_line:
-        command_line = command_line.replace(
-            "<base64_encoded_command>",
-            self._generate_encoded_powershell(
-                _stable_seed(f"storyline_ps_{time.isoformat()}_{actor.username}")
+        encoded = self._generate_encoded_powershell(
+            _stable_seed(f"storyline_ps_{time.isoformat()}_{actor.username}")
+        )
+        substituted = command_line.replace("<base64_encoded_command>", encoded)
+        command_derivation = command_derivation.then(
+            command_line,
+            substituted,
+            derivation_step(
+                "placeholder_substitution", placeholder="<base64_encoded_command>", value=encoded
             ),
         )
+        command_line = substituted
 
     process_command_line = command_line
     if os_category == "linux":
-        from evidenceforge.generation.activity.generator import (
-            _linux_command_process_from_shell,
+        # The shell executes argv, not the authored text; record each rule it applies.
+        exec_argv = posix_shell_argv(
+            process_command_line, image=process_name, username=process_actor.username
         )
-
-        inferred_process = _linux_command_process_from_shell(
-            command_line,
-            username=process_actor.username,
-        )
-        if inferred_process is not None:
-            inferred_image, inferred_command_line = inferred_process
-            if inferred_image.rsplit("/", 1)[-1] == process_name.rsplit("/", 1)[-1]:
-                process_command_line = inferred_command_line
-        shell_command_line = _linux_shell_process_command_line(
-            process_name,
+        command_derivation = command_derivation.then(
             process_command_line,
+            exec_argv,
+            derivation_step(
+                "posix_shell_argv", image=process_name, username=process_actor.username
+            ),
         )
-        if shell_command_line is not None:
-            process_command_line = shell_command_line
+        shell_program = posix_shell_program(exec_argv, image=process_name)
+        command_derivation = command_derivation.then(
+            exec_argv,
+            shell_program,
+            derivation_step("posix_shell_program", image=process_name),
+        )
+        process_command_line = shell_program
 
     output_file = self._extract_output_file(command_line, os_category)
     process_logon_id = logon_id
@@ -407,7 +419,13 @@ def handle_process(
         else {}
     )
     if finder:
-        process_command_line = shlex.join(finder_arguments["arguments"])
+        direct_exec = shlex.join(finder_arguments["arguments"])
+        command_derivation = command_derivation.then(
+            process_command_line,
+            direct_exec,
+            derivation_step("catalog_direct_exec", image=process_name),
+        )
+        process_command_line = direct_exec
     pid = self.activity_generator.generate_process(
         user=process_actor,
         system=system,
@@ -421,6 +439,7 @@ def handle_process(
         from_storyline=True,
         suppress_command_file_effect=output_file is not None,
         lifecycle_group_id=service_lifecycle_group_id,
+        command_derivation=command_derivation,
         **finder_arguments,
     )
     if pid <= 0:

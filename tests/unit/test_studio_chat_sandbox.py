@@ -19,6 +19,7 @@ from evidenceforge.studio.chat_permissions import (
     ChatAccess,
     isolated_chat_config,
     verify_chat_permissions,
+    with_scratch,
 )
 from evidenceforge.studio.codex import CodexClient, CodexDisconnectedError, CodexUnavailableError
 
@@ -269,7 +270,11 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
             ],
         )
         assert read["exitCode"] == 0 and read["stdout"] == "published bytes", read
-        access = ChatAccess(mode="draft", source=revision / "scenario.yaml", directory=revision)
+        access = with_scratch(
+            ChatAccess(mode="draft", source=revision / "scenario.yaml", directory=revision),
+            workspace,
+            uuid4().hex,
+        )
         shutil.copyfile(valid_source, access.source)
         effective = await client.call("config/read", {"cwd": str(revision), "includeLayers": True})
         created = await client.call(
@@ -309,6 +314,15 @@ async def test_resumed_discussion_and_scoped_draft_cannot_modify_protected_files
             ],
         )
         assert result["exitCode"] == 0 and access.source.read_text() == "new draft bytes"
+        assert access.scratch is not None
+        write = "import pathlib,sys;pathlib.Path(sys.argv[1]).write_text('scratch')"
+        result = await execute(access, [sys.executable, "-c", write, str(access.scratch / "t")])
+        assert result["exitCode"] == 0 and (access.scratch / "t").read_text() == "scratch"
+        beside = access.scratch.parent / "beside"
+        result = await execute(
+            access, [sys.executable, "-c", write, str(beside)], denial_expected=True
+        )
+        assert result["exitCode"] != 0 and not beside.exists(), result
         for target in (source, completed):
             for command in (
                 protect_command(target),

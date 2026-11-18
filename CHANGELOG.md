@@ -24,6 +24,8 @@ independent of scenario and storage schema versions. Changes since 2.2.0a6:
   in section headers (`cc24d571`, `5168c87f`).
 - Activity as one timeline, and bundles as one newest-first list of runs (`596142e1`, `d3af4f73`).
 - A queued chat message can steer the running turn (`3eab9fe2`).
+- Draft conversations get a private scratch folder for temporary files on every platform,
+  instead of falling back to the draft folder (`e63ed3ad`, `b98cebbf`).
 - Studio UI rules for contributors in AGENTS.md and the Studio guide
   (`d57b1abf`, `30288217`, `09a442e8`, `e655aa85`).
 
@@ -44,6 +46,10 @@ independent of scenario and storage schema versions. Changes since 2.2.0a6:
   `c1186030`, `e021a95f`).
 - Native CI qualification of Windows Studio service, recovery and installed scopes
   (`eb83f6b4`, `4534aba0`).
+- Windows draft authoring and generation under the MXC sandbox: renames fall back to the pinned
+  parent's path when handle-relative renames are rejected, artifact trees and every SQLite
+  database open beyond MAX_PATH, and agents use PowerShell search tools
+  (`34c3b675`, `b1e5eea7`, `e4f23d35`, `d7e138fa`).
 
 **Bundled example scenarios**
 
@@ -61,6 +67,9 @@ independent of scenario and storage schema versions. Changes since 2.2.0a6:
   diagnostics (`9d105bb5`).
 - Preserve authored occurrences and retryable truth finalization (`8f0365cd`); match
   expectations by exact identity and shared source-admission rules (`394eeb80`).
+- Ground-truth agreement reconciled with firewall/NAT translation, eCAR and command-line views,
+  and canonical Bash history destruction, bringing the bundled corpus to the 95% gate
+  (`447a7087`, `f4e9f812`, `0da82b66`).
 
 **Evaluation**
 
@@ -81,6 +90,9 @@ independent of scenario and storage schema versions. Changes since 2.2.0a6:
   lifecycle frontiers, pre-collection exit timing, syslog spillage consequences, and escaped
   solidus in macOS Endpoint Security JSON (`51629cd7`, `6e486fec`, `8404cfcd`, `887367c7`,
   `15b85996`, `3a01cbea`).
+- macOS observation-profile overrides validate against one shared source table (`66e8e5f4`).
+- Deferred SSH/RDP sessions that straddle the collection-window start no longer abort
+  generation; the slow tier now generates a draft of every shipping example (`eb3d85fc`).
 
 **Dependencies and release maintenance**
 
@@ -88,6 +100,8 @@ independent of scenario and storage schema versions. Changes since 2.2.0a6:
   1.2.4 (`36bef307`, `b3708e1a`, `ec1a2f8e`, `a171976b`, `64242b4f`).
 - Release publishing proceeds after the unused modern/legacy policy branch is skipped
   (`3944d47a`); dev CI repairs for the bundled examples (`6487c094`).
+- Roadmap cleanup; removal of the legacy public-identity overlay adapter is deferred past 3.0
+  (`55052225`, `743facb7`, `1471476d`).
 
 **Installers and known limits**
 
@@ -96,6 +110,9 @@ independent of scenario and storage schema versions. Changes since 2.2.0a6:
   skills; only Codex is installed separately for authoring. The CLI and agent-skill workflows
   remain supported. The macOS installer has no Developer ID signature or notarization, and the
   Windows installer is not code-signed.
+- Windows generation is much slower than on macOS and Linux, mostly after the simulated
+  hours finish: one 24-hour example took about 1h40m on a Windows 11 laptop inside the
+  authoring sandbox. Investigation is planned for 3.0.0.
 
 ## v2.2.0a6 (2026-11-09)
 

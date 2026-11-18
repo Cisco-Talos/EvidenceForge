@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.events.ground_truth_occurrence import (
     GROUND_TRUTH_EVENTS_FILENAME,
@@ -219,6 +220,9 @@ def _facts(event: CanonicalOccurrence) -> dict[str, JsonValue]:
                 for field in names
                 if hasattr(context, field)
             }
+    derivation = event.process.command_derivation if event.process is not None else None
+    if derivation is not None and isinstance(result.get("process"), dict):
+        result["process"]["command_derivation"] = _json_value(derivation.to_facts())
     for name in (
         "smb",
         "remote_thread",
@@ -560,7 +564,7 @@ class GroundTruthLedger:
         self._expectation_planner = None
         self._intents = {intent.intent_id: intent for intent in authored.intents}
         directory = Path(tempfile.mkdtemp(prefix="eforge-ground-truth-"))
-        self._db = sqlite3.connect(directory / "facts.sqlite", check_same_thread=False)
+        self._db = connect_sqlite(directory / "facts.sqlite", check_same_thread=False)
         self._cleanup = weakref.finalize(self, _close_journal, self._db, directory)
         self._lock = RLock()
         self._db.executescript("""
@@ -612,8 +616,69 @@ class GroundTruthLedger:
         ).fetchone()
         return GroundTruthExpectationContract.model_validate_json(row[0]) if row else None
 
+    def _finalize_history_retention(self) -> None:
+        """Mark history entries destroyed by a later admitted clear of the same file.
+
+        Bash history is collected as the file that remains at the end of collection. A
+        recorded clear erases itself and every entry ordered before it in that user's file,
+        so those entries are expected absent. Idempotent: a clear stays admitted after its
+        own entry is marked destroyed.
+        """
+        from evidenceforge.events.evidence_source_rules import (
+            HISTORY_DESTROYED_REASON,
+            destroying_history_clear,
+            history_entry_admitted,
+        )
+
+        entries: list[tuple[str, datetime, str, list[dict]]] = []
+        clears: dict[tuple[str, str], list[tuple[datetime, str]]] = defaultdict(list)
+        for occurrence_id, payload, captured in self._db.execute(
+            "SELECT o.id, o.payload, e.payload FROM occurrences o "
+            "JOIN expectations e ON e.occurrence = o.id "
+            'WHERE o.payload LIKE \'%"kind":"bash_command"%\''
+        ):
+            row = json.loads(payload)
+            if row.get("kind") != "bash_command":
+                continue
+            facts = row.get("facts") or {}
+            username = str((facts.get("auth") or {}).get("username") or "")
+            occurred = datetime.fromisoformat(row["time"])
+            items = json.loads(captured)
+            entries.append((occurrence_id, occurred, username, items))
+            if (facts.get("shell") or {}).get("history_effect") != "destroy_prior":
+                continue
+            for item in items:
+                excluded = [c["stage"] for c in item["conditions"] if c["state"] == "excluded"]
+                if item["format"] == "bash_history" and history_entry_admitted(
+                    item["expected"], excluded
+                ):
+                    clears[(item["source_instance"], username)].append((occurred, occurrence_id))
+        for occurrence_id, occurred, username, items in entries:
+            changed = False
+            for item in items:
+                if item["format"] != "bash_history" or item["expected"] != "present":
+                    continue
+                clear = destroying_history_clear(
+                    occurred, clears.get((item["source_instance"], username), [])
+                )
+                if clear is None:
+                    continue
+                item["expected"] = "absent"
+                item["reason"] = HISTORY_DESTROYED_REASON
+                item["conditions"].append(
+                    {"stage": "retention", "state": "excluded", "reason": HISTORY_DESTROYED_REASON}
+                )
+                item["provenance"] = {**item["provenance"], "retention": {"destroyed_by": clear}}
+                changed = True
+            if changed:
+                self._db.execute(
+                    "UPDATE expectations SET payload=? WHERE occurrence=?",
+                    (json.dumps(items, sort_keys=True), occurrence_id),
+                )
+
     def expectation_summary(self) -> GroundTruthExpectationSummary:
         """Aggregate predictions while retaining detailed history only on disk."""
+        self._finalize_history_retention()
         totals: Counter[str] = Counter()
         sources: dict[str, Counter[str]] = defaultdict(Counter)
         reasons: Counter[str] = Counter()
@@ -1208,6 +1273,7 @@ class GroundTruthLedger:
 
     def rows(self) -> Iterator[GroundTruthOccurrence]:
         """Stream deterministic rows with observations and actual-use relationships."""
+        self._finalize_history_retention()
         for (payload,) in self._db.execute("SELECT payload FROM occurrences ORDER BY time,id"):
             row = GroundTruthOccurrence.model_validate_json(payload)
             captured = self._db.execute(

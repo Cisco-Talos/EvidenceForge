@@ -46,6 +46,7 @@ from queue import Full
 from threading import Event, RLock, get_ident
 from typing import Any
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.config.snort_classifications import snort_classification_description
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import (
@@ -293,11 +294,7 @@ def _create_private_file(
 def _connect_existing_journal(journal_path: Path) -> sqlite3.Connection:
     """Open only an existing private SQLite database."""
 
-    return sqlite3.connect(
-        f"{journal_path.as_uri()}?mode=rw",
-        uri=True,
-        check_same_thread=False,
-    )
+    return connect_sqlite(journal_path, mode="rw", check_same_thread=False)
 
 
 def _validate_private_spool_ancestry(path: Path) -> None:

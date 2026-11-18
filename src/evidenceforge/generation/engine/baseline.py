@@ -7718,6 +7718,10 @@ class BaselineMixin:
                 return set()
             return {seg_name for seg_name, cidr in segment_cidrs.items() if address in cidr}
 
+        visibility = getattr(getattr(self, "dispatcher", None), "visibility_engine", None)
+        if visibility is not None and not visibility.firewall_traverses(sensor, src_ip, dst_ip):
+            return False
+
         src_segments = _resolve_segments(src_ip)
         dst_segments = _resolve_segments(dst_ip)
         sensor_segments = set(getattr(sensor, "monitoring_segments", []) or [])

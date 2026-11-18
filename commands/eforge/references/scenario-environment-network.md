@@ -52,7 +52,10 @@ Each sensor supports these exact fields:
 - Optional `description`.
 
 A SPAN sensor sees eligible intra-segment traffic; a TAP sees traffic crossing its monitored
-boundary. `monitoring_segments` must use exact declared segment names.
+boundary. `monitoring_segments` must use exact declared segment names. A firewall sees and
+enforces only traffic between different `interfaces` (or to a static-NAT `mapped_ip`); segments
+sharing one interface bypass it, so give segments distinct interfaces when the firewall must
+sit between them.
 
 ## Firewall policy and NAT
 

@@ -161,6 +161,14 @@ _nt_create_file = _bind(
     ],
 )
 _nt_error = _bind(_ntdll, "RtlNtStatusToDosError", wintypes.ULONG, [ctypes.c_int32])
+_final_path = _bind(
+    _kernel,
+    "GetFinalPathNameByHandleW",
+    wintypes.DWORD,
+    [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD],
+)
+_STATUS_INVALID_HANDLE = -1073741816  # 0xC0000008
+_VOLUME_NAME_NT = 0x2
 _nt_set_information = _bind(
     _ntdll,
     "NtSetInformationFile",
@@ -862,6 +870,40 @@ def remove_child(
         os.close(descriptor)
 
 
+def _rename(
+    descriptor: int, target: str, root: int | None, flags: int, information_class: int
+) -> int:
+    """Issue one native rename of an open object; return its NTSTATUS."""
+    encoded = target.encode("utf-16-le")
+    buffer = ctypes.create_string_buffer(ctypes.sizeof(_RenameInformation) + len(encoded))
+    information = _RenameInformation.from_buffer(buffer)
+    information.Flags = flags
+    information.RootDirectory = root
+    information.FileNameLength = len(encoded)
+    ctypes.memmove(
+        ctypes.addressof(buffer) + _RenameInformation.FileName.offset, encoded, len(encoded)
+    )
+    status = _IoStatusBlock()
+    return int(
+        _nt_set_information(
+            _handle(descriptor), ctypes.byref(status), buffer, len(buffer), information_class
+        )
+    )
+
+
+def _nt_path(descriptor: int) -> str:
+    """Return an open object's current absolute NT path from its handle."""
+    size = 1024
+    while True:
+        buffer = ctypes.create_unicode_buffer(size)
+        length = _final_path(_handle(descriptor), buffer, size, _VOLUME_NAME_NT)
+        if length == 0:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if length < size:
+            return buffer.value
+        size = length + 1
+
+
 def replace_child(
     source_parent: int,
     source: str,
@@ -891,27 +933,24 @@ def replace_child(
             metadata = os.fstat(descriptor)
             if (int(metadata.st_dev), int(metadata.st_ino)) != expected_identity:
                 raise OSError("Windows file identity changed before publication")
-        encoded = target.encode("utf-16-le")
-        buffer = ctypes.create_string_buffer(ctypes.sizeof(_RenameInformation) + len(encoded))
-        information = _RenameInformation.from_buffer(buffer)
         # FILE_RENAME_POSIX_SEMANTICS lets current readers retain the old file
         # while new opens immediately observe the complete replacement.
-        information.Flags = int(replace) | (0x2 if replace_open_files else 0)
-        information.RootDirectory = _handle(target_parent)
-        information.FileNameLength = len(encoded)
-        ctypes.memmove(
-            ctypes.addressof(buffer) + _RenameInformation.FileName.offset, encoded, len(encoded)
-        )
+        flags = int(replace) | (0x2 if replace_open_files else 0)
+        information_class = 65 if replace_open_files else 10  # FileRenameInformation(Ex)
         # Use the native information class for RootDirectory-relative renames;
         # the Win32 wrapper rejects this form on the hosted Windows runner.
-        status = _IoStatusBlock()
-        result = _nt_set_information(
-            _handle(descriptor),
-            ctypes.byref(status),
-            buffer,
-            len(buffer),
-            65 if replace_open_files else 10,  # FileRenameInformationEx / FileRenameInformation
-        )
+        result = _rename(descriptor, target, _handle(target_parent), flags, information_class)
+        if result == _STATUS_INVALID_HANDLE:
+            # Process containers such as the Windows MXC authoring sandbox reject a
+            # RootDirectory-relative rename target while allowing the same rename by
+            # absolute name. Address the pinned parent by its own NT path, then require
+            # the published object to sit beneath that same parent object.
+            expected = _nt_path(target_parent).rstrip("\\") + "\\" + target
+            result = _rename(descriptor, expected, None, flags, information_class)
+            if result >= 0:
+                current = _nt_path(target_parent).rstrip("\\") + "\\" + target
+                if _nt_path(descriptor).casefold() != current.casefold():
+                    raise OSError("Windows rename did not publish beneath its pinned parent")
         if result < 0:
             raise ctypes.WinError(_nt_error(result))
         if write_through and not directory:

@@ -80,6 +80,33 @@ distinct occurrences. Required facts are checked separately, so a changed image 
 disagreement and an actual duplicate remains a cardinality error. Literal POSIX argument
 equivalence accepts harmless quoting changes without interpreting shell programs.
 
+Authored commands are shell programs or tool invocations; the executed process can differ.
+Authored process occurrences therefore record `process.command_derivation`: the authored
+`command_line` and the ordered rules that produced the native command, each with its replay
+parameters. Rules are `placeholder_substitution`, `posix_shell_argv` (quotes removed,
+redirections dropped, home shortcuts expanded), `posix_shell_program` (`<shell> -c`),
+`catalog_direct_exec`, `windows_process_normalization` (script and service hosts such as
+`PSEXESVC.exe`) and `macos_launch_descriptor` (launch-contract arguments such as
+`--seatbelt-client`). Agreement accepts a native command only when replaying the recorded
+rules from the exact authored text reproduces it; an unrecorded change remains a
+disagreement. A derivation is provenance and is not part of process identity.
+
+Bash history is collected as the file that remains at the end of collection. Commands whose
+canonical `shell.history_effect` is `destroy_prior` (classified once from
+`config/activity/shell_history_effects.yaml`, the same rule the history emitter applies) erase
+themselves and every earlier entry in that user's file. Those entries are expected absent with a
+`retention` stage excluded as `destroyed_by_later_action` and `provenance.retention.destroyed_by`
+naming the clear; agreement independently requires exactly those entries to be excluded. Per-shell
+in-memory history and write-at-exit behavior are not yet modeled.
+
+Samba-served sessions carry no Windows logon ID; eCAR session expectations key them by the SMB
+session reference, and SMB file expectations take server and client paths from SMB facts.
+
+Timing anchors for predecessor births also name `clock_adjustment_us`, the host-clock
+projection the timing owner applied to that entity's canonical start. A pre-collection parent
+with no exported create row is proven when its anchor follows `start + adjustment` within the
+declared create latency.
+
 Finalized source projections retain bounded process timing witnesses under
 `provenance.timing`: canonical/native times, phase, identities, policy and predecessor
 anchors. Timing policies are bound in `expectation_contract.source_rules.process_timing`.

@@ -48,10 +48,11 @@ BUILT_TCP_UDP = re.compile(
     r"\((\S+)/(\d+)\)"
 )
 
-# Built ICMP: "Built {inbound/outbound} ICMP connection for faddr ip/type ..."
+# Built ICMP: "Built {inbound/outbound} ICMP connection for faddr ip/type gaddr ip/0 laddr ip/0"
 BUILT_ICMP = re.compile(
-    r"Built\s+(?:inbound|outbound)\s+ICMP\s+connection\s+for\s+faddr\s+"
+    r"Built\s+(inbound|outbound)\s+ICMP\s+connection\s+for\s+faddr\s+"
     r"([^/\s]+)/(\d+)"
+    r"(?:\s+gaddr\s+([^/\s]+)/\d+\s+laddr\s+([^/\s]+)/\d+)?"
 )
 
 # Teardown connection: "Teardown TCP connection 12345 for outside:203.0.113.50/443 to ..."
@@ -62,10 +63,11 @@ TEARDOWN_TCP_UDP = re.compile(
     r"duration\s+(\S+)\s+bytes\s+(\d+)"
 )
 
-# Teardown ICMP: "Teardown ICMP connection for faddr ip/type ..."
+# Teardown ICMP: "Teardown ICMP connection for faddr ip/type gaddr ip/0 laddr ip/0"
 TEARDOWN_ICMP = re.compile(
     r"Teardown\s+ICMP\s+connection\s+for\s+faddr\s+"
     r"([^/\s]+)/(\d+)"
+    r"(?:\s+gaddr\s+([^/\s]+)/\d+\s+laddr\s+([^/\s]+)/\d+)?"
 )
 
 # Deny: "Deny tcp src outside:104.248.71.33/44231 dst inside:10.0.10.50/445 ..."
@@ -143,6 +145,7 @@ class CiscoAsaParser(LogParser):
         # A teardown has native foreign/local endpoints, but no initiation direction.
         # Bound remembered builds; unmatched/evicted closes remain explicitly native.
         tracked_builds: dict[tuple[str, int], dict] = {}
+        tracked_icmp_directions: dict[tuple[str, str | None, str | None, str | None], str] = {}
         maximum_tracked_builds = 65_536
         for line_num, line in iter_bounded_text_lines(path):
             line = line.rstrip("\n")
@@ -150,6 +153,21 @@ class CiscoAsaParser(LogParser):
                 continue
             record = self._parse_line(line, line_num, seed_year)
             fields = record.fields
+            if fields.get("msg_id") in (302020, 302021) and "local_ip" in fields:
+                # ICMP rows have no connection ID; their native address triple is stable.
+                icmp_key = (
+                    fields["hostname"],
+                    fields.get("foreign_ip"),
+                    fields.get("mapped_local_ip"),
+                    fields.get("local_ip"),
+                )
+                if fields["msg_id"] == 302020:
+                    if len(tracked_icmp_directions) >= maximum_tracked_builds:
+                        tracked_icmp_directions.pop(next(iter(tracked_icmp_directions)))
+                    tracked_icmp_directions.pop(icmp_key, None)
+                    tracked_icmp_directions[icmp_key] = fields["direction"]
+                elif icmp_key in tracked_icmp_directions:
+                    self._normalize_icmp_endpoints(fields, tracked_icmp_directions[icmp_key])
             connection_id = fields.get("connection_id")
             if connection_id is not None:
                 key = (fields["hostname"], connection_id)
@@ -240,11 +258,10 @@ class CiscoAsaParser(LogParser):
         elif msg_id in (302020,):
             match = BUILT_ICMP.search(message)
             if match:
-                interface, address = _parse_asa_address_token(match.group(1))
-                if interface:
-                    fields["dst_interface"] = interface
-                fields["dst_ip"] = address
-                fields["icmp_type"] = int(match.group(2))
+                CiscoAsaParser._extract_icmp_endpoints(
+                    fields, match.group(2), match.group(3), match.group(4), match.group(5)
+                )
+                CiscoAsaParser._normalize_icmp_endpoints(fields, match.group(1))
         elif msg_id in (302014, 302016):
             match = TEARDOWN_TCP_UDP.search(message)
             if match:
@@ -265,11 +282,14 @@ class CiscoAsaParser(LogParser):
         elif msg_id in (302021,):
             match = TEARDOWN_ICMP.search(message)
             if match:
-                interface, address = _parse_asa_address_token(match.group(1))
-                if interface:
-                    fields["dst_interface"] = interface
-                fields["dst_ip"] = address
-                fields["icmp_type"] = int(match.group(2))
+                CiscoAsaParser._extract_icmp_endpoints(
+                    fields, match.group(1), match.group(2), match.group(3), match.group(4)
+                )
+                if "local_ip" not in fields:
+                    # Legacy single-address rows retain their historical faddr view.
+                    fields["dst_ip"] = fields.pop("foreign_ip")
+                    if "foreign_interface" in fields:
+                        fields["dst_interface"] = fields.pop("foreign_interface")
         elif msg_id == 106023:
             match = DENY.search(message)
             if match:
@@ -319,6 +339,52 @@ class CiscoAsaParser(LogParser):
                 fields["avg_rate"] = int(match.group(5))
                 fields["avg_max"] = int(match.group(6))
                 fields["cumulative_count"] = int(match.group(7))
+
+    @staticmethod
+    def _extract_icmp_endpoints(
+        fields: dict,
+        foreign_token: str,
+        icmp_type: str,
+        global_token: str | None,
+        local_token: str | None,
+    ) -> None:
+        """Record the native ICMP faddr/gaddr/laddr roles without inferring initiation."""
+        fields["protocol"] = "icmp"
+        fields["icmp_type"] = int(icmp_type)
+        for native, token in (("foreign", foreign_token), ("local", local_token)):
+            if token is None:
+                continue
+            interface, address = _parse_asa_address_token(token)
+            if interface:
+                fields[f"{native}_interface"] = interface
+            fields[f"{native}_ip"] = address
+        if global_token is not None:
+            fields["mapped_local_ip"] = _parse_asa_address_token(global_token)[1]
+
+    @staticmethod
+    def _normalize_icmp_endpoints(fields: dict, direction: str) -> None:
+        """Expose ICMP orig/resp from the Built row's native direction.
+
+        Inbound rows are initiated by the foreign address toward the local host, whose
+        global address is its translated view; outbound rows are initiated locally.
+        """
+        if "local_ip" not in fields:
+            # Legacy single-address rows retain their historical faddr view.
+            fields["dst_ip"] = fields.pop("foreign_ip")
+            if "foreign_interface" in fields:
+                fields["dst_interface"] = fields.pop("foreign_interface")
+            return
+        fields["direction"] = direction
+        source, destination = (
+            ("foreign", "local") if direction == "inbound" else ("local", "foreign")
+        )
+        for role, native in (("src", source), ("dst", destination)):
+            fields[f"{role}_ip"] = fields[f"{native}_ip"]
+            if f"{native}_interface" in fields:
+                fields[f"{role}_interface"] = fields[f"{native}_interface"]
+        if "mapped_local_ip" in fields:
+            mapped_role = "dst" if direction == "inbound" else "src"
+            fields[f"mapped_{mapped_role}_ip"] = fields["mapped_local_ip"]
 
     @staticmethod
     def _preserve_native_endpoints(fields: dict, *, mapped: bool) -> None:

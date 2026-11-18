@@ -25,8 +25,8 @@ Mac platform entries can independently declare `executable_format: mach_o` with 
 | Observation profiles | An unversioned `profiles:` document | `schema_version: 2` with the same named profiles | Profile fields and source behavior are unchanged. |
 | Applications | An unversioned catalog, a platform without `deployment`, or a managed descriptor without `kind` | Version 2 catalog and explicit `deployment.kind` | Missing deployment becomes `legacy_static`; a descriptor with release fields becomes `managed`. |
 | Installed software | `{name, publisher, version}` | Explicit product/release/build/architecture/scope fields | Display output is unchanged; compatibility derives a stable name-based product ID, `build: version`, `architectures: [neutral]`, and `scope: machine`. |
-| Public external actors | `activity/external_actor_profiles.yaml` | `activity/public_identity_profiles.yaml` roles `external_logon`, `failed_logon`, and `c2` | Accepted for user-owned overlays throughout 2.x and translated before the canonical overlay. Removed in 3.0. |
-| Public mail infrastructure | `activity/mail_public_identities.yaml` | `activity/public_identity_profiles.yaml` role `mail` and provider entries | Accepted for user-owned overlays throughout 2.x and translated before the canonical overlay. Removed in 3.0. |
+| Public external actors | `activity/external_actor_profiles.yaml` | `activity/public_identity_profiles.yaml` roles `external_logon`, `failed_logon`, and `c2` | Accepted for user-owned overlays and translated before the canonical overlay. Deprecated; removal is deferred to a later major release. |
+| Public mail infrastructure | `activity/mail_public_identities.yaml` | `activity/public_identity_profiles.yaml` role `mail` and provider entries | Accepted for user-owned overlays and translated before the canonical overlay. Deprecated; removal is deferred to a later major release. |
 
 These are the complete supported aliases. EvidenceForge does not guess near-miss field names.
 Supplying a legacy and current timing field with different values, or only part of the current
@@ -41,7 +41,8 @@ effective-config provenance and fingerprints, while generated bindings record th
 source and canonical fingerprint.
 
 `eforge validate` emits one warning for each consumed user-owned legacy file, names the canonical
-replacement, and states the EvidenceForge 3.0 removal target. `generate`, `resolve`,
+replacement, and states that the file is deprecated for removal in a later major release. 3.0 keeps
+the translation so published scenarios and resolved runs that froze a legacy file still reproduce. `generate`, `resolve`,
 `validate-config`, `info`, evaluation, pack, and checkpoint commands stay silent. Packaged
 configuration and authoritative resolved scenarios never produce these warnings.
 

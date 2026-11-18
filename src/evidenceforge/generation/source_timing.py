@@ -4666,10 +4666,42 @@ class SourceTimingPlanner:
             actor = event.identity_plan.actor
             if isinstance(subject, ProcessIdentity):
                 anchors = []
+                host = next(
+                    (
+                        candidate
+                        for candidate in (event.src_host, event.dst_host)
+                        if candidate is not None
+                        and candidate.hostname.casefold() == hostname.casefold()
+                    ),
+                    None,
+                )
 
-                def anchor(kind: str, identity: str, at: datetime | None) -> None:
+                def anchor(
+                    kind: str,
+                    identity: str,
+                    at: datetime | None,
+                    started_at: datetime | None = None,
+                ) -> None:
                     if at is not None and at < timestamp:
-                        anchors.append({"kind": kind, "identity": identity, "time": at.isoformat()})
+                        item: dict[str, object] = {
+                            "kind": kind,
+                            "identity": identity,
+                            "time": at.isoformat(),
+                        }
+                        if started_at is not None and host is not None:
+                            # Name the host-clock projection applied to this entity's
+                            # canonical birth so a pre-collection predecessor remains
+                            # provable from its own start without an exported row.
+                            canonical_start = ensure_utc(started_at)
+                            projected = self._runtime_endpoint_clock_time(
+                                canonical_start,
+                                hostname=hostname,
+                                os_category=host.os_category,
+                            )
+                            item["clock_adjustment_us"] = (projected - canonical_start) / timedelta(
+                                microseconds=1
+                            )
+                        anchors.append(item)
 
                 anchor(
                     "preferred_create"
@@ -4677,6 +4709,7 @@ class SourceTimingPlanner:
                     else "process_create",
                     subject.object_id,
                     self._ecar_process_create_times.get(subject.object_id),
+                    subject.started_at,
                 )
                 anchor(
                     "process_frontier",
@@ -4691,6 +4724,7 @@ class SourceTimingPlanner:
                             "parent_create",
                             actor.object_id,
                             self._ecar_process_create_times.get(actor.object_id),
+                            actor.started_at,
                         )
                     elif event.event_type == "process_exec":
                         anchor(

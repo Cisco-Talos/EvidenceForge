@@ -460,7 +460,11 @@ relationships. `source_instance` is globally exact and case-insensitive. Stable 
 IDs use `<family>:<system-id>` for one source per host/family and append a stable local name when a
 host has multiple instances. The optional `system` and `family` fields are validation guards for
 that exact instance. Unknown source instances are rejected when the immutable source deployment is
-compiled.
+compiled. Host families are `windows_security`, `sysmon`, `ecar`, `syslog`, `bash_history`,
+`zsh_history`, `macos_endpoint_security`, `macos_unified_log`, `proxy` and `web`; sensor families
+are `zeek`, `ids` and `asa`. For example, `macos_endpoint_security:mac-01` with `enabled: false`
+removes that Mac's native ES source; because complete macOS process coverage is then impossible,
+validation requires `macos_process_coverage: partial`.
 
 When exact source overrides are active, `OBSERVATION_MANIFEST.json` may include a
 `source_deployment_digest` that binds collection diagnostics to the immutable compiled source
@@ -862,6 +866,12 @@ Validation warns when a network topology has no firewall entry. Requesting `cisc
         - {src: servers, dst: external, ports: [80, 443, 53]}
         - {src: servers, dst: servers}
 ```
+
+A firewall forwards traffic between its interfaces. Segments mapped to the **same** interface
+(`workstations` and `servers` above both use `inside`) reach each other without crossing the
+firewall, so it neither logs nor enforces policy for that traffic. The exception is traffic
+addressed to a static-NAT `mapped_ip` (including hairpin access from inside). Map segments to
+distinct interfaces to place the firewall between them.
 
 **Policy rules** (`FirewallRule`):
 - `src` / `dst`: segment name, `"external"` (IPs not in any segment), specific IP, CIDR notation, or `"any"`

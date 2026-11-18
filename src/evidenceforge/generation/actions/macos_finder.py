@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.command_derivation import CommandDerivation
 from evidenceforge.events.content_identity import BinaryReleaseIdentity
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.dispatcher import (
@@ -76,6 +77,7 @@ class MacosFinderStartup:
         lifecycle_group_id: str,
         concurrency_group_id: str,
         storyline: bool,
+        command_derivation: CommandDerivation | None = None,
     ) -> None:
         if (
             dispatcher.state_manager is not state
@@ -113,6 +115,7 @@ class MacosFinderStartup:
         self._launcher = launcher
         self._app = app
         self._arguments = arguments
+        self._command_derivation = command_derivation
         self._times = times
         self._lifecycle_group_id = lifecycle_group_id
         self._concurrency_group_id = concurrency_group_id
@@ -278,6 +281,7 @@ class MacosFinderStartup:
                     session=self._session,
                 )
                 event.process.binary_identity = self._app
+                event.process.command_derivation = self._command_derivation
             events = (event,)
         plan = builder.seal()
         root = (

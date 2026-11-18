@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -110,6 +111,82 @@ def test_shipping_example_generates_after_import(tmp_path: Path, example_root: P
     categories = {category["key"]: category["score"] for category in report["categories"]}
     for category in ("source_schema", "canonical_invariants", "scenario_completeness"):
         assert categories[category] == 100, (category, categories[category])
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "example_root",
+    [example.root for example in discover_examples()],
+    ids=[example.identity for example in discover_examples()],
+)
+def test_shipping_example_draft_generates_with_current_defaults(
+    tmp_path: Path, example_root: Path
+) -> None:
+    # A release generates from its frozen configuration; a draft resolves current packaged
+    # defaults, whose ordering alone can move baseline activity onto different boundaries.
+    from typer.testing import CliRunner
+
+    from evidenceforge.cli.commands import app
+
+    workspace = tmp_path / "workspace"
+    draft = create_draft(
+        import_release(example_root, project_root=workspace),
+        project_root=workspace,
+        inherit_publisher=False,
+    )
+    bundle = workspace / "run"
+    result = CliRunner().invoke(
+        app,
+        ["generate", str(draft), "--project-root", str(workspace), "--output", str(bundle)],
+    )
+    assert result.exit_code == 0, result.output[-6000:]
+    assert (bundle / "GENERATION_MANIFEST.json").is_file()
+
+
+@pytest.mark.slow
+def test_rdp_session_straddling_the_window_start_publishes_its_visible_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+    from typer.testing import CliRunner
+
+    from evidenceforge.cli.commands import app
+    from evidenceforge.events.dispatcher import EventDispatcher
+
+    # This shortened Alderbrook draft opens a baseline RDP session to the domain controller
+    # during warm-up whose shell processes start just after collection begins.
+    example = next(
+        item
+        for item in discover_examples()
+        if item.receipt.name == "alderbrook-insider-exfiltration"
+    )
+    workspace = tmp_path / "workspace"
+    draft = create_draft(
+        import_release(example.root, project_root=workspace),
+        project_root=workspace,
+        inherit_publisher=False,
+    )
+    document = yaml.safe_load(draft.read_text(encoding="utf-8"))
+    document["time_window"]["duration"] = "1h"
+    document["storyline"] = [dict(document["storyline"][1], time="+30m")]
+    document.pop("red_herrings")
+    draft.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    boundaries: list[tuple[int, int]] = []
+    original = EventDispatcher._deferred_session_unobserved_members
+
+    def record(self: EventDispatcher, dispatches: tuple[Any, ...]) -> set[int]:
+        unobserved = original(self, dispatches)
+        boundaries.append((len(unobserved), len(dispatches)))
+        return unobserved
+
+    monkeypatch.setattr(EventDispatcher, "_deferred_session_unobserved_members", record)
+    bundle = workspace / "run"
+    result = CliRunner().invoke(
+        app,
+        ["generate", str(draft), "--project-root", str(workspace), "--output", str(bundle)],
+    )
+    assert result.exit_code == 0, result.output[-6000:]
+    assert any(0 < unobserved < members for unobserved, members in boundaries), boundaries
 
 
 def test_empty_and_populated_collection_identity(tmp_path: Path, published: Path) -> None:

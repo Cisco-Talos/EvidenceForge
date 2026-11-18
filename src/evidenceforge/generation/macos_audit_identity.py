@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.time import ensure_utc
 
@@ -47,7 +48,7 @@ class MacosAuditIdentityLedger(MutableMapping[AuditKey, AuditFact]):
         if self._db is None:
             self._directory = tempfile.TemporaryDirectory(prefix="eforge-audit-identity-")
             path = Path(self._directory.name) / "allocations.sqlite"
-            self._db = sqlite3.connect(path, check_same_thread=False)
+            self._db = connect_sqlite(path, check_same_thread=False)
             self._cleanup = weakref.finalize(self, _cleanup_ledger, self._db, self._directory)
             self._db.execute("PRAGMA cache_size=-1024")
             self._db.execute("PRAGMA temp_store=FILE")

@@ -44,8 +44,10 @@ from typing import Any
 
 from jinja2 import Template
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.generation.activity.shell_history_effects import bash_history_effect
 from evidenceforge.generation.emitters.base import (
     _EXACT_PUBLICATION_ATTEMPT,
     ExactPublicationError,
@@ -95,16 +97,6 @@ _EXPORT_PRIVATE_SUFFIX = ".tmp"
 _SQLITE_COMPANION_SUFFIXES = ("-journal", "-wal", "-shm")
 _SPOOL_DIRECTORY_ENVIRONMENT = "EFORGE_SPOOL_DIR"
 _SPOOL_DIRECTORY_PREFIX = ".evidenceforge-bash-journal-"
-
-# A matching command erases itself and every history entry ordered before it.
-_CLEAR_PATTERNS = (
-    re.compile(r"history\s+-c"),
-    re.compile(r">\s*~/\.bash_history"),
-    re.compile(r"cat\s+/dev/null\s*>\s*~/\.bash_history"),
-    re.compile(r"truncate\s+-s\s+0\s+.*\.bash_history"),
-    re.compile(r"rm\s+((-[rf]+\s+)?.*)?\.bash_history"),
-    re.compile(r"shred\s+.*(-u|--remove).*\.bash_history"),
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -618,11 +610,7 @@ def _copy_descriptor(
 def _connect_existing_journal(journal_path: Path) -> sqlite3.Connection:
     """Open only an existing private journal before any SQLite mutation."""
 
-    return sqlite3.connect(
-        f"{journal_path.as_uri()}?mode=rw",
-        uri=True,
-        check_same_thread=False,
-    )
+    return connect_sqlite(journal_path, mode="rw", check_same_thread=False)
 
 
 def _real_absolute(path: Path) -> Path:
@@ -1182,7 +1170,8 @@ def _is_clear_entry(entry: str) -> bool:
     if re.match(r"^: \d+:\d+;", entry):
         return False
     command = " ".join(line for line in entry.splitlines() if not line.startswith("#")).strip()
-    return any(pattern.search(command) for pattern in _CLEAR_PATTERNS)
+    # The producer recorded this same canonical classification on the occurrence.
+    return bash_history_effect(command) == "destroy_prior"
 
 
 @dataclass(frozen=True, slots=True)

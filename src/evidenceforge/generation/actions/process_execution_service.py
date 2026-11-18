@@ -16,6 +16,7 @@ from enum import StrEnum
 from typing import cast
 
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.command_derivation import CommandDerivation
 from evidenceforge.events.content_identity import (
     BinaryReleaseIdentity,
     LocalArtifactBinaryIdentity,
@@ -91,6 +92,7 @@ from evidenceforge.generation.activity.process_helpers import (
 from evidenceforge.generation.activity.service_process_profiles import (
     matching_service_worker,
 )
+from evidenceforge.generation.command_derivation import step as derivation_step
 from evidenceforge.generation.deployment_registry import (
     LocalArtifactPublishToken,
 )
@@ -610,6 +612,7 @@ class ProcessExecutionService:
             lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
             concurrency_group_id=request.concurrency_group_id,
             storyline=request.from_storyline,
+            command_derivation=request.command_derivation,
         )
         return RetainedFinderLaunch(request, launch, startup, binary)
 
@@ -1557,8 +1560,18 @@ class ProcessExecutionService:
         directory = self.state_manager.process_directory_at(parent, event_time=forked_at)
         if directory is None:
             raise StateError("Mac browser helper requires its parent's current working directory")
+        command_derivation = request.command_derivation
         if rule.io_layout == "browser_sandbox":
-            arguments = (*arguments, f"--seatbelt-client={rule.seatbelt_fd}")
+            descriptor = f"--seatbelt-client={rule.seatbelt_fd}"
+            if command_derivation is not None:
+                command_derivation = command_derivation.then(
+                    launch.actor.command_line,
+                    shlex.join((*arguments, descriptor)),
+                    derivation_step(
+                        "macos_launch_descriptor", image=launch.actor.image, argument=descriptor
+                    ),
+                )
+            arguments = (*arguments, descriptor)
         overrides = {entry.split("=", 1)[0] for entry in rule.environment}
         environment = (
             tuple(entry for entry in parent.environment if entry.split("=", 1)[0] not in overrides)
@@ -1586,6 +1599,7 @@ class ProcessExecutionService:
             lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
             concurrency_group_id=request.concurrency_group_id,
             storyline=request.from_storyline,
+            command_derivation=command_derivation,
         )
         return RetainedFinderLaunch(request, launch, startup, binary)
 
@@ -1837,6 +1851,21 @@ class ProcessExecutionService:
             fork,
         )
 
+    @staticmethod
+    def _resolved_command_derivation(
+        request: ProcessExecutionRequest,
+        launch: ProcessLaunchPlan,
+    ) -> CommandDerivation | None:
+        """Extend an authored derivation with the actor normalization this service applied."""
+        derivation = request.command_derivation
+        if derivation is None or _get_os_category(request.system.os) != "windows":
+            return derivation
+        return derivation.then(
+            request.command_line,
+            launch.actor.command_line,
+            derivation_step("windows_process_normalization", image=request.process_name),
+        )
+
     def _prepare_evidence(
         self,
         request: ProcessExecutionRequest,
@@ -1969,6 +1998,7 @@ class ProcessExecutionService:
                     if process_binary_publication is not None
                     else None
                 ),
+                command_derivation=self._resolved_command_derivation(request, launch),
             ),
             storyline_origin=request.from_storyline,
             identity_plan=EventIdentityPlan(

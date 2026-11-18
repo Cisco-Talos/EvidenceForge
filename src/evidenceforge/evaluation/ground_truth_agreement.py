@@ -27,6 +27,7 @@ from evidenceforge.events.evidence_projection import (
     required_capabilities,
     source_event_contracts,
 )
+from evidenceforge.events.evidence_source_rules import endpoint_local_destination_ip
 from evidenceforge.events.ground_truth import GroundTruthDocument
 from evidenceforge.events.ground_truth_occurrence import (
     GroundTruthOccurrence,
@@ -39,8 +40,13 @@ from evidenceforge.generation.collection_deployment import SourceInstanceDeploym
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger
 from evidenceforge.generation.source_deployment_compiler import compile_scenario_source_deployment
 from evidenceforge.models import Scenario
-from evidenceforge.models.exceptions import EvaluationError
-from evidenceforge.models.scenario import EmailDistributionGroup, EmailMessageEventSpec
+from evidenceforge.models.exceptions import EvaluationError, EvidenceForgeError
+from evidenceforge.models.scenario import (
+    EmailDistributionGroup,
+    EmailMessageEventSpec,
+    NetworkConfig,
+    NetworkSensor,
+)
 
 from .dns_answers import dns_answer_values
 from .finding_samples import FindingSamples
@@ -562,7 +568,110 @@ def _sensor_visible(scenario: Scenario, source_host: str, facts: dict, *, denied
             and src != dst
             and (len(monitored) <= 1 or bool(monitored & src and monitored & dst))
         )
+    if visible and sensor.type == "firewall" and not _firewall_forwards(config, sensor, network):
+        return False
     return visible
+
+
+def _collect_history_clear(
+    row: GroundTruthOccurrence,
+    clears: dict[tuple[str, str], list[tuple[datetime, str]]],
+) -> None:
+    """Index admitted Bash history clears by history file, independently of the ledger."""
+    from evidenceforge.events.evidence_source_rules import history_entry_admitted
+
+    if (
+        row.kind != "bash_command"
+        or (row.facts.get("shell") or {}).get("history_effect") != "destroy_prior"
+    ):
+        return
+    username = str((row.facts.get("auth") or {}).get("username") or "")
+    for expectation in row.source_expectations:
+        excluded = [item.stage for item in expectation.conditions if item.state == "excluded"]
+        if expectation.format == "bash_history" and history_entry_admitted(
+            expectation.expected, excluded
+        ):
+            clears[(expectation.source_instance, username)].append((row.time, row.occurrence_id))
+
+
+def _history_retention_errors(
+    row: GroundTruthOccurrence,
+    expectation: GroundTruthSourceExpectation,
+    clears: dict[tuple[str, str], list[tuple[datetime, str]]],
+) -> list[str]:
+    """Require exactly the entries a later admitted clear destroys to be retention-excluded."""
+    from evidenceforge.events.evidence_source_rules import (
+        HISTORY_DESTROYED_REASON,
+        destroying_history_clear,
+        history_entry_admitted,
+    )
+
+    if expectation.format != "bash_history" or row.kind != "bash_command":
+        return []
+    retention = next((item for item in expectation.conditions if item.stage == "retention"), None)
+    marked = retention is not None and retention.state == "excluded"
+    excluded = [item.stage for item in expectation.conditions if item.state == "excluded"]
+    username = str((row.facts.get("auth") or {}).get("username") or "")
+    clear = (
+        destroying_history_clear(row.time, clears.get((expectation.source_instance, username), []))
+        if history_entry_admitted(expectation.expected, excluded)
+        else None
+    )
+    recorded = (expectation.provenance.get("retention") or {}).get("destroyed_by")
+    if marked != (clear is not None) or (
+        marked
+        and (
+            recorded != clear
+            or retention.reason != HISTORY_DESTROYED_REASON
+            or expectation.expected != "absent"
+        )
+    ):
+        return ["invalid_retention_decision"]
+    return []
+
+
+def _derived_command_agrees(authored: str, process: dict) -> bool:
+    """Accept a native command only as the replay of its recorded authored derivation."""
+    from evidenceforge.events.command_derivation import CommandDerivation
+    from evidenceforge.generation.command_derivation import replay_command_derivation
+
+    facts = process.get("command_derivation")
+    if facts is None:
+        return False
+    try:
+        derivation = CommandDerivation.from_facts(facts)
+        return (
+            derivation.authored_command_line == authored
+            and bool(derivation.steps)
+            and replay_command_derivation(derivation) == process.get("command_line")
+        )
+    except (EvidenceForgeError, ValueError):
+        return False
+
+
+def _firewall_forwards(config: NetworkConfig, sensor: NetworkSensor, network: dict) -> bool:
+    """Verify the declared interface path: same-interface traffic bypasses the firewall."""
+    vips = {
+        rule.mapped_ip: rule.real_ip
+        for item in config.sensors
+        for rule in item.nat_rules
+        if rule.type == "static" and rule.mapped_ip and rule.real_ip
+    }
+    src_ip, dst_ip = str(network.get("src_ip") or ""), str(network.get("dst_ip") or "")
+    if not src_ip or not dst_ip or src_ip in vips or dst_ip in vips:
+        return True
+
+    def interface(ip: str) -> str:
+        address = ipaddress.ip_address(ip)
+        for segment in config.segments:
+            if address in ipaddress.ip_network(segment.cidr, strict=False):
+                return sensor.interfaces.get(segment.name, segment.name)
+        return sensor.interfaces.get("_default", "outside")
+
+    try:
+        return interface(src_ip) != interface(dst_ip)
+    except ValueError:
+        return True
 
 
 def _source_inventory(scenario: Scenario) -> dict[str, SourceInstanceDeployment]:
@@ -997,8 +1106,10 @@ def evaluate_ground_truth(
 
     timing_points = TimingPoints()
     owned_records = bounded_set()
+    history_clears: dict[tuple[str, str], list[tuple[datetime, str]]] = defaultdict(list)
     if document.event_stream is not None:
         for point in read_ground_truth_occurrences(root, document.event_stream):
+            _collect_history_clear(point, history_clears)
             for source in point.source_expectations:
                 if source.expected != "present":
                     continue
@@ -1059,6 +1170,10 @@ def evaluate_ground_truth(
                 payload = source.provenance.get("timing")
                 receipt = payload if isinstance(payload, dict) else {}
                 native = receipt.get("native_time")
+                if not native:
+                    # Readiness anchors name the source-visible admission time the window
+                    # receipt records; older bundles fall back to the delay reconstruction.
+                    native = (source.provenance.get("window") or {}).get("admission_time")
                 if not native and source.expected_time is not None:
                     from datetime import timedelta
 
@@ -1327,6 +1442,7 @@ def evaluate_ground_truth(
                         str(proc.get("command_line") or ""),
                         str((row.facts.get("src_host") or {}).get("os_category", "")),
                     )
+                    or _derived_command_agrees(spec.command_line, proc)
                 )
                 and str((row.facts.get("src_host") or {}).get("hostname", "")).casefold()
                 == intent.system.casefold()
@@ -1355,15 +1471,18 @@ def evaluate_ground_truth(
         ):
             network = row.facts.get("network") or {}
             proxy = row.facts.get("proxy") or {}
-            if (
-                network.get("dst_ip") == spec.dst_ip
-                and network.get("dst_port") == spec.dst_port
-                and not proxy
-            ):
+            nat = row.facts.get("nat") or {}
+            # An authored destination may name the server itself; behind static NAT the
+            # transport addresses its VIP while the destination host keeps its real address.
+            addressed = (network.get("dst_ip"), network.get("dst_port"))
+            served = (
+                endpoint_local_destination_ip(network.get("dst_ip"), nat.get("mapped_dst_ip")),
+                nat.get("mapped_dst_port") or network.get("dst_port"),
+            )
+            destination_matches = (spec.dst_ip, spec.dst_port) in {addressed, served}
+            if destination_matches and not proxy:
                 root_connection_counts[row.intent_id] += 1
-            if (
-                network.get("dst_ip") == spec.dst_ip and network.get("dst_port") == spec.dst_port
-            ) or proxy.get("host") == (spec.hostname or spec.dst_ip):
+            if destination_matches or proxy.get("host") == (spec.hostname or spec.dst_ip):
                 root_matches.add(row.intent_id)
             if (
                 getattr(spec, "action", "allow") == "deny"
@@ -1467,6 +1586,7 @@ def evaluate_ground_truth(
                     "decisions; regenerate for complete source verification."
                 )
             errors = _expectation_errors(row, expectation, scenario, inventory)
+            errors.extend(_history_retention_errors(row, expectation, history_clears))
             if expectation.format == "ecar" and (
                 row.kind.startswith("process_") or row.kind == "system_process_create"
             ):
