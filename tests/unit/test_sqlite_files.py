@@ -50,7 +50,10 @@ def test_every_sqlite_file_open_uses_the_shared_helper() -> None:
     assert offenders == [], "open SQLite files with evidenceforge._sqlite_files.connect_sqlite"
 
 
-def test_posix_targets_keep_existing_spelling(tmp_path: Path) -> None:
+def test_posix_targets_keep_existing_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_sqlite_files, "os", SimpleNamespace(name="posix"))
     database = tmp_path / "state.sqlite"
 
     assert sqlite_target(database) == (str(database), False)
