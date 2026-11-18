@@ -22,8 +22,13 @@ from tests.support.output_equivalence import deterministic_bundle_files
 def test_every_accepted_ordinary_command_exports_native_exec_in_public_cli(
     tmp_path: Path, scenarios_dir: Path, launch: str
 ) -> None:
+    # Released and occupied shells depend on when SSH ends, so both author that close:
+    # released before the +11m commands, occupied past the +25m collection boundary.
     scenario = macos_ssh_scenario(
-        scenarios_dir, macos_receiver=True, authored_close=launch == "occupied_local"
+        scenarios_dir,
+        macos_receiver=True,
+        authored_close=launch in {"released_local", "occupied_local"},
+        close_at="+12m" if launch == "released_local" else "+30m",
     ).model_dump(mode="json", exclude_none=True)
     scenario["time_window"]["duration"] = "25m"
     scenario["output"]["logs"].append({"format": "macos_endpoint_security"})
