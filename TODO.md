@@ -92,7 +92,7 @@ without turning `TODO.md` back into a high-conflict work journal.
   Full CI and remaining Windows desktop qualification stay separate. See the
   [acceptance record](docs/worklog/2026-11-11-studio-windows-x86_64.md#windows-installuninstall-user-acceptance-november-16).
 
-- [ ] **P1 — Windows authoring smoke generation checkpoint rename failure:**
+- [x] **P1 — Windows authoring smoke generation checkpoint rename failure:**
   A draft-local CLI smoke run validates and forecasts, then fails acquiring its run
   lock with WinError 6 in WindowsCheckpointIO.mkdir -> replace_child -> native
   directory rename. Reproduce under Studio's Windows authoring sandbox and identify
@@ -105,6 +105,17 @@ without turning `TODO.md` back into a high-conflict work journal.
   object landed beneath that parent; the probe's equivalent passes inside MXC. Close after a
   packaged sandbox retest. See the [MXC rename probe](docs/worklog/2026-11-11-studio-
   windows-x86_64.md#mxc-rejects-handle-relative-renames-november-17).
+  Closed November 18: the packaged retest (eb3d85fc) generated the Alderbrook draft inside MXC
+  with no errors after the long-path SQLite, scratch-folder and deferred-session fixes.
+
+- [ ] **P1 — Windows generation finalization time:** The same packaged MXC run took about
+  1h40m end to end, but only 11m48s in tracked simulated hours. Roughly 88 minutes passed in
+  untracked finalization (source sorting/rendering, Windows journal publication, ground
+  truth and the staged swap); macOS spends about 1.5 minutes there for the same draft. First
+  measure the same draft with Studio's Generate (outside MXC) to separate the sandbox and
+  Defender from the engine, then profile the phase on Windows. Decide whether the result
+  blocks stable 3.0.0 or ships as a known limitation; finalization should also report
+  progress.
 
 - [x] **P2 — Studio "Forge" UI redesign:** Implementation is complete on
   `feature/studio-forge-ui`: tokens and themes with an Appearance setting, shared components and
@@ -179,6 +190,13 @@ without turning `TODO.md` back into a high-conflict work journal.
   for this scratch as a separate architectural review from the immediate Windows
   cleanup repair. See the
   [Windows generation follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md#laptop-reaches-100-percent-windows-scratch-removal-denied-november-13).
+
+- [ ] **P2 — Use `--progress-jsonl` by default in skills:** Agent-run `eforge generate`
+  has no terminal, so Rich progress never renders and the user sees no hour, rate or ETA;
+  checkpoint status shows only storage size until the first checkpoint (24 simulated
+  hours by default). Have the generate skill pass `--progress-jsonl` to a file outside
+  the output and report its latest hour and rate while monitoring. Also reconcile the
+  `AGENTS.md` claim of a `{output_dir}/generation.log`, which generation does not write.
 
 - [ ] **P2 — Complete deep Windows workspace path qualification:** The output/
   checkpoint repair covers the observed long-path generation failure. Extend

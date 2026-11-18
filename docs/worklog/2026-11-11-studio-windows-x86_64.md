@@ -2697,3 +2697,13 @@ canonical time (behavior revision 529). The published example remains byte-ident
 shortened draft (1h, one storyline step) reproduces it in about 25 seconds and is now a slow
 regression test. The slow tier also generates a draft of every shipping example, a path it
 previously did not cover.
+
+### Packaged MXC draft generation passes; finalization is slow (November 18)
+
+The eb3d85fc installer generated the Alderbrook draft from a Studio chat inside MXC with exit
+code 0 and only the expected encrypted-HTTP validation warning. This closes the WinError 6 P1.
+The agent reported about 1h40m from launch to the final manifest, of which the CLI's tracked
+hours took 11m48s. The roughly 88 untracked minutes are finalization; the same draft spends
+about 1.5 minutes there on macOS. Next: time the same draft through Studio's Generate outside
+MXC, then profile finalization on Windows (new P1). Agent-run generation shows no progress
+because Rich renders only on a terminal (new P2 for `--progress-jsonl` in skills).
