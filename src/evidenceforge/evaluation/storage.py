@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar, overload
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.models.exceptions import EvaluationError
 
@@ -209,7 +210,7 @@ class EvaluationWorkspace:
             self._temporary = tempfile.TemporaryDirectory(
                 prefix="eforge-eval-", dir=self.scratch_dir
             )
-            self.db = sqlite3.connect(Path(self._temporary.name) / "evaluation.sqlite")
+            self.db = connect_sqlite(Path(self._temporary.name) / "evaluation.sqlite")
             # Disposable scratch needs no recovery journal. Bound SQLite's page cache too.
             self.db.executescript(
                 "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA temp_store=FILE;"

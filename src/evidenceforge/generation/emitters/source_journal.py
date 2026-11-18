@@ -20,6 +20,7 @@ from pathlib import Path
 from threading import get_ident
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.generation.emitters.base import (
     ExactPublicationError,
     ExactPublicationParticipantKey,
@@ -146,11 +147,7 @@ def finish_private_journal_initialization_unlocked(self: SourceOwner, *, provide
                 os.close(descriptor)
     self._validate_spool_file_unlocked()
     if self._spool_conn is None:
-        self._spool_conn = sqlite3.connect(
-            f"{path.as_uri()}?mode=rw",
-            uri=True,
-            check_same_thread=False,
-        )
+        self._spool_conn = connect_sqlite(path, mode="rw", check_same_thread=False)
     self._initialize_spool_schema_unlocked(self._spool_conn)
     self._validate_spool_file_unlocked()
     os.fsync(directory_descriptor)

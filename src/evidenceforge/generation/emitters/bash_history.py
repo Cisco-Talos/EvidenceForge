@@ -44,6 +44,7 @@ from typing import Any
 
 from jinja2 import Template
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.activity.shell_history_effects import bash_history_effect
@@ -609,11 +610,7 @@ def _copy_descriptor(
 def _connect_existing_journal(journal_path: Path) -> sqlite3.Connection:
     """Open only an existing private journal before any SQLite mutation."""
 
-    return sqlite3.connect(
-        f"{journal_path.as_uri()}?mode=rw",
-        uri=True,
-        check_same_thread=False,
-    )
+    return connect_sqlite(journal_path, mode="rw", check_same_thread=False)
 
 
 def _real_absolute(path: Path) -> Path:

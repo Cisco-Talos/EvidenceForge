@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 527
+current_revision: 528
 history_start_revision: 1
-behavior_surface_sha256: ec95fc2d5cd9f685549c55bfbcc7d1122560e40ab0488c105502c5bf7126f5c0
+behavior_surface_sha256: be9f2c8353948a9f07c1913229674c3e5e8a954c71d93bd17011d0d8115d417e
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6064,3 +6064,11 @@ changes:
   - macos_unified_log
   summary: One shared source table defines catalog families and the authored observation
     vocabulary, admitting macOS Endpoint Security and Unified Log overrides; outputs are unchanged.
+- revision: 528
+  id: open-sqlite-through-long-path-helper
+  impact: none
+  domains:
+  - storage
+  formats: []
+  summary: Every SQLite database opens through one helper that uses the Windows extended-length
+    path spelling; database contents and generated output are unchanged.

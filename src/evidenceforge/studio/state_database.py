@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge import __version__
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.studio.state_io import StudioStateError, safe_path
 from evidenceforge.studio.state_migrations import (
     LAYOUT_MIGRATIONS,
@@ -134,7 +135,7 @@ MIGRATIONS = (
 def open_readonly(path: Path) -> sqlite3.Connection:
     """Open an existing database without creating it."""
     safe_path(path)
-    return sqlite3.connect(f"{path.absolute().as_uri()}?mode=ro", uri=True, timeout=1)
+    return connect_sqlite(path, mode="ro", timeout=1)
 
 
 def tables(connection: sqlite3.Connection) -> list[str]:
@@ -407,7 +408,7 @@ def migrate_database(
 ) -> None:
     """Apply consecutive transitions and publish ledger/version in the same transaction."""
     safe_path(path)
-    with closing(sqlite3.connect(path)) as connection, connection:
+    with closing(connect_sqlite(path)) as connection, connection:
         connection.execute("PRAGMA synchronous=FULL")
         connection.execute("BEGIN IMMEDIATE")
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -498,7 +499,7 @@ def repair_derived(path: Path) -> None:
     from evidenceforge.studio.imports import DependencyHealth
     from evidenceforge.studio.service import ValidationResult
 
-    with closing(sqlite3.connect(path)) as connection, connection:
+    with closing(connect_sqlite(path)) as connection, connection:
         with closing(sqlite3.connect(":memory:")) as baseline:
             baseline.executescript(BASELINE_SQL)
             for table in DERIVED_TABLES:

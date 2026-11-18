@@ -17,6 +17,7 @@ from pathlib import Path
 from threading import RLock
 from typing import cast
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.generation.indexes import (
     CompactIndexedStore,
     ExpiringIndex,
@@ -158,7 +159,7 @@ class EmailArtifactManifestSpool:
             return connection
         self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
         self._database_path.unlink(missing_ok=True)
-        connection = sqlite3.connect(self._database_path, isolation_level=None)
+        connection = connect_sqlite(self._database_path, isolation_level=None)
         connection.execute("PRAGMA journal_mode=OFF")
         connection.execute("PRAGMA synchronous=OFF")
         connection.execute("PRAGMA temp_store=FILE")

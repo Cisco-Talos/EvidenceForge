@@ -52,6 +52,7 @@ from weakref import ReferenceType, ref
 
 from jinja2.sandbox import SandboxedEnvironment
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.formats.format_def import (
@@ -3564,7 +3565,7 @@ class WindowsEventEmitter(LogEmitter):
             Path(path).unlink(missing_ok=True)
             self._spool_path = Path(path)
             self._spool_filename = self._spool_path.name
-            self._spool_conn = sqlite3.connect(path, check_same_thread=False)
+            self._spool_conn = connect_sqlite(path, check_same_thread=False)
             self._initialize_spool_schema_unlocked(self._spool_conn)
             return self._spool_conn
 

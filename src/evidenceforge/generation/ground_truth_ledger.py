@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
+from evidenceforge._sqlite_files import connect_sqlite
 from evidenceforge._windows_cleanup import remove_owned_tree
 from evidenceforge.events.ground_truth_occurrence import (
     GROUND_TRUTH_EVENTS_FILENAME,
@@ -563,7 +564,7 @@ class GroundTruthLedger:
         self._expectation_planner = None
         self._intents = {intent.intent_id: intent for intent in authored.intents}
         directory = Path(tempfile.mkdtemp(prefix="eforge-ground-truth-"))
-        self._db = sqlite3.connect(directory / "facts.sqlite", check_same_thread=False)
+        self._db = connect_sqlite(directory / "facts.sqlite", check_same_thread=False)
         self._cleanup = weakref.finalize(self, _close_journal, self._db, directory)
         self._lock = RLock()
         self._db.executescript("""
