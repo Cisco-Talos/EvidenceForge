@@ -59,7 +59,11 @@ def test_turn_sends_catalog_default_or_explicit_choice_on_start_and_resume(
         if method in {"thread/start", "thread/resume"}:
             policy = {
                 "type": "workspaceWrite",
-                "writableRoots": [],
+                "writableRoots": [
+                    root
+                    for root in params["config"]["sandbox_workspace_write"]["writable_roots"]
+                    if root != params["cwd"]
+                ],
                 "networkAccess": False,
                 "excludeTmpdirEnvVar": True,
                 "excludeSlashTmp": True,

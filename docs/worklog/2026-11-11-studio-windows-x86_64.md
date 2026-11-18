@@ -2649,3 +2649,28 @@ cannot open, so release verification saw a partial inventory. CI runners enable 
 Artifact snapshots and writes now use the long-path spelling and fail on unreadable directories.
 Windows authoring turns also tell the agent that ripgrep and other POSIX tools are unavailable.
 
+
+### Draft generation journals and sandbox temp (November 18)
+
+The retest got past the run lock and failed opening a native Windows journal: "unable to open
+database file". `scripts/windows_journal_probe.py` ruled out DACLs (private and inherited ACLs
+both reopen under MXC). The journal path was 282 characters; SQLite's Windows VFS does not add
+the extended prefix, so ordinary paths and URIs fail beyond MAX_PATH while the quoted
+`file:%5C%5C%3F%5C...` URI works (L1 FAIL, L2-L4 OK on SQLite 3.50.4). Every file-backed SQLite
+open now goes through `evidenceforge._sqlite_files.connect_sqlite`, and a unit test rejects new
+direct `sqlite3.connect` calls (e4f23d35).
+
+Studio excludes TMPDIR and /tmp from chat writable roots on every platform, so Python's
+`tempfile` silently fell back to the draft folder. Draft conversations now get
+`<workspace>/.eforge/tmp/chat/<conversation id>` as a second writable root, with TMPDIR, TEMP
+and TMP set through `shell_environment_policy.set` (only that table is overridden). Codex echoes
+the extra root in `thread/start`, and verification requires exactly {draft, scratch}. Orphans are
+pruned at turn start; conversation removal deletes its folder. Codex 0.169 on macOS: native probe
+passes (scratch writable, its parent denied, shell env reaches thread commands).
+
+Observed while probing: `command/exec` also grants writes to the app-server process's own
+working directory, whatever the policy says. Studio uses `command/exec` only read-only (the
+Windows startup check), and agent turns use the draft as cwd, so Studio access is not widened.
+
+Pending on the Windows laptop with a new installer: generation from the alderbrook draft
+end-to-end, and a second writable root under MXC. Close the WinError 6 P1 after both pass.

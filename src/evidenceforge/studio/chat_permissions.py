@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from evidenceforge._windows_cleanup import remove_temporary_tree
 from evidenceforge.artifacts.lifecycle import _safe_path, inspect_artifact, safe_relative
 from evidenceforge.studio.codex import CodexUnavailableError
 
@@ -23,6 +25,13 @@ CHAT_CONFIG = (
     "features.code_mode=false",
 )
 
+# Sandboxed commands cannot write the platform temporary directory, and Python's tempfile
+# then silently falls back to the working directory: the draft. Each draft conversation gets
+# its own writable scratch folder outside the draft, and the shell's temp variables name it.
+SCRATCH_ROOT = Path(".eforge", "tmp", "chat")
+TEMP_VARIABLES = ("TMPDIR", "TEMP", "TMP")
+_CONVERSATION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
 
 class ChatAccess(BaseModel):
     """File-backed discussion/authoring state; never persisted as artifact authority."""
@@ -33,6 +42,14 @@ class ChatAccess(BaseModel):
     directory: Path
     version: str | None = None
     based_on_version: str | None = None
+    scratch: Path | None = Field(default=None, exclude=True)
+
+    @property
+    def writable_roots(self) -> list[Path]:
+        """Return the only folders a draft conversation's commands may write."""
+        if self.mode == "discussion":
+            return []
+        return [self.directory] + ([self.scratch] if self.scratch is not None else [])
 
     @property
     def sandbox(self) -> dict[str, Any]:
@@ -41,7 +58,7 @@ class ChatAccess(BaseModel):
             return {"type": "readOnly", "networkAccess": False}
         return {
             "type": "workspaceWrite",
-            "writableRoots": [str(self.directory)],
+            "writableRoots": [str(root) for root in self.writable_roots],
             "networkAccess": False,
             "excludeTmpdirEnvVar": True,
             "excludeSlashTmp": True,
@@ -69,7 +86,14 @@ class ChatAccess(BaseModel):
             "Never edit published releases, completed drafts or other library items. "
             "Use the current absolute source path rather than a path copied from history."
             " Do not run new-draft again, allocate another draft_id, or move only its YAML; "
-            "retain draft.json and all companion files." + validation
+            "retain draft.json and all companion files."
+            + (
+                f" Put temporary and scratch files in {str(self.scratch)!r}, never in the "
+                "draft; TMPDIR, TEMP and TMP already name it."
+                if self.scratch is not None
+                else ""
+            )
+            + validation
         )
 
 
@@ -118,6 +142,45 @@ def chat_access(source: Path) -> ChatAccess:
     )
 
 
+def scratch_directory(workspace: Path, conversation_id: str) -> Path:
+    """Return a conversation's scratch folder inside the workspace's private state area."""
+    if not _CONVERSATION_ID.fullmatch(conversation_id):
+        raise CodexUnavailableError("Conversation identity is invalid; start a new conversation")
+    return workspace / SCRATCH_ROOT / conversation_id
+
+
+def with_scratch(access: ChatAccess, workspace: Path, conversation_id: str) -> ChatAccess:
+    """Create the draft conversation's scratch folder and add it to its writable roots."""
+    if access.mode == "discussion":
+        return access
+    scratch = scratch_directory(workspace, conversation_id)
+    scratch.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _safe_path(scratch)
+    return access.model_copy(update={"scratch": scratch.resolve()})
+
+
+def remove_scratch(workspace: Path, conversation_id: str) -> None:
+    """Delete one conversation's scratch folder; its contents are disposable."""
+    scratch = scratch_directory(workspace, conversation_id)
+    if scratch.is_symlink():
+        scratch.unlink()
+        return
+    if not scratch.exists():
+        return
+    _safe_path(scratch)
+    remove_temporary_tree(scratch)
+
+
+def prune_scratch(workspace: Path, live: set[str]) -> None:
+    """Delete scratch folders left by conversations removed through any path."""
+    root = workspace / SCRATCH_ROOT
+    if not root.is_dir() or root.is_symlink():
+        return
+    for entry in root.iterdir():
+        if entry.name not in live and _CONVERSATION_ID.fullmatch(entry.name):
+            remove_scratch(workspace, entry.name)
+
+
 def verify_chat_permissions(response: dict[str, Any], access: ChatAccess) -> None:
     """Fail closed if Codex ignored or widened the requested session boundary."""
     policy = response.get("sandbox") or {}
@@ -136,7 +199,7 @@ def verify_chat_permissions(response: dict[str, Any], access: ChatAccess) -> Non
                 {Path(root).resolve() for root in policy.get("writableRoots", [])}
                 | {access.directory}
             )
-            == {access.directory}
+            == {root.resolve() for root in access.writable_roots}
         )
     if not valid:
         raise CodexUnavailableError(
@@ -159,13 +222,22 @@ def isolated_chat_config(effective: dict[str, Any], access: ChatAccess) -> dict[
         for configuration in configurations
         for name in (configuration.get("mcp_servers") or {})
     }
-    return {
+    config: dict[str, Any] = {
         "mcp_servers": servers,
         "features": {item.split(".")[1].split("=")[0]: False for item in CHAT_CONFIG},
         "sandbox_workspace_write": {
-            "writable_roots": [str(access.directory)] if access.mode == "draft" else [],
+            "writable_roots": [str(root) for root in access.writable_roots],
             "network_access": False,
             "exclude_tmpdir_env_var": True,
             "exclude_slash_tmp": True,
         },
     }
+    if access.scratch is not None:
+        # Override only the "set" table so the user's inherit/include/exclude rules survive.
+        policy = (effective.get("config") or {}).get("shell_environment_policy") or {}
+        assigned = policy.get("set") if isinstance(policy, dict) else None
+        config["shell_environment_policy.set"] = {
+            **(assigned if isinstance(assigned, dict) else {}),
+            **{name: str(access.scratch) for name in TEMP_VARIABLES},
+        }
+    return config

@@ -9,7 +9,16 @@ from fastapi.testclient import TestClient
 
 from evidenceforge.artifacts.lifecycle import publish, verify_release
 from evidenceforge.composition.publisher import PublisherIdentity, set_publisher
-from evidenceforge.studio.chat_permissions import ChatAccess, chat_access, verify_chat_permissions
+from evidenceforge.studio.chat_permissions import (
+    ChatAccess,
+    chat_access,
+    isolated_chat_config,
+    prune_scratch,
+    remove_scratch,
+    scratch_directory,
+    verify_chat_permissions,
+    with_scratch,
+)
 from evidenceforge.studio.codex import CodexUnavailableError
 from evidenceforge.studio.service import StudioService, create_app
 from tests.unit.test_draft_completion import draft
@@ -72,7 +81,11 @@ def test_retained_chat_becomes_read_only_and_new_draft_requires_new_chat(
                 if params["sandbox"] == "read-only"
                 else {
                     "type": "workspaceWrite",
-                    "writableRoots": [],
+                    "writableRoots": [
+                        root
+                        for root in params["config"]["sandbox_workspace_write"]["writable_roots"]
+                        if root != params["cwd"]
+                    ],
                     "networkAccess": False,
                     "excludeTmpdirEnvVar": True,
                     "excludeSlashTmp": True,
@@ -103,6 +116,19 @@ def test_retained_chat_becomes_read_only_and_new_draft_requires_new_chat(
             == 200
         )
         thread_id = studio.store.conversation(chat["id"]).thread_id
+        started = next(params for method, params in calls if method == "thread/start")
+        drafted = next(params for method, params in calls if method == "turn/start")
+        scratch = (workspace / ".eforge/tmp/chat" / chat["id"]).resolve()
+        assert scratch.is_dir() and not scratch.is_relative_to(source.parent.parent)
+        assert started["config"]["sandbox_workspace_write"]["writable_roots"] == [
+            str(source.parent.parent.resolve()),
+            str(scratch),
+        ]
+        assert drafted["sandboxPolicy"]["writableRoots"][1] == str(scratch)
+        assert started["config"]["shell_environment_policy.set"] == {
+            name: str(scratch) for name in ("TMPDIR", "TEMP", "TMP")
+        }
+        assert str(scratch) in started["developerInstructions"]
         release = publish(source, project_root=workspace, accept_warnings=True)
         client.portal.call(studio.scan)
         receipt = verify_release(release.parent.parent)
@@ -129,6 +155,8 @@ def test_retained_chat_becomes_read_only_and_new_draft_requires_new_chat(
         assert "select New draft" in resumed["developerInstructions"]
         assert "Resume and edit" not in resumed["developerInstructions"]
         assert resumed["config"]["mcp_servers"]["outside-writer"] == {"enabled": False}
+        assert resumed["config"]["sandbox_workspace_write"]["writable_roots"] == []
+        assert "shell_environment_policy.set" not in resumed["config"]
         assert turn["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
         assert turn["cwd"] == str(release.parent)
         assert release.read_bytes() == release_bytes and source.read_bytes() == source_bytes
@@ -155,6 +183,9 @@ def test_retained_chat_becomes_read_only_and_new_draft_requires_new_chat(
         assert new_chat["id"] != chat["id"]
         assert chat_access(new_source).mode == "draft"
         assert studio.store.conversation(chat["id"]).item_id == item.id
+        removed = client.delete(f"/v1/conversations/{chat['id']}", headers=HEADERS)
+        assert removed.status_code == 200, removed.text
+        assert not scratch.exists()
 
 
 @pytest.mark.parametrize(
@@ -233,3 +264,79 @@ def test_draft_receipt_cannot_grant_writes_to_the_whole_workspace(tmp_path: Path
     )
     with pytest.raises(CodexUnavailableError, match="managed container"):
         chat_access(relocated)
+
+
+def _draft_response(access: ChatAccess, roots: list[str]) -> dict[str, Any]:
+    return {
+        "cwd": str(access.directory),
+        "approvalPolicy": "never",
+        "sandbox": {**access.sandbox, "writableRoots": roots},
+    }
+
+
+def test_draft_scratch_must_be_confirmed_and_cannot_be_widened(tmp_path: Path) -> None:
+    draft_directory = tmp_path / "draft"
+    draft_directory.mkdir()
+    access = with_scratch(
+        ChatAccess(mode="draft", source=draft_directory / "source.yaml", directory=draft_directory),
+        tmp_path,
+        "a" * 32,
+    )
+    scratch = str(access.scratch)
+    verify_chat_permissions(_draft_response(access, [scratch]), access)
+    for roots in ([], [scratch, str(tmp_path)], [str(tmp_path / ".eforge")]):
+        with pytest.raises(CodexUnavailableError, match="did not confirm"):
+            verify_chat_permissions(_draft_response(access, roots), access)
+
+
+def test_discussion_never_receives_a_scratch_folder(tmp_path: Path) -> None:
+    access = ChatAccess(mode="discussion", source=tmp_path / "source.yaml", directory=tmp_path)
+    assert with_scratch(access, tmp_path, "a" * 32) is access
+    assert not (tmp_path / ".eforge").exists()
+    assert "shell_environment_policy.set" not in isolated_chat_config({"layers": []}, access)
+
+
+def test_scratch_environment_keeps_user_assignments_and_overrides_temp(tmp_path: Path) -> None:
+    access = with_scratch(
+        ChatAccess(mode="draft", source=tmp_path / "source.yaml", directory=tmp_path),
+        tmp_path,
+        "b" * 32,
+    )
+    effective = {
+        "config": {"shell_environment_policy": {"set": {"LANG": "C.UTF-8", "TMPDIR": "/tmp"}}},
+        "layers": [],
+    }
+    assigned = isolated_chat_config(effective, access)["shell_environment_policy.set"]
+    assert assigned == {
+        "LANG": "C.UTF-8",
+        "TMPDIR": str(access.scratch),
+        "TEMP": str(access.scratch),
+        "TMP": str(access.scratch),
+    }
+
+
+@pytest.mark.parametrize("identity", ["", "..", "a/b", "a\\b", "x" * 65])
+def test_scratch_directory_rejects_unsafe_conversation_identity(
+    tmp_path: Path, identity: str
+) -> None:
+    with pytest.raises(CodexUnavailableError, match="identity"):
+        scratch_directory(tmp_path, identity)
+
+
+def test_prune_scratch_removes_only_orphaned_conversation_folders(tmp_path: Path) -> None:
+    live, orphan = "c" * 32, "d" * 32
+    for identity in (live, orphan):
+        nested = scratch_directory(tmp_path, identity) / "work"
+        nested.mkdir(parents=True)
+        leftover = nested / "leftover.txt"
+        leftover.write_text("temporary")
+        leftover.chmod(0o400)
+    unrelated = tmp_path / ".eforge/tmp/chat/not a conversation"
+    unrelated.mkdir()
+    prune_scratch(tmp_path, {live})
+    assert scratch_directory(tmp_path, live).is_dir()
+    assert not scratch_directory(tmp_path, orphan).exists()
+    assert unrelated.is_dir()
+    remove_scratch(tmp_path, live)
+    remove_scratch(tmp_path, live)  # Already removed: nothing to do.
+    assert not scratch_directory(tmp_path, live).exists()

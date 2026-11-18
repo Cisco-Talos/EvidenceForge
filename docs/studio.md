@@ -537,7 +537,9 @@ sources can be discussed; adopt them with **New draft** before assisted editing.
 
 Studio applies and verifies Codex's sandbox on every message. Discussion commands cannot write
 files or change permissions, including on the completed draft referenced in earlier messages.
-Editable conversations can write only inside their active managed draft container. Permission
+Editable conversations can write only inside their active managed draft container and a private
+scratch folder that their temporary-file variables point to (`.eforge/tmp/chat/` in the
+workspace), which Studio deletes when you remove the conversation. Permission
 escalation, network-enabled shell commands, hooks, plugins and external MCP tools are disabled in
 Studio chats. If Codex cannot confirm the required protection, Studio refuses to send the message.
 Validation, generation and evaluation remain available through the workspace controls.

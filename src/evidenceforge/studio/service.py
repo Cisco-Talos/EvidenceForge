@@ -106,7 +106,10 @@ from evidenceforge.studio.chat_permissions import (
     ChatAccess,
     chat_access,
     isolated_chat_config,
+    prune_scratch,
+    remove_scratch,
     verify_chat_permissions,
+    with_scratch,
 )
 from evidenceforge.studio.codex import (
     CodexClient,
@@ -4024,6 +4027,11 @@ def create_app(
         if conversation.active:
             raise HTTPException(status_code=409, detail="Stop the active turn before deleting")
         studio.store.delete_conversation(conversation_id)
+        try:
+            await asyncio.to_thread(remove_scratch, conversation.workspace, conversation_id)
+        except (EvidenceForgeError, OSError) as error:
+            # The next turn's prune retries; a leftover scratch folder holds no authority.
+            logging.getLogger(__name__).warning("Could not remove chat scratch: %s", error)
         await studio.emit(conversation_id, "conversation.deleted", {"id": conversation_id})
         return {"status": "removed from Studio"}
 
@@ -4251,6 +4259,11 @@ def create_app(
                 raise CodexUnavailableError("Select a scenario or pack before chatting")
             try:
                 access = await asyncio.to_thread(chat_access, source)
+                live = {chat.id for chat in studio.store.conversations_all()}
+                await asyncio.to_thread(prune_scratch, conversation.workspace, live)
+                access = await asyncio.to_thread(
+                    with_scratch, access, conversation.workspace, conversation.id
+                )
             except (EvidenceForgeError, OSError, ValueError) as error:
                 raise HTTPException(status_code=409, detail=str(error)) from error
             effective = await studio.codex.call(
