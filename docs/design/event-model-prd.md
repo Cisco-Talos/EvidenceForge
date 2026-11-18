@@ -267,7 +267,7 @@ Each `event_type` string maps to which contexts must/may be populated. "required
 | `connection` | - | - | - | required | optional | - | - | optional | Network connection (Zeek conn, eCAR FLOW, Snort) |
 | `dns_query` | - | - | - | required | required | - | - | - | DNS lookup (Zeek dns) |
 | `bash_command` | required | required | - | - | - | - | - | - | Explicit Bash history entry (Linux/Mac) |
-| `zsh_command` | required | required | - | - | - | - | - | - | Experimental Mac interactive history entry |
+| `zsh_command` | required | required | - | - | - | - | - | - | Mac interactive history entry |
 | `file_operation` | required | - | - | - | - | required | - | - | File create/modify/delete (eCAR FILE) |
 | `registry_operation` | required | - | - | - | - | - | required | - | Registry modification (eCAR REGISTRY) |
 | `image_load` | required | - | optional | - | - | - | - | - | Module/DLL load (Sysmon Event 7, eCAR MODULE/LOAD) |
@@ -742,11 +742,11 @@ The internal `process_audit_bind`, `process_privilege_drop` and `process_service
 
 The bounded macOS workstation SSH receiver reuses `ssh_session` and existing process/session contexts. Distinct fork, exec, audit adoption, service/user credential changes and termination remain bundle-owned canonical phases. The shared continuation owns startup recovery and terminal execution for automatic or paired authored logout; SCP/SFTP receiver helpers are not yet admitted. This adds no authored event type or native log-format claim.
 
-The internal `macos_workspace_request` kind carries `MacosWorkspaceRequest`, source Host, explicit identity roles and a dependent session lifecycle. It represents entry into workspace launch, not completion. Its subject is the interactive session; its optional actor is the canonical loginwindow writer. Source preparation freezes exact execution/thread/image/boot facts independently of collection. The experimental `macos_unified_log` emitter is its only consumer; no authored event type or scenario field is added.
+The internal `macos_workspace_request` kind carries `MacosWorkspaceRequest`, source Host, explicit identity roles and a dependent session lifecycle. It represents entry into workspace launch, not completion. Its subject is the interactive session; its optional actor is the canonical loginwindow writer. Source preparation freezes exact execution/thread/image/boot facts independently of collection. The `macos_unified_log` emitter is its only consumer; no authored event type or scenario field is added.
 
 The qualified SSH authentication source is a facet of the native receiver's existing `process_audit_bind` occurrence at successful authentication. `MacosSshAuthentication` freezes the subject SSH session, root pre-adoption writer and actual transport peer. The credential transition keeps its before/after process roles and process lifecycle, and adds the session role. Its State cohort authenticates the exact audit binding and session activity patch. ULF and eCAR use one exact publication journal, including filtering, partial sink failure and lost-return recovery. A static main-image callsite may explicitly carry the private-data flag and modeled main-image backtrace offsets; renderers do not derive frames, allocate writers or change message privacy. Both PTY modes share this producer. Password intent uses the observed keyboard-interactive/PAM payload. Plain public-key intent carries its canonical key type/SHA256 fingerprint and source-derived text through the same qualified logger, with an explicit public_source_same_logger semantic basis. This is not an additional local public-key observation. Missing/unsupported keys produce no fabricated native row. Ordinary daemon verbosity is retained; verbose session messages, other unqualified SSH messages and launchd ULF remain gated.
 
-The experimental `macos_endpoint_security` source renders complete authenticated Mac
+The `macos_endpoint_security` source renders complete authenticated Mac
 process and bounded regular-file observations through the exact canonical cohort journal.
 Canonical boot activation owns the modeled collector, not a real host command. Qualified
 fork/exec/known-exit and file-operation producers supply their own complete facts; missing

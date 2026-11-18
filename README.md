@@ -38,7 +38,7 @@ baseline-only scenarios explicitly state that no malicious events were generated
 
 - **Guided scenario authoring** — Agent skills turn exercise ideas into validated scenario
   definitions, environment briefings, reusable packs, and configuration changes.
-- **Multi-source evidence generation** — Produce Windows, Linux, experimental macOS workstation,
+- **Multi-source evidence generation** — Produce Windows, Linux, macOS workstation,
   EDR, network, IDS, firewall, web, proxy, and email evidence from one scenario.
 - **Baseline and storyline modeling** — Combine ordinary user and system activity, benign red
   herrings, and typed attack events in the same dataset.
@@ -74,6 +74,29 @@ systems and sensors.
   while the generation engine makes no LLM calls. The same scenario, seed, formats, and version
   reproduce the same dataset without API costs or model variability.
 
+## What's New in 3.0.0rc1 (Release Candidate)
+
+EvidenceForge 3.0 introduces EvidenceForge Studio and simulation of mixed Windows, Linux and
+macOS environments.
+
+- **EvidenceForge Studio:** A desktop app for authoring scenarios and packs, generating logs and
+  reviewing evaluations, with new themes for both light and dark modes. Installers are available
+  for Apple Silicon macOS and Linux ARM64, and for Linux and Windows on x86_64. Each one bundles
+  everything Studio needs, including Python and the EvidenceForge engine; only Codex, used for
+  AI-assisted authoring, is installed separately. The CLI and agent-skill workflows remain
+  available and fully supported.
+- **Bundled example scenarios:** Five example scenarios arrive in an Example Scenarios project.
+  Duplicate one or start a new draft to make it your own; Settings installs or updates them.
+- **Ground truth improvements:** New bundles record every authored occurrence, its consequences
+  and what each log source should show. A new Ground Truth Agreement evaluation pillar scores the
+  generated evidence against that record.
+- **Evaluation at full scale:** `eforge eval` reads complete datasets within a bounded memory
+  budget, spilling to disk instead of capping the corpus, with corrected cross-source matching.
+- **Realism fixes** across process timing, RDP, mail, LDAP, macOS Endpoint Security and Zeek ICMP
+  evidence, plus dependency updates.
+
+[See the changelog](CHANGELOG.md#v300rc1-2026-11-17) for the full list.
+
 ## What's New in 2.2.0a4 (Alpha)
 
 The fourth alpha improves Studio conversations and discovery of published environment packs.
@@ -96,9 +119,9 @@ The fourth alpha improves Studio conversations and discovery of published enviro
 
 - **EvidenceForge Studio:** A desktop workspace for authoring scenarios and packs,
   generating logs, and reviewing evaluations.
-- **Standalone installers:** An Apple Silicon macOS DMG, Ubuntu 24.04 ARM64/x86_64
-  AppImages and a Windows 11 x86_64 setup bundle Python, the engine, resources, and skills.
-  Codex-assisted authoring requires a separate Codex installation.
+- **Standalone installers:** An Apple Silicon macOS DMG and Ubuntu 24.04 ARM64/x86_64
+  AppImages bundle Python, the engine, resources, and skills. Codex-assisted authoring
+  requires a separate Codex installation.
 - **Portable authored releases:** Version, freeze, export, and share scenarios
   and packs with their dependencies and release history.
 
@@ -167,7 +190,7 @@ The OS being simulated is independent of the computer running EvidenceForge or S
 | --- | --- | --- |
 | Windows workstations and servers | Windows Security (`windows_event_security`), Sysmon (`windows_event_sysmon`), eCAR (`ecar`) | Authentication, process and endpoint activity; Windows-specific registry, module and service evidence where modeled. |
 | Linux workstations and servers | Linux syslog (`syslog`), Bash history (`bash_history`), eCAR (`ecar`) | Role-aware authentication, sessions, services, package/scheduler/maintenance activity, interactive Bash and endpoint evidence. |
-| macOS 27 arm64 workstations **(experimental)** | Endpoint Security (`macos_endpoint_security`), Unified Log (`macos_unified_log`), zsh history (`zsh_history`), explicit interactive Bash history (`bash_history`), eCAR (`ecar`) | Qualified v11 process and bounded file operations; selected workspace, policy-refusal and SSH authentication messages. See [Mac scope and limits](docs/macos.md). |
+| macOS 27 arm64 workstations | Endpoint Security (`macos_endpoint_security`), Unified Log (`macos_unified_log`), zsh history (`zsh_history`), explicit interactive Bash history (`bash_history`), eCAR (`ecar`) | Qualified v11 process and bounded file operations; selected workspace, policy-refusal and SSH authentication messages. See [Mac scope and limits](docs/macos.md). |
 
 Host formats stay on their owning platform: a Mac client contacting a Windows server can leave
 Windows evidence **on the server**, alongside its own Mac and network evidence. eCAR families vary
@@ -206,13 +229,12 @@ See the [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) for fie
 the [Output Target Ingest Guides](docs/output-targets/README.md) for target-specific ingestion and
 parser support.
 
-### Modeled macOS workstations (experimental branch work)
+### Modeled macOS workstations
 
-The current checkout's experimental macOS 27 arm64 model includes qualified process startup,
+The macOS 27 arm64 model includes qualified process startup,
 selected helper families, bounded native filesystem telemetry, interactive history and selected
 Unified Log messages. See [Simulating macOS workstations](docs/macos.md) for available sources,
-examples, coverage interpretation and explicit limits. This source-tree work does not describe
-capabilities already shipped in an older installer.
+examples, coverage interpretation and explicit limits.
 
 ## Quick Start
 
