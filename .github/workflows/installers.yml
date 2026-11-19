@@ -179,9 +179,10 @@ jobs:
       - name: Verify actual macOS app and disk image
         if: runner.os == 'macOS'
         run: |
-          uv run --no-sync python scripts/verify_studio_macos.py \
-            "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app"
           hdiutil verify dist/macos/*.dmg
+          uv run --no-sync python scripts/verify_studio_macos.py \
+            "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app" \
+            --dmg dist/macos/*.dmg
       - name: Verify actual AppImage runtime, resources and GStreamer
         if: runner.os == 'Linux'
         run: uv run --no-sync python scripts/verify_studio_linux.py dist/linux/*.AppImage
