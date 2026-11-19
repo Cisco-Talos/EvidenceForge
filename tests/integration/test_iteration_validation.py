@@ -50,12 +50,14 @@ def test_iteration_fresh_process_bytes_and_complete_evaluation(tmp_path: Path, t
         )
         assert generated.returncode == 0, generated.stderr
     assert _verified_snapshot(outputs[0]) == _verified_snapshot(outputs[1])
+    # A hang guard, not a speed contract (the evaluation-memory gates own that). The full
+    # benchmark evaluation takes about 100 s locally and up to 2x longer on shared runners.
     evaluated = subprocess.run(
         [sys.executable, "-m", "evidenceforge", "eval", str(outputs[0]), "--format", "json"],
         cwd=root,
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=600,
         check=False,
     )
     assert evaluated.returncode == 0, evaluated.stderr
