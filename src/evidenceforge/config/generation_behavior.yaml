@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 529
+current_revision: 531
 history_start_revision: 1
-behavior_surface_sha256: cf7e65b778bbeb4595a193f92dd50a6c89b803b24350d4e82edea38a729fec3f
+behavior_surface_sha256: 8a2deb467327447f8706906a22280281bdf1fa0a5076f3af8dd5443b35c2c877
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6083,3 +6083,26 @@ changes:
   summary: Deferred SSH/RDP sessions accept exactly warm-up, collection or observation
     suppressed members, so a session straddling the window start no longer aborts
     generation. Successful runs are unchanged.
+- revision: 530
+  id: compatibility-rdp-storyline-activity
+  impact: localized
+  domains:
+  - rdp-session-lifecycle
+  - process-session-ownership
+  - remote-interactive-state
+  formats:
+  - windows_event_security
+  - windows_event_sysmon
+  summary: Storyline commands inside RDP sessions without a reconnect owner (no eCAR
+    output) use the live Type-10 session instead of being skipped.
+- revision: 531
+  id: canonical-sensor-identity
+  impact: localized
+  domains:
+  - ground-truth
+  - network-sensor-identity
+  formats:
+  - zeek_conn
+  - cisco_asa
+  summary: Sensors observe, derive UIDs and resolve capture profiles under one case-folded
+    deployed identity on every dispatch path, matching ground truth and the evaluator.

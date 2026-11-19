@@ -82,13 +82,17 @@ class NetworkVisibilityEngine:
         return self._enabled
 
     def get_sensor(self, hostname: str) -> NetworkSensor | None:
-        """Return the configured sensor identified by hostname or logical name."""
+        """Return the configured sensor identified by hostname or logical name.
 
+        Deployed source identities fold hostname case, so lookups are case-insensitive.
+        """
+
+        key = hostname.casefold()
         return next(
             (
                 sensor
                 for sensor in self._sensors
-                if hostname in {sensor.name, sensor.hostname or sensor.name}
+                if key in {sensor.name.casefold(), (sensor.hostname or sensor.name).casefold()}
             ),
             None,
         )
