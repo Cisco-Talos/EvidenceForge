@@ -107,3 +107,39 @@ def test_release_slow_workflow_shards_tests_and_parallelizes_portability() -> No
         "checkpoint-portability",
         "evaluation-memory",
     }
+
+
+def _workflow_jobs(name: str) -> dict[str, Any]:
+    repo_root = Path(__file__).resolve().parents[2]
+    workflow = yaml.safe_load((repo_root / ".github/workflows" / name).read_text(encoding="utf-8"))
+    return workflow["jobs"]
+
+
+def test_sharded_evidence_binds_the_same_layout_it_runs_and_validates() -> None:
+    """Reusable shard evidence must be keyed by the shard count that selected its cases."""
+    slow = _workflow_jobs("release-slow.yml")
+    slow_count = slow["slow-comprehensive"]["env"]["CI_SHARD_COUNT"]
+    arguments = _slow_test_arguments(slow)
+    assert arguments[arguments.index("--ci-shard-count") + 1] == slow_count
+    assert len(slow["slow-comprehensive"]["strategy"]["matrix"]["include"]) == int(slow_count)
+    validations = [
+        step["run"]
+        for step in slow["release-required"]["steps"]
+        if "validate" in str(step.get("run", ""))
+    ]
+    assert any(f"--count {slow_count}" in command for command in validations)
+
+    routine = _workflow_jobs("ci.yml")
+    routine_count = routine["tests"]["env"]["CI_SHARD_COUNT"]
+    commands = [step.get("run", "") for step in routine["tests"]["steps"]]
+    assert any(f"--ci-shard-count {routine_count} " in command for command in commands)
+    validations = [step.get("run", "") for step in routine["ci-required"]["steps"]]
+    assert any(f"--count {routine_count}" in command for command in validations)
+
+
+def test_release_recovery_executes_slow_cases_instead_of_reusing_evidence() -> None:
+    """A recovery dispatch runs a corrected workflow; earlier evidence must not stand in."""
+    release = _workflow_jobs("release.yml")
+    assert release["release-slow"]["with"]["force-tests"] == (
+        "${{ github.event_name == 'workflow_dispatch' }}"
+    )

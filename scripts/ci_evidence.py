@@ -212,6 +212,11 @@ def fingerprint(check_id: str, kind: KINDS) -> str:
         "image_version": os.environ["ImageVersion"],
         "versions": versions,
     }
+    shard_count = os.environ.get("CI_SHARD_COUNT")
+    if shard_count:
+        # Shard k of N selects different cases for each N, so a result is reusable only
+        # under the layout that produced it. The layout lives in the workflow, not the source.
+        payload["shard_count"] = int(shard_count)
     if os.environ["RUNNER_OS"] == "Linux":
         packages = subprocess.check_output(["dpkg-query", "-W"], timeout=30)
         payload["system_packages"] = hashlib.sha256(packages).hexdigest()

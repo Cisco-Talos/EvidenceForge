@@ -382,3 +382,23 @@ def test_documentation_equivalence_still_invalidates_code_and_lock_changes(
     git("add", ".")
     git("commit", "-m", "dependency")
     assert ci.source_digest() != first
+
+
+def test_shard_layout_changes_the_result_fingerprint(
+    evidence: ci.Evidence, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for key, value in {
+        "RUNNER_OS": "macOS",
+        "RUNNER_ARCH": "ARM64",
+        "ImageOS": "macos26",
+        "ImageVersion": "test-image",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(ci.subprocess, "check_output", lambda *args, **kwargs: "version")
+    monkeypatch.delenv("CI_SHARD_COUNT", raising=False)
+    unsharded = ci.fingerprint(evidence.check_id, "slow")
+    monkeypatch.setenv("CI_SHARD_COUNT", "4")
+    four = ci.fingerprint(evidence.check_id, "slow")
+    monkeypatch.setenv("CI_SHARD_COUNT", "5")
+    five = ci.fingerprint(evidence.check_id, "slow")
+    assert len({unsharded, four, five}) == 3
