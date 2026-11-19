@@ -1,6 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,19 +18,3 @@ function run(command, arguments_) {
 }
 
 run(process.execPath, [path.join(frontend, "node_modules", "@tauri-apps", "cli", "tauri.js"), "build", ...args]);
-if (process.platform === "darwin") {
-  const targetIndex = args.indexOf("--target");
-  const targetTriple = targetIndex >= 0 ? args[targetIndex + 1] : "";
-  const targetRoot = process.env.CARGO_TARGET_DIR
-    ? path.resolve(frontend, "src-tauri", process.env.CARGO_TARGET_DIR)
-    : path.join(frontend, "src-tauri", "target");
-  const appPath = path.join(targetRoot, targetTriple, args.includes("--debug") ? "debug" : "release",
-    "bundle", "macos", "EvidenceForge Studio.app");
-  if (existsSync(appPath)) {
-    const moduleCache = path.join(os.tmpdir(), "evidenceforge-studio-swift-module-cache");
-    mkdirSync(moduleCache, { recursive: true });
-    run("xcrun", ["swift", "-module-cache-path", moduleCache,
-      path.join(frontend, "scripts", "set-macos-app-icon.swift"), appPath,
-      path.join(frontend, "src-tauri", "icons", "icon.icns")]);
-  }
-}
