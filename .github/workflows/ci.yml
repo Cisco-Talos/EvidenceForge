@@ -206,6 +206,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       CI_CHECK_ID: routine-${{ matrix.os }}-${{ inputs.release-coverage && matrix.os == 'ubuntu-latest' && 'cov' || 'plain' }}-${{ matrix.index }}
+      CI_SHARD_COUNT: "8"
       CI_CHECK_KIND: routine
       CI_JOB_NAME: Tests (${{ matrix.os }}, Python 3.12, shard ${{ matrix.number }}/8)
       CI_RUNNER: ${{ matrix.os }}

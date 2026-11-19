@@ -116,6 +116,9 @@ jobs:
     with:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
       legacy-memory-policy: ${{ needs.validate-release-version.outputs.ci-memory != 'true' }}
+      # Manual recovery exists because the workflow changed; evidence recorded under the
+      # earlier workflow may describe a different shard layout, so execute every case.
+      force-tests: ${{ github.event_name == 'workflow_dispatch' }}
 
   build-installers:
     if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'true'
