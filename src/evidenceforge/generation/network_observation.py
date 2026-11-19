@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 from weakref import ReferenceType, ref
 
+from evidenceforge.events.collection_policy import canonical_source_hostname
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     FileSensorObservation,
@@ -2469,7 +2470,7 @@ class NetworkObservationPlanner:
         if network is None:
             return ()
         transaction = network
-        planned_sensor_formats = (
+        requested_sensor_formats = (
             {
                 sensor_identity: set(formats) & visible_formats
                 for sensor_identity, formats in sensor_formats.items()
@@ -2478,6 +2479,14 @@ class NetworkObservationPlanner:
             if sensor_formats is not None
             else self._sensor_formats(event, visible_formats)
         )
+        # Callers name sensors by authored hostname or by deployed source identity. Sensor
+        # UIDs, capture views and output routing all derive from this identity, so plan
+        # exactly one canonical spelling per sensor whichever path supplied it.
+        planned_sensor_formats: dict[str, set[str]] = {}
+        for sensor_identity, formats in requested_sensor_formats.items():
+            planned_sensor_formats.setdefault(
+                canonical_source_hostname(sensor_identity), set()
+            ).update(formats)
         canonical_file_ids = self._canonical_file_ids(event)
         canonical_connection_ids = self._canonical_connection_ids(event)
         runtime = self._runtime_for_event(transaction.started_at)

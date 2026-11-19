@@ -19,6 +19,7 @@ import pytz
 from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.config.observation_profiles import get_observation_profile
+from evidenceforge.events.collection_policy import canonical_source_hostname, sensor_source_hostname
 from evidenceforge.events.evidence_projection import (
     candidate_formats,
     host_routes,
@@ -788,7 +789,9 @@ def _expectation_errors(
             else None
         )
         identity = (
-            str(sensor.hostname or sensor.name) if sensor is not None else expectation.source_host
+            sensor_source_hostname(sensor.hostname, sensor.name)
+            if sensor is not None
+            else canonical_source_hostname(expectation.source_host)
         )
         network = row.facts.get("network") or {}
         if network.get("zeek_uid") and expectation.identifiers.get("zeek_uid") != sensor_identifier(
@@ -848,7 +851,7 @@ def _expectation_errors(
         if (
             sensor is None
             or view.profile != (sensor.capture_profile or rules.get("default_profile"))
-            or view.sensor_identity != str(sensor.hostname or sensor.name)
+            or view.sensor_identity != sensor_source_hostname(sensor.hostname, sensor.name)
         ):
             errors.append("capture_profile_identity_disagreement")
         if expectation.format in {"zeek_pe", "zeek_x509"}:

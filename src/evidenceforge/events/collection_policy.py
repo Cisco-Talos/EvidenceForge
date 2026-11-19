@@ -34,6 +34,16 @@ def canonical_source_hostname(value: str) -> str:
     return _required_text(value, "hostname")
 
 
+def sensor_source_hostname(hostname: str | None, name: str) -> str:
+    """Return a network sensor's deployed source identity.
+
+    Sensor-local identifiers (Zeek UIDs, file IDs) and recorded capture views derive from
+    this exact spelling, so every consumer must use it rather than the authored casing.
+    """
+
+    return canonical_source_hostname(hostname or name)
+
+
 def _required_exact_text(value: str, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:

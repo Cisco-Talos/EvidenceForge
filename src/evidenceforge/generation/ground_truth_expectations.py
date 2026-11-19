@@ -7,6 +7,7 @@ import json
 import random
 from typing import TYPE_CHECKING
 
+from evidenceforge.events.collection_policy import canonical_source_hostname, sensor_source_hostname
 from evidenceforge.events.evidence_projection import (
     candidate_formats,
     host_routes,
@@ -491,7 +492,9 @@ class GroundTruthExpectationPlanner:
 
                             sensor = self.sensors.get(host.casefold())
                             identity = (
-                                str(sensor.hostname or sensor.name) if sensor is not None else host
+                                sensor_source_hostname(sensor.hostname, sensor.name)
+                                if sensor is not None
+                                else canonical_source_hostname(host)
                             )
                             identifiers["zeek_uid"] = derive_sensor_identifier(
                                 network.zeek_uid, identity

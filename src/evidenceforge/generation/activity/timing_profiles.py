@@ -3386,7 +3386,11 @@ def firewall_observation_timing(sensor_identity: str = "") -> FirewallObservatio
     if not isinstance(sensor_policies, Mapping):
         sensor_policies = {}
     default_policy = str(data.get("default_policy", "asa_default") or "asa_default")
-    policy_name = str(sensor_policies.get(sensor_identity, default_policy) or default_policy)
+    # Sensor identities arrive in their deployed (case-folded) spelling; match overlays the same way.
+    folded_policies = {str(key).casefold(): value for key, value in sensor_policies.items()}
+    policy_name = str(
+        folded_policies.get(sensor_identity.casefold(), default_policy) or default_policy
+    )
     policy = policies.get(policy_name, {})
     if not isinstance(policy, Mapping):
         policy_name = default_policy
