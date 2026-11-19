@@ -2032,6 +2032,8 @@ def test_authoring_quit_choice_is_durable_and_stop_does_not_block_close(
     app = create_app(_paths(tmp_path / "private"), "local-secret")
     studio = app.state.studio
     interrupted = Event()
+    release_interrupt = Event()
+    interrupt_finished = Event()
     calls: list[str] = []
 
     async def fake_call(
@@ -2041,7 +2043,10 @@ def test_authoring_quit_choice_is_durable_and_stop_does_not_block_close(
         if method == "turn/interrupt":
             assert _params == {"threadId": "active-turn", "turnId": "turn-to-stop"}
             interrupted.set()
-            await asyncio.sleep(0.4)
+            # Hold the interrupt open until the test has seen close return, so the
+            # assertion proves close does not await it on any runner speed.
+            await asyncio.to_thread(release_interrupt.wait, 10)
+            interrupt_finished.set()
         if method == "thread/read":
             return {"thread": {"status": {"type": "active"}}}
         return {"data": []}
@@ -2052,12 +2057,13 @@ def test_authoring_quit_choice_is_durable_and_stop_does_not_block_close(
         active_chat = Conversation(workspace=workspace, thread_id="active-turn", active=True)
         studio.store.save_conversation(active_chat)
         studio.chat.bind_turn(active_chat, {"id": "turn-to-stop", "status": "inProgress"})
-        start = time.monotonic()
         response = client.post("/v1/session/close", headers=headers)
         assert response.status_code == 200
-        assert time.monotonic() - start < 0.3
+        assert not interrupt_finished.is_set()
         assert studio.store.load_control()["authoring_turns"] == "stop"
         assert interrupted.wait(timeout=2)
+        release_interrupt.set()
+        assert interrupt_finished.wait(timeout=5)
         client.post("/v1/session/open", headers=headers)
 
         calls.clear()

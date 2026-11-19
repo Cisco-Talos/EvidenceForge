@@ -60,9 +60,11 @@ jobs:
             exit 1
           fi
   slow-comprehensive:
-    name: Slow comprehensive tests (${{ matrix.shard_number }}/4, no coverage)
+    name: Slow comprehensive tests (${{ matrix.shard_number }}/5, no coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Measured-cost shards take about 42 minutes. The ceiling stops hangs while leaving
+    # room for a recovery run that plans a tagged snapshot with an older timing seed.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +77,8 @@ jobs:
             shard_number: 3
           - shard_index: 3
             shard_number: 4
+          - shard_index: 4
+            shard_number: 5
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -96,7 +100,7 @@ jobs:
         id: evidence
         run: uv run --no-sync python -m scripts.ci_evidence resolve
       - name: Run slow shard
-        run: uv run --no-sync pytest -m slow --no-cov --durations=20 --ci-tier slow --ci-shard-count 4 --ci-shard-index "${{ matrix.shard_index }}" --ci-report "ci-results/$CI_CHECK_ID/shard.json" --junitxml "ci-timings/$CI_CHECK_ID.xml"
+        run: uv run --no-sync pytest -m slow --no-cov --durations=20 --ci-tier slow --ci-shard-count 5 --ci-shard-index "${{ matrix.shard_index }}" --ci-report "ci-results/$CI_CHECK_ID/shard.json" --junitxml "ci-timings/$CI_CHECK_ID.xml"
         if: steps.evidence.outputs.reused != 'true'
       - name: Record verified execution
         run: uv run --no-sync python -m scripts.ci_evidence record
@@ -123,7 +127,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       CI_CHECK_ID: slow-ubuntu-latest-${{ matrix.shard_index }}
       CI_CHECK_KIND: slow
-      CI_JOB_NAME: Slow comprehensive tests (${{ matrix.shard_number }}/4, no coverage)
+      CI_JOB_NAME: Slow comprehensive tests (${{ matrix.shard_number }}/5, no coverage)
       CI_RUNNER: ubuntu-latest
       CI_FORCE_RUN: ${{ inputs.force-tests || false }}
     concurrency:
@@ -229,7 +233,7 @@ jobs:
       - name: Download slow shard inventories
         run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern "ci-evidence-slow-*" --dir ci-results/slow-validation
       - name: Require complete disjoint slow execution
-        run: uv run --no-sync python -m scripts.ci_evidence validate --directory ci-results/slow-validation --expected-group slow-ubuntu-latest --count 4
+        run: uv run --no-sync python -m scripts.ci_evidence validate --directory ci-results/slow-validation --expected-group slow-ubuntu-latest --count 5
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
