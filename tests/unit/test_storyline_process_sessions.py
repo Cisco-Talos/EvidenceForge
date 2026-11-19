@@ -594,3 +594,53 @@ def _check_resolution(
     assert selected == [result]
     assert calls.mock_calls == expected
     assert rng.getstate() == expected_rng.getstate()
+
+
+@pytest.mark.parametrize(
+    "live,valid_at_time,ready_offset,expected",
+    [
+        (True, True, timedelta(seconds=2), "ready"),
+        (True, True, None, "authored"),
+        (True, True, timedelta(seconds=-5), "authored"),
+        (True, False, None, None),
+        (False, False, None, None),
+    ],
+)
+def test_compatibility_rdp_session_without_reconnect_owner_admits_live_activity(
+    live: bool,
+    valid_at_time: bool,
+    ready_offset: timedelta | None,
+    expected: str | None,
+) -> None:
+    """Without exact deferred owners the live Type-10 session, not the manager, decides."""
+
+    authored_time = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    ready_time = authored_time + ready_offset if ready_offset is not None else None
+    session = SimpleNamespace(source_ready_time=ready_time)
+    owner = SimpleNamespace(
+        state_manager=SimpleNamespace(
+            get_session_identity=lambda logon_id: SimpleNamespace(
+                object_id="rdp-logical",
+                session_kind="rdp",
+            ),
+            get_session=lambda logon_id: session if live else None,
+            get_session_at=lambda logon_id, at_time: session if valid_at_time else None,
+        ),
+        _rdp_session_lifecycle_frontier=lambda: authored_time - timedelta(minutes=1),
+        advance_rdp_session_lifecycle_watermark=lambda cutoff: None,
+        _rdp_session_manager=SimpleNamespace(get=lambda logical_id: None),
+    )
+
+    admitted_at = ActivityGenerator.ensure_storyline_rdp_session_connected(
+        owner,
+        logon_id="0xabc",
+        target_system=System(
+            hostname="JUMP-01",
+            ip="10.40.90.20",
+            os="Windows Server 2022",
+            type="server",
+        ),
+        activity_time=authored_time,
+    )
+
+    assert admitted_at == {"ready": ready_time, "authored": authored_time, None: None}[expected]

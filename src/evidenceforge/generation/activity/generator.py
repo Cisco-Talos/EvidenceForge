@@ -5355,7 +5355,15 @@ class ActivityGenerator:
         self.advance_rdp_session_lifecycle_watermark(canonical_time)
         snapshot = self._rdp_session_manager.get(session_identity.object_id)
         if snapshot is None:
-            return None
+            # Without exact deferred owners (for example, no eCAR output) RDP sessions use the
+            # compatibility path and never enter the reconnect manager; their live Type-10
+            # State session is the only owner. Managed sessions leave the manager only after
+            # logout, which also ends that State session, so this cannot revive one.
+            live = self.state_manager.get_session(logon_id)
+            if live is None or self.state_manager.get_session_at(logon_id, canonical_time) is None:
+                return None
+            ready = live.source_ready_time
+            return max(canonical_time, ensure_utc(ready)) if ready is not None else canonical_time
 
         from evidenceforge.events.rdp import RdpSessionState
 
