@@ -219,6 +219,9 @@ files listed as preserved need separate manual review if you also want them gone
 5. If macOS blocks the first launch, use **System Settings → Privacy & Security → Open Anyway**
    for this app, then confirm opening it. The current app has no Developer ID signature or
    notarization. See [Apple's instructions](https://support.apple.com/102445).
+6. Releases up to and including `3.0.0rc1` ship an incompletely signed app, which macOS calls
+   "damaged" without offering Open Anyway. After verifying the checksum, clear the download
+   flag with `xattr -dr com.apple.quarantine "/Applications/EvidenceForge Studio.app"`.
 
 First launch expands the private bundled runtime; later launches reuse it. The app opens no
 terminal and downloads no additional runtime. Application updates are manual; see

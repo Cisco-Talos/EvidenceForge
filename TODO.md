@@ -191,6 +191,13 @@ without turning `TODO.md` back into a high-conflict work journal.
   cleanup repair. See the
   [Windows generation follow-up](docs/worklog/2026-11-11-studio-windows-x86_64.md#laptop-reaches-100-percent-windows-scratch-removal-denied-november-13).
 
+- [ ] **P2 — Transparent macOS app icon through an asset catalog:** The macOS bundle is now
+  ad-hoc signed as a whole, so it can no longer carry the Finder custom-icon overlay (resource
+  fork and FinderInfo) that kept the logo's transparent silhouette; macOS draws the declared
+  legacy `icon.icns` smaller on a gray rounded tile. Build an `Assets.car` app icon from the
+  transparent artwork (Icon Composer or `actool`), declare `CFBundleIconName`, and keep the
+  strict `codesign` release check passing for the app inside the DMG.
+
 - [ ] **P2 — Use `--progress-jsonl` by default in skills:** Agent-run `eforge generate`
   has no terminal, so Rich progress never renders and the user sees no hour, rate or ETA;
   checkpoint status shows only storage size until the first checkpoint (24 simulated

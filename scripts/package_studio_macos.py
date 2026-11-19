@@ -391,19 +391,22 @@ def build_app(
         environment,
     )
     app = build / "target" / target / "release/bundle/macos/EvidenceForge Studio.app"
+    # Without a Developer ID the bundle still needs a complete ad-hoc signature. The linker
+    # signs only the executable; an unsealed bundle fails verification, which Gatekeeper
+    # reports for downloaded copies as "damaged" with no Open Anyway. Finder custom icons
+    # store resource forks and FinderInfo that a valid signature forbids, so the bundle
+    # uses its declared icon.icns. This is the last change to the bundle.
+    detritus = subprocess.run(
+        ["/usr/bin/xattr", "-lr", str(app)], check=True, capture_output=True, text=True
+    ).stdout
+    if "com.apple.FinderInfo" in detritus or "com.apple.ResourceFork" in detritus:
+        raise RuntimeError("The macOS app bundle carries Finder metadata that blocks signing")
     run(
-        [
-            "xcrun",
-            "swift",
-            "-module-cache-path",
-            str(build / "swift-cache"),
-            str(frontend / "scripts/set-macos-app-icon.swift"),
-            str(app),
-            str(frontend / "src-tauri/icons/icon.icns"),
-        ],
+        ["/usr/bin/codesign", "--force", "--deep", "--sign", "-", "--timestamp=none", str(app)],
         root,
         environment,
     )
+    run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], root, environment)
     if skip_dmg:
         print(f"Standalone app: {app}", flush=True)
         return
