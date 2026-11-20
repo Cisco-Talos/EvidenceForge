@@ -71,6 +71,21 @@ class CatalogItem(BaseModel):
     search_revision: str = ""
 
 
+class ProjectDefaultPack(BaseModel):
+    """An exact released pack that Studio offers to new scenario authoring in a project.
+
+    It is guidance for Codex conversations only: scenarios stay self-contained, so the CLI and
+    skills (which have no projects) resolve exactly what each scenario file declares.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["industry", "organization"]
+    publisher: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(min_length=1, max_length=128)
+    version: str = Field(pattern=r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+
+
 class Project(BaseModel):
     """A workspace-local group of scenarios and packs, independent of file paths."""
 
@@ -81,6 +96,7 @@ class Project(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=240)
     overlay_enabled: bool = False
+    default_pack: ProjectDefaultPack | None = None
     updated_at: float = Field(default_factory=time.time)
 
 

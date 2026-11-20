@@ -473,6 +473,52 @@ test("project creation is available in the project rail", async () => {
   ));
 });
 
+test("a new project can choose a released default pack for new scenarios", async () => {
+  const originalItems = snapshot.items;
+  snapshot.items = [...originalItems, { ...originalItems[0], id: "org-pack", kind: "organization_pack", name: "acme", display_name: "Acme Corp", version: "2.1.0", publisher: "talos", publisher_display_name: "Talos" }, { ...originalItems[0], id: "org-draft", kind: "organization_pack", name: "acme", display_name: "Acme Corp", version: "", publisher: "" }];
+  try {
+    await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "New project" }));
+    const dialog = screen.getByRole("dialog", { name: "New project" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Project Name" }), "Acme");
+    const field = within(dialog).getByRole("combobox", { name: "Default pack for new scenarios" });
+    // Only released packs qualify; the unpublished draft is not offered.
+    expect(within(field).getAllByRole("option").map((option) => option.textContent)).toEqual(["None", "Acme Corp 2.1.0 · Talos"]);
+    await user.selectOptions(field, "Acme Corp 2.1.0 · Talos");
+    vi.mocked(useStudio().api!.request).mockResolvedValueOnce({ id: "acme", workspace, name: "Acme", description: "", updated_at: 1 });
+    await user.click(within(dialog).getByRole("button", { name: "Create project" }));
+    await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith("/v1/projects", "POST", {
+      name: "Acme", description: "", default_pack: { kind: "organization", publisher: "talos", name: "acme", version: "2.1.0" },
+    }));
+  } finally {
+    snapshot.items = originalItems;
+  }
+});
+
+test("editing a project shows its default pack and clearing it sends null", async () => {
+  const originalProjects = snapshot.projects;
+  snapshot.projects = [{ id: "acme", workspace, name: "Acme", description: "", updated_at: 1, overlay_enabled: false, default_pack: { kind: "industry", publisher: "talos", name: "finance", version: "1.0.0" } }];
+  try {
+    await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Options for project Acme" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Edit project…" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit project" });
+    const field = within(dialog).getByRole("combobox", { name: "Default pack for new scenarios" });
+    // A saved default stays visible even when that release is not in the library.
+    expect(field).toHaveDisplayValue("talos/finance 1.0.0 (not in library)");
+    await user.selectOptions(field, "None");
+    vi.mocked(useStudio().api!.request).mockResolvedValueOnce({ id: "acme", workspace, name: "Acme", description: "", updated_at: 2 });
+    await user.click(within(dialog).getByRole("button", { name: "Save project" }));
+    await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith("/v1/projects/acme", "PATCH", {
+      name: "Acme", description: "", overlay_enabled: false, default_pack: null,
+    }));
+  } finally {
+    snapshot.projects = originalProjects;
+  }
+});
+
 test("a move into configured projects waits for confirmation and supports Escape", async () => {
   const originalProjects = snapshot.projects;
   snapshot.projects = [{ id: "clinic", workspace, name: "Clinic", description: "", updated_at: 1, overlay_enabled: true }];

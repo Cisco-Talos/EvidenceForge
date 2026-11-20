@@ -66,6 +66,10 @@ scenarios by project and packs by publisher. Its migration changes no rows. Each
 its explicit ordering, so a workspace that already remembered a view keeps it until the user picks
 a grouping from **Views**. Earlier Studio releases cannot open a version 5 database.
 
+Database version 6 lets a project name one default released pack for new scenario authoring in
+Studio. Existing projects start with none; the migration changes no rows. The default is guidance
+for Studio's Codex conversations only and never changes how a scenario file resolves.
+
 Packages live in `studio-upgrades/` beneath the private data directory, outside cache and runtime
 installations. User data locations and routine backup instructions are listed in the
 [Studio guide](studio.md#workspace-and-saved-studio-data).

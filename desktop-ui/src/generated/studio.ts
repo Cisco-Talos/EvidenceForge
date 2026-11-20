@@ -4103,8 +4103,29 @@ export interface components {
              * @default false
              */
             overlay_enabled: boolean;
+            default_pack?: components["schemas"]["ProjectDefaultPack"] | null;
             /** Updated At */
             updated_at?: number;
+        };
+        /**
+         * ProjectDefaultPack
+         * @description An exact released pack that Studio offers to new scenario authoring in a project.
+         *
+         *     It is guidance for Codex conversations only: scenarios stay self-contained, so the CLI and
+         *     skills (which have no projects) resolve exactly what each scenario file declares.
+         */
+        ProjectDefaultPack: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "industry" | "organization";
+            /** Publisher */
+            publisher: string;
+            /** Name */
+            name: string;
+            /** Version */
+            version: string;
         };
         /**
          * ProjectRequest
@@ -4123,10 +4144,11 @@ export interface components {
              * @default false
              */
             overlay_enabled: boolean;
+            default_pack?: components["schemas"]["ProjectDefaultPack"] | null;
         };
         /**
          * ProjectUpdate
-         * @description Rename or describe an existing project.
+         * @description Rename or describe an existing project; `default_pack: null` clears its default.
          */
         ProjectUpdate: {
             /** Name */
@@ -4135,6 +4157,7 @@ export interface components {
             description?: string | null;
             /** Overlay Enabled */
             overlay_enabled?: boolean | null;
+            default_pack?: components["schemas"]["ProjectDefaultPack"] | null;
         };
         /**
          * PropertiesEdit
