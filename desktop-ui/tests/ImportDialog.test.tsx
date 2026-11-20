@@ -144,6 +144,11 @@ test("prepared validation hides prior findings and restores them with the failur
   await act(async () => fail(new Error("Validation service disconnected")));
   expect(screen.getByRole("alert")).toHaveTextContent("Validation service disconnected");
   expect(screen.getByText("Previous validation results:")).toBeVisible();
+  // Restored findings start folded under their severity heading; opening it shows them.
+  const errors = document.querySelector<HTMLDetailsElement>("details.finding-group-error")!;
+  expect(errors.open).toBe(false);
+  expect(errors.querySelector("summary")).toHaveTextContent("Errors1");
+  await user.click(errors.querySelector("summary")!);
   expect(screen.getByText("No modeled users")).toBeVisible();
   expect(screen.getByRole("button", { name: "Import with dependency errors" })).toBeEnabled();
 });

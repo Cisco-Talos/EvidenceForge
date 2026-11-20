@@ -26,10 +26,27 @@ def _clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
 
 
 @pytest.mark.parametrize(
-    "platform,delay,succeeds",
-    [("win32", 20, True), ("darwin", 20, False), ("linux", 20, False), ("win32", 80, False)],
+    ("platform", "expected"), [("win32", 120.0), ("darwin", 24.0), ("linux", 24.0)]
 )
-def test_delayed_readiness_has_a_windows_budget_and_preserves_posix_limits(
+def test_startup_timeout_allows_slow_cold_starts_with_a_larger_windows_budget(
+    monkeypatch: pytest.MonkeyPatch, platform: str, expected: float
+) -> None:
+    monkeypatch.setattr(bootstrap, "sys", SimpleNamespace(platform=platform))
+    assert bootstrap._startup_timeout() == expected
+
+
+@pytest.mark.parametrize(
+    "platform,delay,succeeds",
+    [
+        ("win32", 100, True),
+        ("darwin", 20, True),
+        ("linux", 20, True),
+        ("darwin", 30, False),
+        ("linux", 30, False),
+        ("win32", 130, False),
+    ],
+)
+def test_delayed_readiness_has_a_windows_budget_and_bounded_posix_limits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     platform: str,
@@ -56,7 +73,7 @@ def test_delayed_readiness_has_a_windows_budget_and_preserves_posix_limits(
     else:
         with pytest.raises(RuntimeError, match="did not become ready"):
             bootstrap.connect_or_start(paths)
-        budget = 60 if platform == "win32" else 12
+        budget = 120 if platform == "win32" else 24
         assert budget <= clock["now"] < budget + 0.2
     launch.assert_called_once_with(paths)
     child.terminate.assert_not_called()

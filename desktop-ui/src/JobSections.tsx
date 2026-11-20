@@ -1,3 +1,4 @@
+import { ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ActionShortcut, ObjectMenu, RemovalConfirmation, type ObjectAction } from "./ObjectActions";
 import type { StudioApi, StudioJob } from "./api";
@@ -5,9 +6,8 @@ import { formatTime, JobCard } from "./components";
 import { recentJobs, jobSubmittedAt } from "./jobOrder";
 import { jobStatusCounts } from "./workspaceSummaries";
 import { HeaderSummary } from "./WorkspaceSection";
-import { completedSuccessfully } from "./jobOutcomes";
+import { cannotContinue, completedSuccessfully } from "./jobOutcomes";
 
-const finishedStatuses = ["completed", "failed", "stopped", "cancelled"];
 
 type ClearKind = "generation" | "evaluation" | "all";
 const kindNames: Record<ClearKind, string> = { generation: "generations", evaluation: "evaluations", all: "jobs" };
@@ -70,7 +70,7 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
       // A source link can reveal an already-cleared job. Hide it again only if
       // it still meets this action's criteria; fresh removals come from the API.
       const previouslyCleared = visibleJobs.filter((job) => job.kind === kind && removedJobIds.includes(job.id)
-        && (mode === "finished" ? finishedStatuses.includes(job.status) : completedSuccessfully(job)));
+        && (mode === "finished" ? cannotContinue(job) : completedSuccessfully(job)));
       const cleared = new Set([...result.job_ids, ...previouslyCleared.map((job) => job.id)]);
       setRemoved((current) => [...current, ...cleared]);
       setRevealed((current) => current.filter((id) => !cleared.has(id)));
@@ -119,10 +119,10 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
     source.scrollIntoView?.({ block: "center", behavior: "auto" });
   }
 
-  const confirmation = confirmClear && <RemovalConfirmation title={`Clear ${confirmClear.mode} ${kindNames[confirmClear.kind]}?`} label={`Clear ${confirmClear.mode}`} busy={clearing !== null} onCancel={() => setConfirmClear(null)} onConfirm={() => clearHistory(confirmClear.kind, confirmClear.mode)}><p>{confirmClear.mode === "completed" ? "Successful completed jobs will be removed from Activity. Failed and unrated evaluations remain visible." : "Completed, failed, stopped and cancelled jobs will be removed from Activity. Queued, running and paused jobs remain visible."} Bundles and saved scorecards are kept.</p></RemovalConfirmation>;
+  const confirmation = confirmClear && <RemovalConfirmation title={`Clear ${confirmClear.mode} ${kindNames[confirmClear.kind]}?`} label={`Clear ${confirmClear.mode}`} busy={clearing !== null} onCancel={() => setConfirmClear(null)} onConfirm={() => clearHistory(confirmClear.kind, confirmClear.mode)}><p>{confirmClear.mode === "completed" ? "Successful completed jobs will be removed from Activity. Failed and unrated evaluations remain visible." : "Jobs that can no longer continue will be removed from Activity: completed, failed and cancelled jobs, and stopped runs without a checkpoint. Queued, running, paused and resumable jobs remain visible."} Bundles and saved scorecards are kept.</p></RemovalConfirmation>;
   if (timeline) {
     const entries = recentJobs(visibleJobs);
-    const can = (kind: "generation" | "evaluation", mode: "completed" | "finished") => entries.some((job) => job.kind === kind && (mode === "completed" ? completedSuccessfully(job) : finishedStatuses.includes(job.status)));
+    const can = (kind: "generation" | "evaluation", mode: "completed" | "finished") => entries.some((job) => job.kind === kind && (mode === "completed" ? completedSuccessfully(job) : cannotContinue(job)));
     const clearAction = (kind: ClearKind, mode: "completed" | "finished"): ObjectAction => {
       const possible = kind === "all" ? can("generation", mode) || can("evaluation", mode) : can(kind, mode);
       return { id: `${mode}-${kind}`, label: `Clear ${mode} ${kindNames[kind]}`, group: "remove", disabled: clearing !== null || !possible, reason: clearing !== null ? "History cleanup is in progress" : `No ${mode === "completed" ? "successful completed" : "finished"} ${kindNames[kind]} to clear`, description: "Keep bundles and scorecards", run: () => setConfirmClear({ kind, mode }) };
@@ -131,7 +131,7 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
     const days = [...new Set(entries.map((job) => dayLabel(jobSubmittedAt(job))))];
     return <><section className="job-timeline" aria-label="History">
       {manageHistory && <header className="job-timeline-header"><strong>History</strong><span>{entries.length}</span>
-        <div className="job-history-actions"><ActionShortcut action={{ ...clearAction("all", "completed"), label: "Clear completed" }} className="clear-completed" ariaLabel="Clear completed jobs" /><ObjectMenu label="History actions" actions={historyActions} /></div>
+        <div className="job-history-actions"><ActionShortcut action={{ ...clearAction("all", "finished"), label: "Clear finished" }} className="clear-completed" ariaLabel="Clear finished jobs" /><ObjectMenu label="History actions" actions={historyActions} /></div>
       </header>}
       {days.map((day) => <div className="job-timeline-day" key={day}><h3 className="job-timeline-heading">{day}</h3><div className="job-list">{entries.filter((job) => dayLabel(jobSubmittedAt(job)) === day).map((job) => <JobCard key={job.id} job={job} name={nameFor(job)} onDeleteHistory={manageHistory ? () => removeHistory(job.id) : undefined} highlighted={job.id === highlightedJobId} focusScorecard={job.id === focusJobId && job.kind === "evaluation"} onShowSource={showJob} api={api} onError={onError} onChanged={onChanged} />)}</div></div>)}
     </section>{confirmation}</>;
@@ -141,15 +141,15 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
     const latest = entries[0];
     const kindLabel = kind === "generation" ? "generations" : "evaluations";
     const canClearCompleted = entries.some(completedSuccessfully);
-    const canClearFinished = entries.some((job) => finishedStatuses.includes(job.status));
+    const canClearFinished = entries.some(cannotContinue);
     const historyActions: ObjectAction[] = [
       { id: "completed", label: "Clear completed", group: "remove", disabled: clearing !== null || !canClearCompleted, reason: clearing !== null ? "History cleanup is in progress" : "No successful completed jobs to clear", description: "Keep bundles and scorecards; clear successful jobs", run: () => setConfirmClear({ kind, mode: "completed" }) },
       { id: "finished", label: "Clear finished", group: "remove", disabled: clearing !== null || !canClearFinished, reason: clearing !== null ? "History cleanup is in progress" : "No finished jobs to clear", description: "Keep bundles and scorecards; clear all finished jobs", run: () => setConfirmClear({ kind, mode: "finished" }) },
     ];
     if (flat) return <div key={kind} className="job-list">{entries.map((job) => <JobCard key={job.id} job={job} name={nameFor(job)} highlighted={job.id === highlightedJobId} focusScorecard={job.id === focusJobId && job.kind === "evaluation"} onShowSource={showJob} api={api} onError={onError} onChanged={onChanged} />)}</div>;
     return <details className="job-group" key={kind} open={openKinds[kind] ?? true} onToggle={(event) => { const open = event.currentTarget.open; setOpenKinds((current) => ({ ...current, [kind]: open })); }}>
-      <summary><strong>{kind === "generation" ? "Generations" : "Evaluations"}</strong><span>{entries.length}</span><small className="group-summary"><HeaderSummary summary={{ headline: jobStatusCounts(entries) || "No jobs", detail: latest ? `Latest: ${nameFor(latest) || "Run"} #${latest.id.slice(0, 8)}${jobSubmittedAt(latest) ? ` · ${formatTime(jobSubmittedAt(latest))}` : ""}` : "" }} /></small>{manageHistory && <div className="job-history-actions" onClick={(event) => { event.preventDefault(); event.stopPropagation(); }} onKeyDown={(event) => event.stopPropagation()}>
-        <ActionShortcut action={historyActions[0]} className="clear-completed" ariaLabel={`Clear completed ${kindLabel}`} /><ObjectMenu label={`History actions for ${kindLabel}`} actions={historyActions} />
+      <summary><ChevronRight size={16} aria-hidden="true" className="disclosure-chevron" /><strong>{kind === "generation" ? "Generations" : "Evaluations"}</strong><span>{entries.length}</span><small className="group-summary"><HeaderSummary summary={{ headline: jobStatusCounts(entries) || "No jobs", detail: latest ? `Latest: ${nameFor(latest) || "Run"} #${latest.id.slice(0, 8)}${jobSubmittedAt(latest) ? ` · ${formatTime(jobSubmittedAt(latest))}` : ""}` : "" }} /></small>{manageHistory && <div className="job-history-actions" onClick={(event) => { event.preventDefault(); event.stopPropagation(); }} onKeyDown={(event) => event.stopPropagation()}>
+        <ActionShortcut action={historyActions[1]} className="clear-completed" ariaLabel={`Clear finished ${kindLabel}`} /><ObjectMenu label={`History actions for ${kindLabel}`} actions={historyActions} />
       </div>}</summary>
       <div className="job-list">{entries.length ? entries.map((job) => <JobCard key={job.id} job={job} name={nameFor(job)} onDeleteHistory={manageHistory ? () => removeHistory(job.id) : undefined} highlighted={job.id === highlightedJobId} focusScorecard={job.id === focusJobId && job.kind === "evaluation"} onShowSource={showJob} api={api} onError={onError} onChanged={onChanged} />) : <p className="muted job-group-empty">No {kind === "generation" ? "generations" : "evaluations"} in this list.</p>}</div>
     </details>;

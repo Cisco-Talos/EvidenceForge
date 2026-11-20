@@ -139,6 +139,7 @@ p { line-height: 1.5; }
 .copy-path-button { display: grid; flex: none; place-items: center; width: 25px; height: 25px; min-height: 25px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); color: var(--text-2); background: transparent; }
 .copy-path-button:hover { border-color: var(--border-strong); color: var(--text-1); background: var(--surface-3); }
 .copy-path-button.copied { color: var(--ok); }
+.job-row-copy { display: inline-flex; align-items: center; }
 .primary-nav { display: flex; flex-direction: column; gap: 4px; }
 .primary-nav button, .sidebar-bottom button { width: 100%; display: flex; align-items: center; gap: 12px; min-height: 32px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); text-align: left; font-weight: 570; }
 .primary-nav button:hover, .sidebar-bottom button:hover { color: var(--text-1); background: var(--hover-tint); }
@@ -147,6 +148,11 @@ p { line-height: 1.5; }
 .nav-rule { height: 1px; background: var(--border); margin: 12px 8px; }
 .nav-count { margin-left: auto; min-width: 19px; height: 19px; padding: 0 4px; display: grid; place-items: center; border-radius: var(--radius-pill); color: var(--on-solid); background: var(--accent); font-size: var(--text-xs); font-weight: 700; }
 .sidebar-bottom { margin-top: auto; }
+/* Product version: quiet text under Settings so it never reads as a control. */
+.sidebar-version { margin: 4px 0 0; padding: 0 8px; color: var(--text-3); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+/* The sidebar logo is the home link; keep it looking like artwork, with a visible focus ring. */
+.brand.brand-home { width: 100%; border: 0; background: transparent; color: inherit; cursor: pointer; border-radius: var(--radius-sm); }
+.brand.brand-home:hover { background: var(--hover-tint); }
 
 .main-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; position: relative; }
 .topbar { height: 59px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 32px; border-bottom: 1px solid var(--border); background: var(--bg); position: sticky; top: 0; z-index: 15; }
@@ -154,6 +160,8 @@ p { line-height: 1.5; }
 .topbar-title strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .back-link { display: inline-flex; align-items: center; gap: 8px; border: none; background: none; color: var(--text-2); padding: 8px 0; }
 .back-link:hover { color: var(--text-1); }
+.breadcrumb-link { padding: 4px 0; border: 0; background: none; color: var(--text-2); font: inherit; font-weight: 600; text-decoration: underline; text-decoration-color: var(--text-3); text-underline-offset: 3px; cursor: pointer; }
+.breadcrumb-link:hover { color: var(--text-1); text-decoration-color: var(--text-1); }
 .breadcrumb-slash { color: var(--text-3); }
 .topbar-actions { display: flex; align-items: center; gap: 16px; }
 .codex-indicator { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 50%; background: transparent; cursor: pointer; }
@@ -594,6 +602,19 @@ p { line-height: 1.5; }
 .validation-summary h3 { margin: 0 0 4px; font-size: var(--text-lg); }
 .validation-summary p { margin: 0; color: var(--text-2); }
 .findings-list { display: grid; gap: 8px; }
+/* Severity groups start collapsed; the heading carries the count. */
+.finding-group { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); }
+.finding-group > summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; list-style: none; cursor: pointer; font-weight: 600; color: var(--text-1); }
+.finding-group > summary::-webkit-details-marker { display: none; }
+.finding-group > summary:hover { background: var(--hover-tint); }
+.finding-group-chevron { flex: none; color: var(--text-3); transition: transform .12s ease; }
+.finding-group[open] > summary > .finding-group-chevron { transform: rotate(90deg); }
+.finding-group-count { min-width: 20px; padding: 0 8px; border-radius: var(--radius-pill); background: var(--surface-3); font-size: var(--text-xs); font-variant-numeric: tabular-nums; text-align: center; }
+.finding-group-count.severity-error { color: var(--err); background: var(--err-soft); }
+.finding-group-count.severity-warning { color: var(--warn); background: var(--warn-soft); }
+.finding-group-count.severity-info { color: var(--info); background: var(--info-soft); }
+.finding-group-body { display: grid; gap: 8px; padding: 0 12px 12px; }
+@media (prefers-reduced-motion: reduce) { .finding-group-chevron { transition: none; } }
 .finding { display: flex; gap: 16px; align-items: flex-start; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
 .finding h4 { margin: 0 0 4px; font-size: var(--text-sm); color: var(--text-2); }
 .finding p { margin: 0; }
@@ -748,6 +769,16 @@ p { line-height: 1.5; }
 .bundle-file-row svg { flex: none; color: var(--text-2); }
 .bundle-file-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); }
 .bundle-file-row small { flex: none; color: var(--text-2); }
+/* Folder tree: rows indent by depth; the chevron shows open state (FolderOpen means Reveal). */
+.bundle-file-row, .bundle-folder-row { padding-left: calc(8px + var(--tree-depth, 0) * 16px); }
+.bundle-folder-row { display: flex; align-items: center; gap: 8px; width: 100%; padding-top: 8px; padding-bottom: 8px; padding-right: 8px; border: 0; border-bottom: 1px solid var(--border); color: var(--text-1); background: transparent; text-align: left; font-weight: 600; }
+.bundle-folder-row:hover, .bundle-folder-row:focus-visible { background: var(--surface-3); }
+.bundle-folder-row svg { flex: none; color: var(--text-2); }
+.bundle-folder-row > svg:first-child { transition: transform .12s ease; }
+.bundle-folder-row > svg.open { transform: rotate(90deg); }
+.bundle-folder-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); }
+.bundle-folder-row small { flex: none; color: var(--text-3); font-weight: 400; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .bundle-folder-row > svg:first-child { transition: none; } }
 .bundle-preview { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); }
 .bundle-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 46px; padding: 8px 12px; border-bottom: 1px solid var(--border-strong); }
 .bundle-preview-heading strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
@@ -951,6 +982,7 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
   .sidebar { padding-left: 8px; padding-right: 8px; }
   .brand { justify-content: center; padding: 2px 0 16px; }
   .primary-nav button, .sidebar-bottom button { justify-content: center; font-size: 0; gap: 0; }
+  .sidebar-version { display: none; }
   .primary-nav button svg, .sidebar-bottom button svg { flex: none; }
   .nav-count { font-size: var(--text-xs); position: absolute; margin-left: 24px; }
   .settings-layout { grid-template-columns: 1fr; }
@@ -1615,6 +1647,12 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .library-group-heading strong { color: var(--text-1); }
 .library-group-heading span { color: var(--text-3); font-variant-numeric: tabular-nums; }
 .library-group-heading.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--accent-soft); }
+.library-group-heading:has(> .library-group-toggle) { padding: 0; }
+.library-group-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.library-group-toggle:hover { background: var(--hover-tint); }
+.library-group-toggle > svg:first-child { flex: none; color: var(--text-3); transition: transform .12s ease; }
+.library-group-toggle > svg.open { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .library-group-toggle > svg:first-child { transition: none; } }
 .scenario-row-updated, .pack-cell { color: var(--text-2); font-size: var(--text-sm); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .scenario-symbol.draft { border-style: dashed; background: transparent; }
 .library-table .scenario-project { max-width: none; min-width: 0; font-size: var(--text-sm); }
@@ -1679,7 +1717,18 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .tab-count { min-width: 18px; padding: 0 8px; border-radius: var(--radius-pill); color: var(--text-3); background: var(--surface-3); font-size: var(--text-xs); font-variant-numeric: tabular-nums; text-align: center; }
 .tab-count.warn { color: var(--warn); background: var(--warn-soft); }
 .tab-count.err { color: var(--err); background: var(--err-soft); }
-.workspace-sections.overview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+/* Overview cards share one height per row and a common floor, so the grid reads as even tiles. */
+.workspace-sections.overview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+.workspace-sections.overview-grid > [data-workspace-section] > .workspace-section { display: flex; flex-direction: column; height: 100%; min-height: 204px; }
+/* Recent conversations fill the Author card's spare height without setting it. */
+.recent-conversations { position: relative; flex: 1 1 0; min-height: 32px; margin: 0 16px 12px 44px; overflow: hidden; }
+.recent-conversations > ul { position: absolute; inset: 0; margin: 0; padding: 0; list-style: none; }
+.recent-conversation { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); color: var(--text-2); background: transparent; font-size: var(--text-sm); text-align: left; }
+.recent-conversation:hover { color: var(--text-1); background: var(--hover-tint); }
+.recent-conversation > svg { flex: none; color: var(--text-3); }
+.recent-conversation > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.recent-conversation > em { flex: none; color: var(--info); font-size: var(--text-xs); font-style: normal; }
+.recent-conversation > time { flex: none; color: var(--text-3); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .workspace-sections.overview-grid > .surface, .workspace-sections.overview-grid > .artifact-lifecycle { grid-column: 1 / -1; }
 .workspace-sections.overview-grid .workspace-section { margin: 0; }
 .workspace-sections.overview-grid .workspace-section-header { min-height: 92px; align-items: flex-start; flex-wrap: wrap; background: var(--surface-1); }

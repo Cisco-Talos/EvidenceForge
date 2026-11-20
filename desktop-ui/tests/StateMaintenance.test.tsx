@@ -42,8 +42,9 @@ test("restoration explains its operation and requires an explicit action", () =>
   fireEvent.click(screen.getByRole("button", { name: "Restore previous UI state" }));
   fireEvent.click(within(screen.getByRole("dialog", { name: "Restore previous UI state?" })).getByRole("button", { name: "Restore" }));
   expect(restore).toHaveBeenCalledOnce();
-  fireEvent.click(screen.getByText("View details"));
-  expect(screen.getByText(/Recovery backup:/)).toHaveTextContent(base.backup_path!);
+  // Internal identifiers and raw version JSON are not shown; the status explains the action.
+  expect(screen.queryByText("View details")).not.toBeInTheDocument();
+  expect(screen.queryByText(base.operation_id)).not.toBeInTheDocument();
 });
 
 test("workspace failure permits choosing another workspace", () => {

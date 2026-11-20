@@ -135,12 +135,19 @@ test("an unrelated anonymous draft never adopts a publisher only because its nam
   expect(groupBundles(snapshot)).toHaveLength(2);
 });
 
-test("bundles default to one newest-first list of runs with Open scenario on each row", async () => {
+test("bundles open grouped by scenario and Newest first lists every run with Open scenario on each row", async () => {
   const { container, onOpenScenario } = setup(fixture(), false);
+  const user = userEvent.setup();
+  // Default view: one open group per scenario family, no flat list.
+  expect(container.querySelectorAll(".bundle-group")).toHaveLength(1);
+  expect(container.querySelector<HTMLDetailsElement>(".bundle-group")!.open).toBe(true);
+  expect(container.querySelector(".bundle-flat-list")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Views" }));
+  expect(screen.getByRole("menuitemradio", { name: "Group by scenario" })).toHaveAttribute("aria-checked", "true");
+  await user.click(screen.getByRole("menuitemradio", { name: "Newest first" }));
   expect(container.querySelector(".bundle-group")).toBeNull();
   const rows = [...container.querySelectorAll(".bundle-flat-list > .job-row")];
   expect(rows.length).toBe(5);
-  const user = userEvent.setup();
   const options = within(rows[0] as HTMLElement).getAllByRole("button").find((button) => button.getAttribute("aria-label")?.startsWith("Bundle options"))!;
   await user.click(options);
   const open = screen.getByRole("menuitem", { name: /Open scenario/ });

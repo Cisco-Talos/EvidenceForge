@@ -365,7 +365,7 @@ def test_first_run_enrollment_and_existing_user_upgrade_are_distinct(
     assert coordinator.apply(coordinator.status.operation_id).state == "ready"
     existing = StudioService(old, "examples", coordinator=coordinator)
     assert existing.store.example_installation(existing.settings.workspace) is None
-    assert DATABASE_VERSION == 4
+    assert DATABASE_VERSION >= 4
     asyncio.run(existing.stop())
 
 

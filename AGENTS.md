@@ -743,11 +743,13 @@ Studio-wide rewrite unless the task asks for it.
 - Each page has one compact title row (title, optional count, page actions). Do not add eyebrow
   labels, marketing taglines or a second page-sized `h1` that repeats the titlebar.
 - Projects are navigated from the sidebar. Libraries (scenarios, packs, bundles, assets) render as a
-  flat, sortable table that shows items immediately. Grouping is an opt-in view and never starts
-  collapsed.
+  sortable table that shows items immediately. Scenarios open grouped by project, packs by
+  publisher and bundles by scenario; flat orderings remain `Views` options. Group headings are
+  collapsible but always start expanded; collapsing is a session-only reading choice.
 - Libraries show one row per artifact family (`artifactFamilies` in `src/artifactGrouping.ts`):
   the newest published release, else the newest versioned file, else the latest draft, with a
   `FamilyToggle` expander for other versions. Do not list each version as its own top-level row.
+  Families always nest inside whichever group holds them, so grouped views expand in two levels.
 - Hide views with the `hidden` attribute; a global `[hidden] { display: none !important }` rule
   keeps component display rules from overriding it.
 - Every library uses one toolbar pattern: `Search` · `Filter ▾` (a popover holding all facets,
@@ -759,16 +761,21 @@ Studio-wide rewrite unless the task asks for it.
 - Page titles live in the top bar as the page's `h1`; primary page actions (New scenario, New pack)
   sit beside it. Libraries refresh automatically on entry and focus; do not add manual refresh
   buttons.
-- The scenario workspace shows readiness as a labeled pipeline (Author → Environment → Validate →
-  Generate → Evaluate) via `ReadinessPipeline` (`src/ReadinessPipeline.tsx`). It promotes exactly
+- The scenario workspace shows readiness as a labeled pipeline (Author → Validate → Generate →
+  Evaluate) via `ReadinessPipeline` (`src/ReadinessPipeline.tsx`). Environment is a reference
+  section, not a step: it is computed for `nextStep` but not drawn. Tabs and Overview cards use the
+  same verbs (Author, Validate, Generate & Evaluate; packs: Validate & Release). It promotes exactly
   one next action (`nextStep`) as the surface's only primary button; section headers must not
   repeat the promoted action. Derive step state from the existing `scenarioStates`/
   `environmentState` helpers; do not add parallel status logic.
-- Workspace sections are tabs over an Overview: Overview shows each `WorkspaceSection` header as a
-  card, and a tab or card shows that one section expanded. Keep hidden sections mounted (`hidden`)
-  so in-progress inspection survives tab switches. Chat focus remains the dedicated conversation
-  view. Job and run history lives in **Activity**: one newest-first timeline under day headings,
-  filtered by a segmented control, with per-kind clearing kept in its History menu.
+- Workspace sections are tabs over an Overview: Overview shows each `WorkspaceSection` header as an
+  equal-height card, and a tab or card shows that one section expanded. Keep hidden sections mounted
+  (`hidden`) so in-progress inspection survives tab switches. Chat focus remains the dedicated
+  conversation view; its top-bar breadcrumb title returns to the workspace. Job and run history
+  lives in **Activity**, grouped by job type in collapsible sections by default, with the dated
+  newest-first timeline as a `Views` layout, filtered by a segmented control. **Clear finished**
+  removes only jobs that cannot continue (`cannotContinue`/`job_cannot_continue`); paused and
+  resumable jobs stay. Activity counts exclude history removed from Studio.
 - Workspace section headers show labeled `StatusPill`s built from the same readiness steps as
   the strip; never reintroduce icon-only status there.
 - Appearance (System/Light/Dark) is a per-Mac view preference in `src/theme.ts` web storage, not a

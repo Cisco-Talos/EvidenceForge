@@ -27,7 +27,7 @@ from evidenceforge.studio.state_migrations import (
 )
 from evidenceforge.studio.state_schema import BASELINE_SQL, FTS_SQL, LEDGER_SQL, LEGACY_TABLE_SETS
 
-DATABASE_VERSION = 4
+DATABASE_VERSION = 5
 FTS_TABLES = {
     "items_fts",
     "items_fts_data",
@@ -128,6 +128,15 @@ MIGRATIONS = (
                 workspace TEXT PRIMARY KEY, payload TEXT NOT NULL
             );
         """,
+    ),
+    Migration(
+        id="studio-db-0005",
+        source=4,
+        target=5,
+        description="Accept publisher grouping and grouped library defaults for new views",
+        affected=("views", "library_preferences"),
+        # Stored rows already carry an explicit sort; only new rows take the grouped defaults.
+        sql="",
     ),
 )
 
@@ -328,6 +337,14 @@ def validate_records(connection: sqlite3.Connection) -> None:
         from evidenceforge.studio.state_records_v4 import ExampleInstallation
 
         models["example_installations"] = ExampleInstallation
+    if connection.execute("PRAGMA user_version").fetchone()[0] >= 5:
+        from evidenceforge.studio.state_records_v5 import (
+            LibraryPreferences as LibraryPreferencesV5,
+        )
+        from evidenceforge.studio.state_records_v5 import SavedView as SavedViewV5
+
+        models["views"] = SavedViewV5
+        models["library_preferences"] = LibraryPreferencesV5
     for table, model in models.items():
         if table not in existing:
             continue

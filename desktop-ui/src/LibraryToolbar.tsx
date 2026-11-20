@@ -32,20 +32,23 @@ export function LibraryFilters({ label, facets = [], toggles = [], onReset }: {
   </Popover.Root>;
 }
 
-/** Ordering and saved views. Saved views return to a search, its filters and project. */
-export function ViewsMenu({ sort, onSort, views, onApply, onManage, options = Object.keys(sortLabels) as LibrarySort[], labels = {} }: {
-  sort: LibrarySort; onSort: (sort: LibrarySort) => void;
+/**
+ * Ordering/layout and saved views. Saved views return to a search, its filters and project.
+ * Libraries pass `LibrarySort` values; other pages (Activity) pass their own layouts with labels.
+ */
+export function ViewsMenu<T extends string = LibrarySort>({ sort, onSort, views, onApply, onManage, options = Object.keys(sortLabels) as T[], labels = {}, heading = "Sort" }: {
+  sort: T; onSort: (sort: T) => void;
   /** Saved views; omit for libraries without them. */
   views?: { name: string; detail: string }[]; onApply?: (name: string) => void; onManage?: () => void;
-  options?: LibrarySort[]; labels?: Partial<Record<LibrarySort, string>>;
+  options?: T[]; labels?: Partial<Record<T, string>>; heading?: string;
 }) {
   return <DropdownMenu.Root>
     <DropdownMenu.Trigger className="toolbar-button" aria-label="Views"><Bookmark size={15} aria-hidden="true" />Views<ChevronDown size={13} aria-hidden="true" /></DropdownMenu.Trigger>
     <DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu views-menu" sideOffset={6} align="start">
-      <DropdownMenu.Label className="menu-label">Sort</DropdownMenu.Label>
-      <DropdownMenu.RadioGroup value={sort} onValueChange={(value) => onSort(value as LibrarySort)}>
+      <DropdownMenu.Label className="menu-label">{heading}</DropdownMenu.Label>
+      <DropdownMenu.RadioGroup value={sort} onValueChange={(value) => onSort(value as T)}>
         {options.map((value) => <DropdownMenu.RadioItem key={value} value={value} className="object-action-item menu-radio">
-          <DropdownMenu.ItemIndicator className="menu-indicator"><Check size={13} /></DropdownMenu.ItemIndicator>{labels[value] || sortLabels[value]}
+          <DropdownMenu.ItemIndicator className="menu-indicator"><Check size={13} /></DropdownMenu.ItemIndicator>{labels[value] || sortLabels[value as unknown as LibrarySort] || value}
         </DropdownMenu.RadioItem>)}
       </DropdownMenu.RadioGroup>
       {views && <>

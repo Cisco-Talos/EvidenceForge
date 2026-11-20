@@ -3,11 +3,10 @@ import { TriangleAlert } from "lucide-react";
 import type { CatalogItem, ImportedBundle, StudioApi, StudioJob, StudioSnapshot } from "./api";
 import { JobActionContext } from "./JobActionContext";
 import { ImportedBundleRow } from "./BundleLibrary";
-import { formatTime, JobCard } from "./components";
+import { JobCard } from "./components";
 import { generationInputs, OperationStatus } from "./ScenarioStates";
 import { ScorecardPanel } from "./ScorecardPanel";
 import { latestJob, latestRunState, latestSavedEvaluation, orderedBundles, scoringSummary } from "./workspaceSummaries";
-import { jobSubmittedAt } from "./jobOrder";
 
 /** A run owns its generated files and its latest saved evaluation. */
 export function ScenarioRuns({ jobs, imports, sizes, item, snapshot, api, focusJobId, focusVersion, onChanged, onError }: {
@@ -50,7 +49,7 @@ export function ScenarioRuns({ jobs, imports, sizes, item, snapshot, api, focusJ
       detailsExtra={<div className="run-score-details">
         {!current && <p className="run-revision-note">{inputs.detail}</p>}
         {newest && newest.id !== saved?.id && <p className="muted small" role="status">{newest.scorecard?.error || newest.status_message || outcome.headline}{saved ? " · Previous saved score remains available until a new report completes." : ""}</p>}
-        {saved ? <><p className="run-evaluation-date muted small">Latest saved evaluation · {jobSubmittedAt(saved) ? formatTime(jobSubmittedAt(saved)) : "Time unknown"}</p><ScorecardPanel key={saved.id} jobId={saved.id} api={api} /></> : !newest && <p className="muted small">{generation.status === "completed" ? "No evaluation yet. Use Evaluate to score this bundle." : "Complete this generation before scoring its data."}</p>}
+        {saved ? <ScorecardPanel key={saved.id} jobId={saved.id} api={api} /> : !newest && <p className="muted small">{generation.status === "completed" ? "No evaluation yet. Use Evaluate to score this bundle." : "Complete this generation before scoring its data."}</p>}
       </div>} />;
   })}</div></JobActionContext.Provider>;
 }

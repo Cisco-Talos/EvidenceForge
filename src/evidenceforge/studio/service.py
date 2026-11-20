@@ -157,6 +157,7 @@ from evidenceforge.studio.jobs import (
     StudioJobStore,
     can_resume,
     controller_settings,
+    job_cannot_continue,
     job_completed_successfully,
     job_summary,
     progress_signature,
@@ -1831,6 +1832,25 @@ class _RequestActivityMiddleware:
         finally:
             if tracked:
                 tracked.active_requests -= 1
+
+
+# Bundle browsers show a folder tree, so a large bundle can be listed in full up to this bound.
+MAX_BUNDLE_FILE_LISTING = 10_000
+
+
+def _bundle_file_listing(root: Path) -> dict[str, Any]:
+    """List a bundle's regular files in sorted order without following links."""
+    files: list[dict[str, Any]] = []
+    for directory, children, names in os.walk(root, followlinks=False):
+        children[:] = sorted(name for name in children if not (Path(directory) / name).is_symlink())
+        for name in sorted(names):
+            path = Path(directory) / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            if len(files) >= MAX_BUNDLE_FILE_LISTING:
+                return {"root": str(root), "files": files, "truncated": True}
+            files.append({"path": path.relative_to(root).as_posix(), "size": path.stat().st_size})
+    return {"root": str(root), "files": files, "truncated": False}
 
 
 def create_app(
@@ -4752,11 +4772,7 @@ def create_app(
             payload["id"]
             for payload in studio.store.job_payloads(studio.settings.workspace, request.kind)
             if payload["id"] not in removed
-            and (
-                payload["status"] in {"completed", "failed", "stopped", "cancelled"}
-                if finished
-                else job_completed_successfully(payload)
-            )
+            and (job_cannot_continue(payload) if finished else job_completed_successfully(payload))
         ]
         studio.store.remove_job_history(job_ids)
         await studio.emit(
@@ -5095,19 +5111,7 @@ def create_app(
         bundle_id: str, studio: StudioService = Depends(authorized)
     ) -> dict[str, Any]:
         bundle = external_bundle(studio, bundle_id)
-        files: list[dict[str, Any]] = []
-        for directory, children, names in os.walk(bundle.root, followlinks=False):
-            children[:] = [name for name in children if not (Path(directory) / name).is_symlink()]
-            for name in names:
-                path = Path(directory) / name
-                if path.is_symlink() or not path.is_file():
-                    continue
-                files.append(
-                    {"path": path.relative_to(bundle.root).as_posix(), "size": path.stat().st_size}
-                )
-                if len(files) >= 500:
-                    return {"root": str(bundle.root), "files": files, "truncated": True}
-        return {"root": str(bundle.root), "files": files, "truncated": False}
+        return _bundle_file_listing(bundle.root)
 
     @app.get("/v1/bundles/{bundle_id}/files/{relative_path:path}")
     def imported_bundle_file(
@@ -5214,19 +5218,7 @@ def create_app(
         root = Path(payload["output_root"])
         if root.is_symlink() or not root.is_dir():
             raise HTTPException(status_code=404, detail="Bundle directory is unavailable")
-        files: list[dict[str, Any]] = []
-        for directory, children, names in os.walk(root, followlinks=False):
-            children[:] = [name for name in children if not (Path(directory) / name).is_symlink()]
-            for name in names:
-                path = Path(directory) / name
-                if path.is_symlink() or not path.is_file():
-                    continue
-                files.append(
-                    {"path": path.relative_to(root).as_posix(), "size": path.stat().st_size}
-                )
-                if len(files) >= 500:
-                    return {"root": str(root), "files": files, "truncated": True}
-        return {"root": str(root), "files": files, "truncated": False}
+        return _bundle_file_listing(root)
 
     @app.get("/v1/jobs/{job_id}/files/{relative_path:path}")
     def bundle_file(
