@@ -11,6 +11,7 @@ from evidenceforge.desktop import job_store, state
 from evidenceforge.studio import settings, store
 from evidenceforge.studio import state_records_v1 as frozen
 from evidenceforge.studio import state_records_v2 as frozen_v2
+from evidenceforge.studio import state_records_v5 as frozen_v5
 from evidenceforge.studio import state_settings_v4 as frozen_settings_v4
 
 MODELS = (
@@ -18,9 +19,9 @@ MODELS = (
     (store.Project, frozen.Project),
     (store.ImportedBundle, frozen.ImportedBundle),
     (store.Conversation, frozen_v2.Conversation),
-    (store.SavedView, frozen.SavedView),
-    (store.LibraryView, frozen.LibraryView),
-    (store.LibraryPreferences, frozen.LibraryPreferences),
+    (store.SavedView, frozen_v5.SavedView),
+    (store.LibraryView, frozen_v5.LibraryView),
+    (store.LibraryPreferences, frozen_v5.LibraryPreferences),
     (state.GenerationJob, frozen.GenerationJob),
     (state.EvaluationJob, frozen.EvaluationJob),
     (state.AppSettings, frozen.AppSettings),

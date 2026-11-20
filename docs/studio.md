@@ -73,8 +73,9 @@ Studio can remove outside read-only permissions from its own account-owned
 unsafe paths are refused. Authored workspace permissions and private file ACLs
 remain protected.
 
-While the Windows helper initializes, Studio keeps the **Starting Studio** screen
-visible and allows up to 60 seconds for readiness. A newly launched helper that
+While the helper initializes, Studio keeps the **Starting Studio** screen
+visible and allows up to 120 seconds for readiness on Windows and 24 seconds on
+macOS and Linux. A newly launched helper that
 exits is reported promptly. The launcher avoids loading the full application just
 to reconnect. The private `logs/service.log` records UTC phase timestamps, elapsed
 time, process ID and runtime identity for startup diagnosis without recording
@@ -389,24 +390,30 @@ For a first run:
 2. Open its **Environment** tab to inspect systems, users, configuration, and exact pack
    dependencies. Import any missing packs before generation.
 3. Validate the scenario and review the resource forecast and available disk space.
-4. Start generation from **Runs**, then monitor it there or in **Activity**, which lists every
-   generation, evaluation and authoring turn newest first. Use its filter to show Running, Queued,
-   Needs attention or Done; **Clear completed** and the History menu remove finished entries
-   without deleting bundles or scorecards.
+4. Start generation from **Generate & Evaluate**, then monitor it there or in **Activity**, which
+   groups generations and evaluations into collapsible sections (choose **Views → Timeline** for
+   one newest-first list under day headings). Use its filter to show Running, Queued, Needs
+   attention or Done. **Clear finished** removes jobs that can no longer continue (completed,
+   failed, cancelled, and stopped runs without a checkpoint); running, paused and resumable jobs
+   stay. The History menus also offer **Clear completed** for successful jobs only. Neither deletes
+   bundles or scorecards.
 5. Evaluate the completed run, inspect its scorecard and files, and export the bundle when ready.
 
-A scenario opens on its **Overview**. The readiness strip at the top shows **Author → Environment →
-Validate → Generate → Evaluate**, each with its current state, and one button for the next useful
-step, such as **Validate**, **Generate** with its size estimate, **Evaluate** for the latest completed
+A scenario opens on its **Overview**. The readiness strip at the top shows **Author → Validate →
+Generate → Evaluate**, each with its current state, and one button for the next useful step, such as **Validate**, **Generate** with its size estimate, **Evaluate** for the latest completed
 run, or **Export bundle…**. If an evaluation job fails, the button offers **Re-evaluate**; a failed
 acceptance instead opens the run's scorecard, since evaluating again gives the same result. Select a step
-to open its tab. Overview summarizes each section as a card; a card or tab opens that section on its
-own. The source file path, schema and digests are in **Properties… → Technical details**.
+to open its tab. The tabs and Overview cards use the same verbs (**Author**, **Validate**, **Generate &
+Evaluate**), plus **Environment** for systems, users, configuration and pack dependencies; an
+environment problem still becomes the next step. Overview shows each section as an equal-size card;
+a card or tab opens that section on its own, and the **Author** card lists your most recent
+conversations so you can reopen one directly. While a conversation is open, select the scenario
+title in the top bar, or **Back to workspace**, to return to the Overview. The source file path, schema and digests are in **Properties… → Technical details**.
 
 The sidebar lists your projects under **Projects**. Select one to show only its scenarios or packs,
-or drag a row onto a project to move it there. **Scenarios** and **Packs** are single sortable tables:
-click a column heading, or use **Views** to sort by name, by most recently updated, or grouped by
-project. Groups are headings, never collapsed folders. **Filter** holds every filter for the current
+or drag a row onto a project to move it there. **Scenarios** open grouped by project and **Packs**
+grouped by publisher; use **Views** to sort by name or by most recently updated instead (packs can
+also be grouped by project). Select a group heading to collapse or expand it; groups start expanded. **Filter** holds every filter for the current
 library, including hidden items and pack type, author, version and location. Each scenario or pack
 appears once, headlined by its newest release; select its **+N** expander to list its other versions
 and drafts. An orange **N draft** badge marks rows that hold unpublished drafts. Library counts count
@@ -466,8 +473,8 @@ frozen content and configuration rather than becoming editable workspace files.
 
 ### Generated bundles
 
-**Bundles** lists every run and imported bundle newest first; choose **Views → Group by scenario**
-to see each scenario's versions together. The **Bundles** page can index complete bundles generated through the CLI or earlier desktop
+**Bundles** groups every run and imported bundle by scenario, each group collapsible; choose
+**Views → Newest first** for one list. The **Bundles** page can index complete bundles generated through the CLI or earlier desktop
 versions. These imports are read-only: removing one from Studio's index leaves the external
 files in place. Incomplete external bundles with checkpoints are not yet importable; Studio-owned
 incomplete jobs already appear in Bundles.
@@ -610,14 +617,15 @@ backups do not provide an undo for deletion.
 
 ## Generate, evaluate, and inspect
 
-Before a large run, open **Runs → Forecast** and refresh it to check current machine capacity.
+Before a large run, open **Generate & Evaluate → Forecast** and refresh it to check current machine capacity.
 Forecasts show estimated output size, peak memory/disk requirements, and warnings. They are
 cached across restarts; they do not replace validation or reserve capacity for other jobs.
 
 Clicking **Validate** shows a spinner and temporarily hides earlier findings.
 When the check finishes, the findings return and the check time updates even if the
-findings are unchanged. If validation cannot finish, the failure message appears inline
-with any previous results labeled separately.
+findings are unchanged. Findings are grouped into **Errors**, **Warnings** and **Info**, each
+collapsed with its count; select a group to read its findings. If validation cannot finish, the
+failure message appears inline with any previous results labeled separately.
 
 Pack validation and Environment refresh use the same spinner and check-time feedback.
 Library refresh keeps the list visible; a refresh started from the command menu confirms completion. Resource-forecast and
@@ -631,13 +639,15 @@ selected overlays, and embedded corpora. Later authoring affects new runs only. 
 uses the current scenario; checkpoint resume continues the original captured run. Checkpoint
 cadence defaults to 24 simulated hours and can be changed for new runs in Settings.
 
-Runs and jobs are listed newest first by original submission time. Expand a run to monitor
-progress, operate its generation, view files, evaluate it, or export its bundle as a ZIP.
+Runs and jobs are listed newest first by original submission time. Each run's header has a
+copy button for its bundle path. Expand a run to monitor progress, operate its generation, view
+files, evaluate it, or export its bundle as a ZIP. **View files** opens a folder tree of the
+bundle, with the selected file's folders open; select a folder to expand or collapse it.
 Studio retains the latest valid completed evaluation report for each run. An interrupted or
 unreadable evaluation preserves the previous score; a completed report replaces it even if
 quality checks fail. Resource estimates and process completion are separate from quality scores.
 
-If generation stops, expand the run in **Runs** or **Activity**. A recorded CLI error
+If generation stops, expand the run in **Generate & Evaluate** or **Activity**. A recorded CLI error
 appears in the run details; **View log** shows its captured output, and **Refresh log**
 updates the preview. Long logs show their last 32 KiB with a copyable path to the full
 file. A **Stopped** status means the process exited without a completed bundle; it
@@ -727,7 +737,8 @@ Native app process identity and renderer heartbeat leases provide fallback when 
 or its exit notification cannot be delivered. Native identity includes process creation time
 to prevent a reused PID from retaining ownership.
 
-All desktop platforms use Studio's branded About window with the product version and build.
+All desktop platforms use Studio's branded About window with the product version and build. The sidebar also shows the version under **Settings**, and selecting the logo returns to
+**Scenarios**.
 On Linux, choose **File → Quit EvidenceForge Studio** or press **Ctrl+Q** to quit; the window's
 close button uses the same job handoff. On macOS, use the application menu or **Cmd+Q**.
 
@@ -784,8 +795,8 @@ Keep the pre-restore copy until you have checked the workspace, library, and ret
 
 When a Studio state upgrade needs confirmation, **Continue with upgrade** creates and verifies
 a recovery package before changing the affected state. Packages live in `studio-upgrades/`
-beneath the private app-data directory. **View details** on the maintenance screen shows the
-operation and recovery-package path.
+beneath the private app-data directory, and the notice after a successful upgrade names the
+recovery-package path.
 
 These backups cover affected Studio database/settings/layout state. They preserve library,
 project, conversation associations, and job metadata, but do not recursively copy scenarios,

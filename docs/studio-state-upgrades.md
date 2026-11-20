@@ -61,6 +61,11 @@ persisted before workspace initialization completes. Installation failures leave
 features usable and can be retried from Settings. Published scenario files remain governed by
 their existing portable release contracts rather than by the Studio database.
 
+Database version 5 lets library views group packs by publisher and opens new libraries grouped:
+scenarios by project and packs by publisher. Its migration changes no rows. Each stored view keeps
+its explicit ordering, so a workspace that already remembered a view keeps it until the user picks
+a grouping from **Views**. Earlier Studio releases cannot open a version 5 database.
+
 Packages live in `studio-upgrades/` beneath the private data directory, outside cache and runtime
 installations. User data locations and routine backup instructions are listed in the
 [Studio guide](studio.md#workspace-and-saved-studio-data).

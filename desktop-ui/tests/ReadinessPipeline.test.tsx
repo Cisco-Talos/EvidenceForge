@@ -54,3 +54,16 @@ test("the readiness strip names every step and runs the next action", async () =
   expect(actions.validate.run).toHaveBeenCalledOnce();
   expect(screen.getByText("Forecast · ~28 MB")).toBeVisible();
 });
+
+test("the strip shows the four work steps while an environment error still promotes its review", async () => {
+  const blocked = steps({ environment: op("Environment", "error", "1 dependency error") });
+  expect(blocked.map((entry) => entry.id)).toContain("environment");
+  const next = nextStep(blocked, actions, false);
+  expect(next?.id).toBe("environment");
+  render(<ReadinessPipeline steps={blocked} next={next} onStep={vi.fn()} />);
+  const strip = screen.getByRole("region", { name: "Readiness" });
+  expect([...strip.querySelectorAll(".readiness-step strong")].map((node) => node.textContent)).toEqual(["Author", "Validate", "Generate", "Evaluate"]);
+  expect(screen.queryByRole("button", { name: /^Environment:/ })).toBeNull();
+  await userEvent.setup().click(screen.getByRole("button", { name: "environment" }));
+  expect(actions.environment.run).toHaveBeenCalledOnce();
+});

@@ -51,7 +51,8 @@ def create_app(paths: StudioPaths, token: str, *, shutdown: Callable[[], None]) 
 
 
 def _startup_timeout() -> float:
-    return 60.0 if sys.platform == "win32" else 12.0
+    # Cold starts after an update or under load can exceed the old 12 s/60 s bounds.
+    return 120.0 if sys.platform == "win32" else 24.0
 
 
 class ServiceDescriptor(BaseModel):

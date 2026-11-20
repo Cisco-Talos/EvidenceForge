@@ -354,6 +354,18 @@ def job_summary(payload: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def job_cannot_continue(payload: dict[str, Any]) -> bool:
+    """Return whether a job is over for good: finished, or stopped without a usable checkpoint.
+
+    Queued, running and paused jobs, and stopped generations that can resume from a checkpoint,
+    can still continue and stay in Activity when finished history is cleared.
+    """
+    status = payload["status"]
+    if status in {"completed", "failed", "cancelled"}:
+        return True
+    return status == "stopped" and not job_summary(payload).get("can_resume", False)
+
+
 def job_completed_successfully(payload: dict[str, Any]) -> bool:
     """Keep failed or indeterminate evaluations out of successful history cleanup."""
     if payload["status"] != "completed":

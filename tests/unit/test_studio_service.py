@@ -30,13 +30,24 @@ from evidenceforge.studio.codex import (
     CodexTimeoutError,
     CodexUnavailableError,
 )
-from evidenceforge.studio.jobs import StudioJobStore, job_summary, queue_studio_generation
+from evidenceforge.studio.jobs import (
+    StudioJobStore,
+    job_cannot_continue,
+    job_summary,
+    queue_studio_generation,
+)
 from evidenceforge.studio.lifecycle import clone_scenario, rename_scenario
 from evidenceforge.studio.paths import StudioPaths, default_workspace, studio_paths
 from evidenceforge.studio.processes import shell_command
-from evidenceforge.studio.service import StudioService, _scorecard_subscore, create_app
+from evidenceforge.studio.service import (
+    MAX_BUNDLE_FILE_LISTING,
+    StudioService,
+    _bundle_file_listing,
+    _scorecard_subscore,
+    create_app,
+)
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
-from evidenceforge.studio.store import Conversation, StudioStore
+from evidenceforge.studio.store import Conversation, LibraryPreferences, LibraryView, StudioStore
 from tests.support.studio_executable import prepare_script
 
 
@@ -2734,6 +2745,192 @@ def test_generation_uses_saved_output_parent_and_accepts_explicit_override(
         )
         assert third.status_code == 200
         assert Path(third.json()["output_root"]).is_relative_to(override)
+
+
+def _history_generation(tmp_path: Path, status: str, *, pid: int = 0) -> dict[str, object]:
+    output = tmp_path / f"run-{status}-{pid}"
+    output.mkdir()
+    job = GenerationJob(
+        id=f"{status}-{pid}",
+        scenario=tmp_path / "scenario.yaml",
+        output_root=output,
+        progress_file=output / "progress.json",
+        log_file=output / "generation.log",
+        pid=pid,
+        started_at=1.0,
+        status=status,
+    )
+    return json.loads(job.model_dump_json())
+
+
+@pytest.mark.parametrize(
+    ("status", "pid", "expected"),
+    [
+        ("completed", 0, True),
+        ("failed", 0, True),
+        ("cancelled", 0, True),
+        # A stopped run that never started still has its queued input to resume from.
+        ("stopped", 0, False),
+        # A stopped run whose process ran but left no checkpoint is over for good.
+        ("stopped", 4242, True),
+        ("queued", 0, False),
+        ("running", 4242, False),
+        ("paused", 0, False),
+        ("paused", 4242, False),
+    ],
+)
+def test_job_cannot_continue_covers_finished_and_unresumable_stopped_generations(
+    tmp_path: Path, status: str, pid: int, expected: bool
+) -> None:
+    payload = _history_generation(tmp_path, status, pid=pid)
+    assert job_summary(payload)["can_resume"] is (status in {"stopped", "paused"} and pid == 0)
+    assert job_cannot_continue(payload) is expected
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("completed", True), ("failed", True), ("cancelled", True), ("queued", False)]
+    + [("running", False), ("paused", False)],
+)
+def test_job_cannot_continue_for_evaluations_follows_their_status(
+    tmp_path: Path, status: str, expected: bool
+) -> None:
+    evaluation = EvaluationJob(
+        id=f"evaluation-{status}",
+        generation_id="generation",
+        workspace=tmp_path,
+        output_root=tmp_path,
+        result_file=tmp_path / "missing-score.json",
+        log_file=tmp_path / "eval.log",
+        command=[],
+        created_at=1.0,
+        status=status,
+    )
+    assert job_cannot_continue(json.loads(evaluation.model_dump_json())) is expected
+
+
+def test_clear_finished_history_keeps_paused_queued_running_and_resumable_stopped_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = _scenario(workspace, "history", valid=True)
+    paths = _paths(tmp_path / "private")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    monkeypatch.setattr("evidenceforge.studio.service.reconcile_jobs", lambda *_args: [])
+    headers = {"X-EForge-Token": "secret"}
+    app = create_app(paths, "secret")
+    with TestClient(app) as client:
+        store = app.state.studio.jobs
+        generations: dict[str, GenerationJob] = {}
+        for name, status, pid in (
+            ("completed", "completed", 0),
+            ("failed", "failed", 0),
+            ("cancelled", "cancelled", 0),
+            ("resumable", "stopped", 0),
+            ("unresumable", "stopped", 4242),
+            ("paused", "paused", 0),
+            ("queued", "queued", 0),
+            ("running", "running", 4242),
+        ):
+            job = queue_studio_generation(store, scenario, workspace, app.state.studio.settings)
+            job.status = status
+            job.pid = pid
+            store.save_generation(job)
+            generations[name] = job
+        before = {
+            job["id"]: job for job in client.get("/v1/bootstrap", headers=headers).json()["jobs"]
+        }
+        assert before[generations["resumable"].id]["can_resume"] is True
+        assert before[generations["unresumable"].id]["can_resume"] is False
+        assert (
+            client.post("/v1/jobs/history/clear-finished", json={"kind": "generation"}).status_code
+            == 401
+        )
+        cleared = client.post(
+            "/v1/jobs/history/clear-finished", headers=headers, json={"kind": "generation"}
+        )
+        assert cleared.status_code == 200
+        finished = {"completed", "failed", "cancelled", "unresumable"}
+        assert set(cleared.json()["job_ids"]) == {generations[name].id for name in finished}
+        assert len(cleared.json()["job_ids"]) == len(finished)
+        assert client.post(
+            "/v1/jobs/history/clear-finished", headers=headers, json={"kind": "generation"}
+        ).json() == {"job_ids": []}
+        removed = set(client.get("/v1/bootstrap", headers=headers).json()["removed_job_ids"])
+        assert removed == {generations[name].id for name in finished}
+        for kept in ("resumable", "paused", "queued", "running"):
+            assert generations[kept].id not in removed
+        assert all(job.output_root.is_dir() for job in generations.values())
+
+
+def test_library_preferences_default_to_grouped_views_and_keep_saved_choices() -> None:
+    defaults = LibraryPreferences()
+    assert defaults.remember_view is True
+    assert defaults.scenarios.sort == "project"
+    assert defaults.packs.sort == "publisher"
+    assert LibraryView().sort == "project"
+    # Each library gets its own view instance.
+    assert defaults.scenarios is not defaults.packs
+    assert defaults.packs.model_dump(exclude={"sort"}) == LibraryView().model_dump(exclude={"sort"})
+    saved = LibraryPreferences.model_validate(
+        {"scenarios": {"sort": "name"}, "packs": {"sort": "updated"}}
+    )
+    assert (saved.scenarios.sort, saved.packs.sort) == ("name", "updated")
+    with pytest.raises(ValueError):
+        LibraryView.model_validate({"sort": "owner"})
+
+
+def test_library_preferences_endpoint_reports_grouped_defaults_for_a_new_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(tmp_path / "workspace"))
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(_paths(tmp_path / "private"), "secret")) as client:
+        prefs = client.get("/v1/library/preferences", headers=headers).json()
+        assert (prefs["scenarios"]["sort"], prefs["packs"]["sort"]) == ("project", "publisher")
+        assert (
+            client.put(
+                "/v1/library/view/packs", headers=headers, json={"sort": "publisher"}
+            ).status_code
+            == 200
+        )
+        assert client.get("/v1/library/preferences", headers=headers).json()["packs"]["sort"] == (
+            "publisher"
+        )
+
+
+def test_bundle_file_listing_is_sorted_skips_links_and_reports_truncation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "bundle"
+    for relative in ("b.log", "a.log", "zeek/z.log", "zeek/conn.log", "HOST/x.xml", "c/d/e.txt"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative, encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("no", encoding="utf-8")
+    (root / "linked-dir").symlink_to(outside, target_is_directory=True)
+    (root / "linked.txt").symlink_to(outside / "secret.txt")
+    listing = _bundle_file_listing(root)
+    assert listing["root"] == str(root)
+    assert listing["truncated"] is False
+    assert [entry["path"] for entry in listing["files"]] == [
+        "a.log",
+        "b.log",
+        "HOST/x.xml",
+        "c/d/e.txt",
+        "zeek/conn.log",
+        "zeek/z.log",
+    ]
+    assert listing["files"][0]["size"] == len("a.log")
+    assert MAX_BUNDLE_FILE_LISTING == 10_000
+    monkeypatch.setattr("evidenceforge.studio.service.MAX_BUNDLE_FILE_LISTING", 3)
+    bounded = _bundle_file_listing(root)
+    assert bounded["truncated"] is True
+    assert [entry["path"] for entry in bounded["files"]] == ["a.log", "b.log", "HOST/x.xml"]
+    monkeypatch.setattr("evidenceforge.studio.service.MAX_BUNDLE_FILE_LISTING", 6)
+    assert _bundle_file_listing(root)["truncated"] is False
 
 
 def test_job_history_cleanup_preserves_outputs_and_links_and_is_workspace_scoped(

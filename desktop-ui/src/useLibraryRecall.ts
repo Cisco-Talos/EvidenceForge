@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import type { LibraryView, StudioApi } from "./api";
 
 export const emptyLibraryView: LibraryView = { search: "", project_id: null, show_hidden: false,
-  sort: "name", expanded_groups: [], pack_kind: "packs", publisher: "", version: "", pack_source: "" };
+  sort: "project", expanded_groups: [], pack_kind: "packs", publisher: "", version: "", pack_source: "" };
+
+/** Libraries open grouped: scenarios by project, packs by publisher. A remembered view wins. */
+export function defaultLibrarySort(section: string): LibraryView["sort"] {
+  return section === "packs" ? "publisher" : "project";
+}
 
 export function useLibraryRecall(api: StudioApi | null, workspace: string | undefined,
   section: string, view: LibraryView, restore: (view: LibraryView) => void,
@@ -25,7 +30,7 @@ export function useLibraryRecall(api: StudioApi | null, workspace: string | unde
     void api.libraryPreferences(workspace).then((preferences) => {
       if (cancelled) return;
       const saved = preferences.remember_view !== false ? preferences[section as "scenarios" | "packs"] : undefined;
-      const initial = { ...emptyLibraryView, ...saved };
+      const initial = { ...emptyLibraryView, sort: defaultLibrarySort(section), ...saved };
       last.current = JSON.stringify(initial);
       const restored = Object.fromEntries(Object.entries(initial).map(([field, savedValue]) => {
         const name = field as keyof LibraryView;

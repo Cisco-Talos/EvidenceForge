@@ -57,6 +57,8 @@ test("expanding a run opens its scorecard beside bundle actions without an inter
   expect(screen.queryByRole("combobox")).toBeNull();
   expect(screen.getByText("Parseability")).toBeVisible();
   expect(screen.getByRole("button", { name: "View raw report" })).toBeVisible();
+  // The scorecard carries its own evaluation time; the run no longer repeats it.
+  expect(within(row("second")).queryByText(/Latest saved evaluation/)).toBeNull();
 });
 
 test("only the latest saved evaluation is shown and older links resolve to the same run", async () => {

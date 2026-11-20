@@ -76,10 +76,15 @@ const stepIcons: Record<StepTone, (props: { size: number }) => ReactElement> = {
   info: ({ size }) => <LoaderCircle size={size} className="spinning" />, todo: () => <span className="step-dot" />,
 };
 
-/** The workspace's readiness strip: five labeled steps and the one next action. */
-export function ReadinessPipeline({ steps, next, hint, onStep }: {
+/**
+ * The workspace's readiness strip: the four work steps (Author → Validate → Generate → Evaluate)
+ * and the one next action. Environment stays in `steps` so an environment problem can still be
+ * the promoted action, but it is a reference section, not a step to perform.
+ */
+export function ReadinessPipeline({ steps: allSteps, next, hint, onStep }: {
   steps: PipelineStep[]; next: ObjectAction | null; hint?: string; onStep: (step: StepId) => void;
 }) {
+  const steps = allSteps.filter((entry) => entry.id !== "environment");
   return <section className="readiness" aria-label="Readiness">
     <ol className="readiness-steps">{steps.map((entry, index) => {
       const Icon = stepIcons[entry.tone];

@@ -3742,10 +3742,10 @@ export interface components {
             show_hidden: boolean;
             /**
              * Sort
-             * @default name
+             * @default project
              * @enum {string}
              */
-            sort: "name" | "updated" | "project";
+            sort: "name" | "updated" | "project" | "publisher";
             /**
              * Pack Kind
              * @default packs
@@ -4668,7 +4668,7 @@ export interface components {
              * @default name
              * @enum {string}
              */
-            sort: "name" | "updated" | "project";
+            sort: "name" | "updated" | "project" | "publisher";
             /** Expanded Groups */
             expanded_groups?: string[];
         };

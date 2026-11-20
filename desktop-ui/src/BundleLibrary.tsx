@@ -114,7 +114,8 @@ export function BundleLibrary({ snapshot, api, onError, onNotice, onChanged, onO
   const [importPath, setImportPath] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   /** `updated` lists every run newest first; `project` groups runs under their scenario family. */
-  const [order, setOrder] = useState<LibrarySort>("updated");
+  // Bundles open grouped by scenario; "Newest first" remains a view.
+  const [order, setOrder] = useState<LibrarySort>("project");
   const generations = snapshot.jobs.filter((job) => job.kind === "generation");
   const imports = snapshot.imported_bundles || [];
   const sizeKey = generations.map((job) => `${job.id}:${job.status}`).sort().join("|");

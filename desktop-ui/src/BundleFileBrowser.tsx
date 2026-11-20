@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
-import { FileCode2, X } from "lucide-react";
+import { ChevronRight, FileCode2, Folder, X } from "lucide-react";
+import { ancestorFolders, buildFileTree, type FileTreeNode } from "./bundleFileTree";
 import type { ExportProgress, StudioApi, TextPreview } from "./api";
 import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
@@ -104,6 +105,8 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
     .map((name) => files.files.find((entry) => entry.path.split("/").slice(-1)[0]?.toLowerCase() === name.toLowerCase())?.path)
     .find(Boolean) || files.files[0]?.path || null;
   const [selected, setSelected] = useState<string | null>(first);
+  const tree = useMemo(() => buildFileTree(files.files), [files.files]);
+  const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set(ancestorFolders(first)));
   const [preview, setPreview] = useState<TextPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -170,10 +173,31 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
     viewport.scrollTop = Math.max(0, context.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop - 12);
   }, [preview, targetLine, showSource]);
   const language = languageFor(selected || "", preview?.text || "");
+  const fileSize = (size: number) => size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
+  const toggleFolder = (path: string) => setOpenFolders((current) => {
+    const next = new Set(current);
+    if (next.has(path)) next.delete(path); else next.add(path);
+    return next;
+  });
+  // Folders and files indent by depth through one CSS variable; the tree starts with the
+  // selected file's folders open and everything else folded.
+  const renderTree = (nodes: FileTreeNode[], depth: number): ReactNode => nodes.map((node) => {
+    const indent = { "--tree-depth": depth } as CSSProperties;
+    if (node.kind === "folder") {
+      const open = openFolders.has(node.path);
+      return <div className="bundle-folder" key={`folder:${node.path}`}>
+        <button type="button" className="bundle-folder-row" style={indent} aria-expanded={open} aria-label={`${node.name}, ${node.fileCount} ${node.fileCount === 1 ? "file" : "files"}`} title={node.path} onClick={() => toggleFolder(node.path)}>
+          <ChevronRight size={14} aria-hidden="true" className={open ? "open" : ""} /><Folder size={15} aria-hidden="true" /><span>{node.name}</span><small>{node.fileCount.toLocaleString()}</small>
+        </button>
+        {open && renderTree(node.children, depth + 1)}
+      </div>;
+    }
+    return <div className="bundle-file-entry" key={node.path}><button className={`bundle-file-row ${selected === node.path ? "selected" : ""}`} style={indent} title={node.path} onClick={() => { setSourcePath(null); setSelected(node.path); }}><FileCode2 size={15} /><span>{node.name}</span><small>{fileSize(node.size)}</small></button><ObjectMenu label={`Actions for file ${node.path}`} actions={fileActions(node.path)} /></div>;
+  });
   const title = kind === "items" ? "Source YAML" : kind === "environment" ? "Configuration overlay" : kind === "declarations" ? "Declaring YAML" : "Bundle files";
   return <Modal title={title} hideTitle size="full" dismissOnOutside className={`bundle-browser ${kind === "items" || kind === "declarations" ? "source-file-browser" : ""}`} onClose={onClose}>
     <div className="bundle-browser-heading"><div><h2>{title}</h2><div className="path-with-copy"><span className="path-value source-path" title={files.root}>{files.root}</span>{kind !== "declarations" && <CopyPathButton path={files.root} label={kind === "items" ? "Copy source folder path" : "Copy bundle path"} onError={onError} />}</div></div><button className="icon-button" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={18} /></button></div>
-    <div className="bundle-browser-layout"><nav className="bundle-file-list" aria-label="Bundle file list">{files.files.length ? files.files.map((file) => <div className="bundle-file-entry" key={file.path}><button className={`bundle-file-row ${selected === file.path ? "selected" : ""}`} onClick={() => { setSourcePath(null); setSelected(file.path); }}><FileCode2 size={15} /><span title={file.path}>{file.path}</span><small>{file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KB`}</small></button><ObjectMenu label={`Actions for file ${file.path}`} actions={fileActions(file.path)} /></div>) : <p className="muted">This bundle has no files yet.</p>}{files.truncated && <p className="muted">Showing the first 500 files.</p>}</nav>
+    <div className="bundle-browser-layout"><nav className="bundle-file-list" aria-label="Bundle file list">{files.files.length ? renderTree(tree, 0) : <p className="muted">This bundle has no files yet.</p>}{files.truncated && <p className="muted">Showing the first {files.files.length.toLocaleString()} files.</p>}</nav>
       <div className="bundle-preview"><div className="bundle-preview-heading"><div className="path-with-copy bundle-selected-path"><strong className="path-value" title={selected || undefined}>{selected ? kind === "declarations" ? selected.split("/").slice(1).join("/") : selected : "Choose a file"}</strong>{selected && kind !== "declarations" && <CopyPathButton path={`${files.root.replace(/[\\/]$/, "")}/${selected}`} label="Copy file path" onError={onError} />}</div>{selected && <><ActionShortcut action={fileActions(selected).find((action) => action.id === "save")!} /><ObjectMenu label={`Actions for file ${selected}`} actions={fileActions(selected)} /></>}</div>
         {exporting && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}
         {savedExport && <SavedPath path={savedExport} onError={onError} className="bundle-preview-message" />}

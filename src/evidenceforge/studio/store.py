@@ -156,7 +156,7 @@ class SavedView(BaseModel):
     publisher: str = Field(default="", max_length=80)
     version: str = Field(default="", max_length=80)
     pack_source: Literal["", "bundled", "workspace"] = ""
-    sort: Literal["name", "updated", "project"] = "name"
+    sort: Literal["name", "updated", "project", "publisher"] = "name"
     expanded_groups: list[str] = Field(default_factory=list, max_length=1000)
 
 
@@ -168,7 +168,8 @@ class LibraryView(BaseModel):
     search: str = Field(default="", max_length=256)
     project_id: str | None = None
     show_hidden: bool = False
-    sort: Literal["name", "updated", "project"] = "name"
+    # Libraries open grouped; `publisher` grouping applies to packs only.
+    sort: Literal["name", "updated", "project", "publisher"] = "project"
     pack_kind: Literal["packs", "industry_pack", "organization_pack"] = "packs"
     publisher: str = Field(default="", max_length=80)
     version: str = Field(default="", max_length=80)
@@ -183,7 +184,7 @@ class LibraryPreferences(BaseModel):
 
     remember_view: bool = True
     scenarios: LibraryView = Field(default_factory=LibraryView)
-    packs: LibraryView = Field(default_factory=LibraryView)
+    packs: LibraryView = Field(default_factory=lambda: LibraryView(sort="publisher"))
 
 
 class StudioStore:

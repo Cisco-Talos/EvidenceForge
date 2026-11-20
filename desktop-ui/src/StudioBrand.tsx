@@ -7,15 +7,19 @@ export function BrandLogo({ className }: { className: string }) {
 }
 
 /** The sidebar brand (compact) or the larger About logo; both use the full EvidenceForge artwork. */
-export function StudioBrand({ className = "brand", compact = false }: { className?: string; compact?: boolean }) {
+export function StudioBrand({ className = "brand", compact = false, onHome }: { className?: string; compact?: boolean; onHome?: () => void }) {
   if (compact) {
     // The full docs/logos artwork, sized to stay legible without crowding the navigation; narrow
     // windows switch to the high-resolution anvil mark alone.
-    return <div className={`${className} brand-compact`}>
+    const artwork = <>
       <BrandLogo className="brand-logo-sidebar" />
       <img className="brand-mark" src="/brand/mark-256.png" alt="" />
       <small>STUDIO</small>
-    </div>;
+    </>;
+    // In the sidebar the logo is the conventional "home" link: it opens Scenarios.
+    return onHome
+      ? <button type="button" className={`${className} brand-compact brand-home`} aria-label="Go to Scenarios" title="Scenarios" onClick={onHome}>{artwork}</button>
+      : <div className={`${className} brand-compact`}>{artwork}</div>;
   }
   return <div className={className}>
     <BrandLogo className="brand-logo" />

@@ -1,10 +1,17 @@
 import type { DragEvent, ReactNode } from "react";
-import { ArrowDown, Folder } from "lucide-react";
+import { ArrowDown, ChevronRight, Folder, UserRound } from "lucide-react";
 
-/** Library ordering. `project` groups rows under static project headings. */
-export type LibrarySort = "name" | "updated" | "project";
+/**
+ * Library ordering. `project` and `publisher` group rows under collapsible headings; versions of
+ * one artifact always stay folded into their family row inside whichever group holds them.
+ */
+export type LibrarySort = "name" | "updated" | "project" | "publisher";
 
-export const sortLabels: Record<LibrarySort, string> = { name: "Name A–Z", updated: "Recently updated", project: "Group by project" };
+export const sortLabels: Record<LibrarySort, string> = { name: "Name A–Z", updated: "Recently updated", project: "Group by project", publisher: "Group by publisher" };
+
+/** Scenario libraries offer project grouping; pack libraries can also group by publisher. */
+export const scenarioSortOptions: LibrarySort[] = ["name", "updated", "project"];
+export const packSortOptions: LibrarySort[] = ["name", "updated", "project", "publisher"];
 
 export interface LibraryColumn {
   /** Cell class suffix: header and row cells share `col-${key}` so responsive rules hide both. */
@@ -31,30 +38,52 @@ export function LibraryTable({ label, className, columns, sort, onSort, children
   </div>;
 }
 
-/** A static group heading inside a grouped library; also a drop target for moving rows. */
-export function LibraryGroupHeading({ name, count, dropTarget = false, onDragOver, onDragLeave, onDrop }: {
-  name: string; count: number; dropTarget?: boolean;
+/**
+ * A collapsible group heading inside a grouped library. Project headings are also drop targets for
+ * moving rows; groups start expanded so items show immediately.
+ */
+export function LibraryGroupHeading({ name, count, collapsed = false, onToggle, kind = "project", dropTarget = false, onDragOver, onDragLeave, onDrop }: {
+  name: string; count: number; collapsed?: boolean; onToggle?: () => void; kind?: "project" | "publisher"; dropTarget?: boolean;
   onDragOver?: (event: DragEvent<HTMLElement>) => void; onDragLeave?: (event: DragEvent<HTMLElement>) => void; onDrop?: (event: DragEvent<HTMLElement>) => void;
 }) {
+  const icon = kind === "publisher" ? <UserRound size={14} aria-hidden="true" /> : <Folder size={14} aria-hidden="true" />;
   return <li className={`library-group-heading ${dropTarget ? "drop-target" : ""}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
-    <Folder size={14} aria-hidden="true" /><strong>{name}</strong><span>{count}</span>
+    {onToggle
+      ? <button type="button" className="library-group-toggle" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} ${name}`} onClick={onToggle}>
+        <ChevronRight size={14} aria-hidden="true" className={collapsed ? "" : "open"} />{icon}<strong>{name}</strong><span>{count}</span>
+      </button>
+      : <>{icon}<strong>{name}</strong><span>{count}</span></>}
   </li>;
 }
 
-/** Order rows by the library sort; `project` keeps name order within each project. */
-export function sortRows<T extends { name: string; id: string; updated: number; project: string }>(rows: T[], sort: LibrarySort): T[] {
-  return [...rows].sort((a, b) => (sort === "updated" ? b.updated - a.updated : sort === "project" ? a.project.localeCompare(b.project) : 0)
-    || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id));
+/** Stable key for a group's collapsed state; separate per library and grouping mode. */
+export function libraryGroupKey(library: string, sort: LibrarySort, groupId: string): string {
+  return `${library}:${sort}:${groupId}`;
 }
 
-/** Split sorted rows into project groups, preserving order; returns one unnamed group when not grouping. */
-export function groupRows<T extends { groupId: string; project: string }>(rows: T[], sort: LibrarySort): { id: string; name: string; rows: T[] }[] {
-  if (sort !== "project") return [{ id: "", name: "", rows }];
+interface GroupableRow { name: string; id: string; updated: number; project: string; groupId: string; publisher?: string }
+
+const UNKNOWN_PUBLISHER = "Unknown publisher";
+const compareNames = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+
+/** Order rows by the library sort; grouped sorts keep name order within each group. */
+export function sortRows<T extends Omit<GroupableRow, "groupId"> & { groupId?: string }>(rows: T[], sort: LibrarySort): T[] {
+  return [...rows].sort((a, b) => (sort === "updated" ? b.updated - a.updated
+    : sort === "project" ? compareNames(a.project, b.project)
+    : sort === "publisher" ? compareNames(a.publisher || UNKNOWN_PUBLISHER, b.publisher || UNKNOWN_PUBLISHER) : 0)
+    || compareNames(a.name, b.name) || a.id.localeCompare(b.id));
+}
+
+/** Split sorted rows into project or publisher groups, preserving order; one unnamed group otherwise. */
+export function groupRows<T extends GroupableRow>(rows: T[], sort: LibrarySort): { id: string; name: string; rows: T[] }[] {
+  if (sort !== "project" && sort !== "publisher") return [{ id: "", name: "", rows }];
   const groups = new Map<string, { id: string; name: string; rows: T[] }>();
   for (const row of rows) {
-    const group = groups.get(row.groupId) || { id: row.groupId, name: row.project, rows: [] };
+    const id = sort === "publisher" ? `publisher:${row.publisher || UNKNOWN_PUBLISHER}` : row.groupId;
+    const name = sort === "publisher" ? row.publisher || UNKNOWN_PUBLISHER : row.project;
+    const group = groups.get(id) || { id, name, rows: [] };
     group.rows.push(row);
-    groups.set(row.groupId, group);
+    groups.set(id, group);
   }
   return [...groups.values()];
 }

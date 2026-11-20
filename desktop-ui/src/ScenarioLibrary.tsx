@@ -12,7 +12,7 @@ import { SearchExcerpts } from "./SearchExcerpts";
 import { generationIsCurrent } from "./ScenarioStates";
 import { currentPrediction } from "./ResourceForecastPanel";
 import { StatusPill } from "./StatusPill";
-import { groupRows, LibraryGroupHeading, LibraryTable, sortRows, type LibraryColumn, type LibrarySort } from "./LibraryTable";
+import { groupRows, LibraryGroupHeading, libraryGroupKey, LibraryTable, sortRows, type LibraryColumn, type LibrarySort } from "./LibraryTable";
 
 export type ScenarioSort = LibrarySort;
 
@@ -21,12 +21,14 @@ const columns: LibraryColumn[] = [
   { key: "status", label: "Status" }, { key: "size", label: "Size" }, { key: "updated", label: "Updated", sort: "updated" }, { key: "actions", label: "" },
 ];
 
-export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, expandedFamilies, onToggleFamily, onOpen, onProperties, onOpenDraft, onClone,
+export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, expandedFamilies, onToggleFamily, collapsedGroups = [], onToggleGroup, onOpen, onProperties, onOpenDraft, onClone,
   onExport, onHide, onDelete, onMove, onMoveDraft, onNewProject, onRenameDraft,
   onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd, dropTargetId, onProjectDragOver, onProjectDragLeave, onProjectDrop }: {
   dropTargetId: string | null;
   /** Open family keys; a family row lists its other versions and drafts beneath it. */
   expandedFamilies: string[]; onToggleFamily: (key: string, open: boolean) => void;
+  /** Collapsed project group keys (see `libraryGroupKey`). */
+  collapsedGroups?: string[]; onToggleGroup?: (key: string, collapsed: boolean) => void;
   onProjectDragOver: (event: DragEvent<HTMLElement>, projectId: string | null) => void;
   onProjectDragLeave: (event: DragEvent<HTMLElement>) => void;
   onProjectDrop: (event: DragEvent<HTMLElement>, projectId: string | null) => void;
@@ -102,12 +104,17 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onSort, ex
     {row.family && expandedFamilies.includes(row.family.key) && row.family.others.map((other) => renderRow(itemRow(other, null, true)))}
   </Fragment>);
   return <LibraryTable label="Scenario library" className="scenario-table" columns={columns} sort={sort} onSort={onSort}>
-    {groupRows(rows, sort).map((group) => <Fragment key={group.id || "all"}>
-      {group.name && <LibraryGroupHeading name={group.name} count={group.rows.length} dropTarget={dropTargetId === group.id}
-        onDragOver={(event) => onProjectDragOver(event, group.id === "ungrouped" ? null : group.id)} onDragLeave={onProjectDragLeave}
-        onDrop={(event) => onProjectDrop(event, group.id === "ungrouped" ? null : group.id)} />}
-      {renderRows(group.rows)}
-    </Fragment>)}
+    {groupRows(rows, sort).map((group) => {
+      const key = libraryGroupKey("scenarios", sort, group.id);
+      const collapsed = collapsedGroups.includes(key);
+      return <Fragment key={group.id || "all"}>
+        {group.name && <LibraryGroupHeading name={group.name} count={group.rows.length} dropTarget={dropTargetId === group.id}
+          collapsed={collapsed} onToggle={onToggleGroup ? () => onToggleGroup(key, !collapsed) : undefined}
+          onDragOver={(event) => onProjectDragOver(event, group.id === "ungrouped" ? null : group.id)} onDragLeave={onProjectDragLeave}
+          onDrop={(event) => onProjectDrop(event, group.id === "ungrouped" ? null : group.id)} />}
+        {!collapsed && renderRows(group.rows)}
+      </Fragment>;
+    })}
   </LibraryTable>;
 }
 

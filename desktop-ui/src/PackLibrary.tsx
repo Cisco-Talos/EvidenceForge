@@ -8,7 +8,7 @@ import { CatalogObjectMenu, projectAssignmentAction } from "./CatalogObjectMenu"
 import { DraftObjectMenu } from "./DraftObjectMenu";
 import type { CatalogItem, Conversation, Project } from "./api";
 import { formatTime } from "./components";
-import { groupRows, LibraryGroupHeading, LibraryTable, sortRows, type LibraryColumn, type LibrarySort } from "./LibraryTable";
+import { groupRows, LibraryGroupHeading, libraryGroupKey, LibraryTable, sortRows, type LibraryColumn, type LibrarySort } from "./LibraryTable";
 
 const typeLabels: Record<string, string> = { industry_pack: "Industry", organization_pack: "Organization" };
 
@@ -22,11 +22,13 @@ const columns: LibraryColumn[] = [
   { key: "version", label: "Version" }, { key: "project", label: "Project", sort: "project" }, { key: "updated", label: "Updated", sort: "updated" }, { key: "actions", label: "" },
 ];
 
-export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sort, onSort, expandedFamilies, onToggleFamily, dropTargetId, onProjectDragOver, onProjectDragLeave, onProjectDrop, onOpen, onProperties, onOpenDraft, onClone, onExport, onHide, onMove, onMoveDraft, onNewProject, onDelete, onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd }: {
+export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sort, onSort, expandedFamilies, onToggleFamily, collapsedGroups = [], onToggleGroup, dropTargetId, onProjectDragOver, onProjectDragLeave, onProjectDrop, onOpen, onProperties, onOpenDraft, onClone, onExport, onHide, onMove, onMoveDraft, onNewProject, onDelete, onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd }: {
   items: CatalogItem[]; drafts: Conversation[]; projects: Project[]; busy: boolean;
   artifactGroups?: ArtifactGroups; sort: LibrarySort; onSort: (sort: LibrarySort) => void;
   /** Open family keys; a family row lists its other versions and drafts beneath it. */
   expandedFamilies: string[]; onToggleFamily: (key: string, open: boolean) => void;
+  /** Collapsed project/publisher group keys (see `libraryGroupKey`). */
+  collapsedGroups?: string[]; onToggleGroup?: (key: string, collapsed: boolean) => void;
   dropTargetId: string | null;
   onProjectDragOver: (event: DragEvent<HTMLElement>, projectId: string | null) => void;
   onProjectDragLeave: (event: DragEvent<HTMLElement>) => void;
@@ -40,10 +42,11 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sor
 }) {
   const projectName = (id: string | null) => projects.find((project) => project.id === id)?.name || "Ungrouped";
   const groupId = (id: string | null) => projects.some((project) => project.id === id) ? id! : "ungrouped";
-  type Row = { id: string; name: string; updated: number; project: string; groupId: string; item: CatalogItem | null; draft: Conversation | null; family: ArtifactFamily | null };
+  type Row = { id: string; name: string; updated: number; project: string; groupId: string; publisher: string; item: CatalogItem | null; draft: Conversation | null; family: ArtifactFamily | null };
+  const publisherName = (item: CatalogItem) => item.publisher_display_name || item.publisher || "Unknown publisher";
   const rows = sortRows<Row>([
-    ...artifactFamilies(items, artifactGroups).map((family): Row => ({ id: family.primary.id, name: artifactTitle(family.primary), updated: Math.max(family.primary.modified_at, ...family.others.map((other) => other.modified_at)), project: projectName(family.primary.project_id), groupId: groupId(family.primary.project_id), item: family.primary, draft: null, family })),
-    ...drafts.map((draft): Row => ({ id: draft.id, name: draftTitle(draft), updated: draft.updated_at, project: projectName(draft.draft_project_id), groupId: groupId(draft.draft_project_id), item: null, draft, family: null })),
+    ...artifactFamilies(items, artifactGroups).map((family): Row => ({ id: family.primary.id, name: artifactTitle(family.primary), updated: Math.max(family.primary.modified_at, ...family.others.map((other) => other.modified_at)), publisher: publisherName(family.primary), project: projectName(family.primary.project_id), groupId: groupId(family.primary.project_id), item: family.primary, draft: null, family })),
+    ...drafts.map((draft): Row => ({ id: draft.id, name: draftTitle(draft), updated: draft.updated_at, publisher: "Unpublished drafts", project: projectName(draft.draft_project_id), groupId: groupId(draft.draft_project_id), item: null, draft, family: null })),
   ], sort);
   const renderDraft = (draft: Conversation) => <li className="pack-row library-row-grid pack-draft" key={draft.id} draggable onDragStart={(event) => onDraftDragStart(event, draft)} onDragEnd={onDragEnd}>
     <span className="pack-drag-handle col-drag" aria-hidden="true"><GripVertical size={14} /></span>
@@ -87,11 +90,18 @@ export function PackLibrary({ items, drafts, projects, busy, artifactGroups, sor
     </Fragment>;
   });
   return <LibraryTable label="Pack library" className="pack-table" columns={columns} sort={sort} onSort={onSort}>
-    {groupRows(rows, sort).map((group) => <Fragment key={group.id || "all"}>
-      {group.name && <LibraryGroupHeading name={group.name} count={group.rows.length} dropTarget={dropTargetId === group.id}
-        onDragOver={(event) => onProjectDragOver(event, group.id === "ungrouped" ? null : group.id)} onDragLeave={onProjectDragLeave}
-        onDrop={(event) => onProjectDrop(event, group.id === "ungrouped" ? null : group.id)} />}
-      {renderRows(group.rows)}
-    </Fragment>)}
+    {groupRows(rows, sort).map((group) => {
+      const key = libraryGroupKey("packs", sort, group.id);
+      const collapsed = collapsedGroups.includes(key);
+      const projectGroup = sort === "project";
+      return <Fragment key={group.id || "all"}>
+        {group.name && <LibraryGroupHeading name={group.name} count={group.rows.length} kind={projectGroup ? "project" : "publisher"}
+          collapsed={collapsed} onToggle={onToggleGroup ? () => onToggleGroup(key, !collapsed) : undefined}
+          dropTarget={projectGroup && dropTargetId === group.id}
+          onDragOver={projectGroup ? (event) => onProjectDragOver(event, group.id === "ungrouped" ? null : group.id) : undefined} onDragLeave={projectGroup ? onProjectDragLeave : undefined}
+          onDrop={projectGroup ? (event) => onProjectDrop(event, group.id === "ungrouped" ? null : group.id) : undefined} />}
+        {!collapsed && renderRows(group.rows)}
+      </Fragment>;
+    })}
   </LibraryTable>;
 }
