@@ -2236,6 +2236,31 @@ output:
         assert not workspace.exists()
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    @patch("evidenceforge.cli.commands.IncrementalCheckpointStore.recover")
+    def test_generate_incomplete_workspace_prompt_accepts_any_case_and_reasks(
+        self,
+        mock_recover,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        workspace = tmp_path / ".eforge-generation"
+        workspace.mkdir(mode=0o700)
+        mock_recover.return_value = Mock()
+        _configure_mock_generation(mock_engine_class)
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+            input="later\nABORT\n",
+        )
+
+        assert result.exit_code == EXIT_ABORTED, result.stdout
+        assert "'later' is not one of resume, overwrite, abort" in result.stdout
+        assert not mock_engine_class.called
+        assert workspace.exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_prompts_on_existing_artifacts_manifest(
         self, mock_engine_class, scenarios_dir, tmp_path
     ):

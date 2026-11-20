@@ -130,11 +130,43 @@ def test_embedded_installer_matrix_selector_is_valid_python() -> None:
     assert "has_linux=" in script
 
 
+DOCS_ONLY_SKIP = "needs.inputs.outputs.docs_only != 'true'"
+
+
+def test_docs_only_shortcut_is_limited_to_own_unforced_pull_requests() -> None:
+    jobs = workflow("ci.yml")["jobs"]
+    identity = next(step for step in jobs["inputs"]["steps"] if step.get("id") == "identity")
+    guard = (
+        "github.event_name == 'pull_request' && github.workflow == 'CI' && !inputs.force-tests "
+        "&& !inputs.release-coverage && '--compare HEAD^1'"
+    )
+    assert guard in identity["run"]
+    # Every expensive gate skips together, so Required CI never sees a partial run.
+    for name in (
+        "lint",
+        "tests",
+        "studio",
+        "studio-state-recovery",
+        "windows-checkpoint-durability",
+    ):
+        assert "inputs" in jobs[name]["needs"]
+        assert jobs[name]["if"] == DOCS_ONLY_SKIP
+    steps = jobs["ci-required"]["steps"]
+    accept = next(step for step in steps if step["name"] == "Accept a docs-only change")
+    assert (
+        accept["if"]
+        == "needs.inputs.result == 'success' && needs.inputs.outputs.docs_only == 'true'"
+    )
+    assert all(step["if"] == DOCS_ONLY_SKIP for step in steps if step is not accept)
+
+
 def test_windows_preview_keeps_normal_integration_gates() -> None:
     ci = workflow("ci.yml")
     assert "ready_for_review" in ci[True]["pull_request"]["types"]
-    for name in ("inputs", "lint", "studio-state-recovery"):
-        assert "if" not in ci["jobs"][name]
+    # Gates stay unconditional except for the narrow docs-only pull request shortcut.
+    assert "if" not in ci["jobs"]["inputs"]
+    for name in ("lint", "studio-state-recovery"):
+        assert ci["jobs"][name]["if"] == DOCS_ONLY_SKIP
     assert ci["jobs"]["ci-required"]["if"] == "always()"
     preview = workflow("windows-preview.yml")
     assert "push" not in preview[True]

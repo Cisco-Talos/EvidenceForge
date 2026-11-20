@@ -402,3 +402,25 @@ def test_shard_layout_changes_the_result_fingerprint(
     monkeypatch.setenv("CI_SHARD_COUNT", "5")
     five = ci.fingerprint(evidence.check_id, "slow")
     assert len({unsharded, four, five}) == 3
+
+
+def test_unchanged_source_compares_testable_digests(monkeypatch: pytest.MonkeyPatch) -> None:
+    digests = {"HEAD^1": "a" * 64, "other": "b" * 64}
+    monkeypatch.setattr(ci, "source_digest", lambda reference="HEAD": digests[reference])
+
+    assert ci.unchanged_source("HEAD^1", "a" * 64)
+    assert not ci.unchanged_source("other", "a" * 64)
+
+
+def test_unchanged_source_treats_an_unknown_ref_as_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(reference: str = "HEAD") -> str:
+        raise subprocess.CalledProcessError(128, ["git", "ls-tree", reference])
+
+    monkeypatch.setattr(ci, "source_digest", missing)
+
+    assert not ci.unchanged_source("HEAD^1", "a" * 64)
+
+
+def test_source_digest_ignores_only_excluded_docs() -> None:
+    assert "CHANGELOG.md" in ci.IGNORED_DOCS and "TODO.md" in ci.IGNORED_DOCS
+    assert "docs/studio.md" not in ci.IGNORED_DOCS
