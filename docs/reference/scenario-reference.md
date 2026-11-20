@@ -125,7 +125,7 @@ environment: ...
 personas: [...]               # Optional
 time_window: ...
 baseline_activity: ...
-logon_grace_period: "30m"    # Optional (default: "30m") — suppresses "no prior logon" warnings within this duration of time_window.start
+logon_grace_period: "30m"    # Optional (default: "30m") — suppresses "no prior logon" process warnings within this duration of time_window.start; never excuses an unowned logoff
 observation_profile: complete # Optional (default: complete) — named source-observation profile
 storyline: [...]              # Optional
 red_herrings: [...]          # Optional: suspicious-but-benign events for analyst training
@@ -1213,7 +1213,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `process_ref`, `parent_ref`, `launch_method` (finder on Mac), `outcome` (success/denied/exec_failed/policy_refused), `supplementary` (auto/none) |
 | `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN; Type 9 uses the host's active/assigned desktop user as the local caller and the event actor as outbound credentials | | `logon_type` (default 3), `source_ip` (ignored for local Type 9) |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3), `target_username` |
-| `logoff` | 4634, eCAR LOGOUT | | |
+| `logoff` | 4634, eCAR LOGOUT; closes only a session opened by an earlier storyline action for the same actor/system, never a baseline or warm-up session (author a warm-up `logon` to close a pre-window session) | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http/files when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname`, `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent`, `referrer`, `request_body_len`, `request_multipart`, `response_body_len`, `response_multipart`, `orig_bytes`, `resp_bytes`, `conn_state`, `ids_alerts` |
 | `smb_activity` | SMB transport/auth/session/tree/file lifecycle; Zeek SMB/files, platform-eligible Windows or Samba audit, eCAR | `operation` plus its share/client location shape | `purpose`, `batch`, `outcome`, `path_style`, `mapping`, `client_access`, `auth_protocol`, `smb_principal`, external `client`, `ids_alerts` |
 | `ssh_session` | canonical SSH connection (Zeek conn) + platform receiver evidence + EDR/eCAR | | `source_ip`, `ids_alerts`, `pty` (qualified Mac receiver) |

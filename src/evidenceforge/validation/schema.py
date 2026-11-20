@@ -4119,6 +4119,7 @@ class ScenarioValidator:
         _LOGON_TYPES = {"logon", "ssh_session", "rdp_session"}
         logons: dict[tuple[str, str], int] = {}  # (actor, system) → first idx
         created_accounts: set[str] = set()
+        unowned_logoffs = self._validate_storyline_logoff_owners(valid_actors)
 
         for idx, event in enumerate(self.scenario.storyline):
             actor = event.actor
@@ -4201,6 +4202,7 @@ class ScenarioValidator:
 
             if (
                 has_logoff
+                and idx not in unowned_logoffs
                 and not has_logon
                 and key not in logons
                 and not skip_actor
@@ -4216,6 +4218,84 @@ class ScenarioValidator:
                         suggestion=("Add a logon event before this logoff event"),
                     )
                 )
+
+    def _validate_storyline_logoff_owners(self, valid_actors: set[str]) -> set[int]:
+        """Reject explicit logoffs that no earlier storyline action can own.
+
+        At generation time an explicit ``logoff`` closes only a session that an
+        earlier storyline action recorded for the same actor and system: a paired
+        ``logon``/``ssh_session``/``rdp_session`` or a session a storyline process
+        opened. Baseline, warm-up and other pre-existing sessions are never
+        closed, so a logoff with no earlier storyline action for its actor/system
+        cannot execute and would abort generation. The ``logon_grace_period`` does
+        not apply: it only covers processes that may run in an assumed session.
+
+        Any earlier non-logoff action for the pair is treated as a possible owner,
+        so this check reports only logoffs that are certain to fail.
+
+        Args:
+            valid_actors: Actor names whose references are otherwise valid.
+
+        Returns:
+            Storyline indexes reported here, so weaker warnings can skip them.
+        """
+        storyline = self.scenario.storyline or []
+        hostnames = {hostname.casefold() for hostname in self.hostnames}
+        actors = {actor.casefold() for actor in valid_actors}
+        # (actor, system) -> ordering keys of events that can open a session.
+        owners: dict[tuple[str, str], list[tuple[float | None, int]]] = {}
+        for idx, event in enumerate(storyline):
+            if event.actor.casefold() not in actors or event.system.casefold() not in hostnames:
+                continue
+            if any(spec.type != "logoff" for spec in event.events):
+                key = (event.actor.casefold(), event.system.casefold())
+                owners.setdefault(key, []).append((self._resolve_event_time(event), idx))
+
+        def _precedes(
+            candidate: tuple[float | None, int], logoff: tuple[float | None, int]
+        ) -> bool:
+            candidate_secs, candidate_idx = candidate
+            logoff_secs, logoff_idx = logoff
+            if candidate_secs is None or logoff_secs is None:
+                return candidate_idx < logoff_idx
+            return (candidate_secs, candidate_idx) < (logoff_secs, logoff_idx)
+
+        reported: set[int] = set()
+        for idx, event in enumerate(storyline):
+            if event.actor.casefold() not in actors or event.system.casefold() not in hostnames:
+                continue
+            for spec_index, spec in enumerate(event.events):
+                if spec.type != "logoff":
+                    continue
+                if any(prior.type != "logoff" for prior in event.events[:spec_index]):
+                    continue
+                key = (event.actor.casefold(), event.system.casefold())
+                position = (self._resolve_event_time(event), idx)
+                if any(
+                    _precedes(candidate, position)
+                    for candidate in owners.get(key, [])
+                    if candidate[1] != idx
+                ):
+                    continue
+                reported.add(idx)
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.events.{spec_index}",
+                        message=(
+                            f"[{event.id}] Logoff for '{event.actor}' on '{event.system}' has "
+                            "no earlier storyline session to close; explicit logoffs never "
+                            "close baseline, warm-up or other pre-existing sessions, so "
+                            "generation would fail with no_matching_session"
+                        ),
+                        suggestion=(
+                            "Add an earlier storyline logon, ssh_session or rdp_session for "
+                            "this actor and system (an absolute time inside time_window.warmup "
+                            "models a pre-window session), or remove this logoff"
+                        ),
+                    )
+                )
+        return reported
 
     def _validate_storyline_event_ids(self) -> None:
         """Check that all storyline events have unique IDs."""

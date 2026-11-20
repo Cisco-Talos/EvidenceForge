@@ -3290,8 +3290,8 @@ class TestStorylineCausalOrder:
         warnings = [i for i in issues if "no prior logon" in i.message.lower()]
         assert len(warnings) == 0
 
-    def test_logoff_without_logon_warning(self):
-        """Logoff with no prior logon should warn."""
+    def test_logoff_without_logon_error(self):
+        """Logoff with no prior storyline session is an error, not a weak warning."""
         scenario = Scenario(
             version="1.0",
             name="test",
@@ -3324,7 +3324,130 @@ class TestStorylineCausalOrder:
         issues = validator.validate()
 
         warnings = [i for i in issues if "no prior logon" in i.message.lower()]
-        assert len(warnings) >= 1
+        assert len(warnings) == 0
+        errors = [i for i in issues if "no earlier storyline session" in i.message]
+        assert [i.severity for i in errors] == ["error"]
+
+    @staticmethod
+    def _logoff_owner_scenario(storyline: list[StorylineEvent]) -> Scenario:
+        return Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(
+                        username="maya.ross",
+                        full_name="Maya Ross",
+                        email="maya@test.com",
+                        primary_system="MAC-01",
+                    )
+                ],
+                systems=[
+                    System(
+                        hostname="MAC-01",
+                        ip="10.0.0.41",
+                        os="macOS 27",
+                        type="workstation",
+                        assigned_user="maya.ross",
+                    ),
+                ],
+            ),
+            storyline=storyline,
+            time_window=TimeWindow(
+                start=datetime(2026, 11, 2, 13, 0, 0), duration="2h", warmup="1h"
+            ),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            logon_grace_period="30m",
+        )
+
+    def test_validate_logoff_without_storyline_session_in_grace_period_errors(self):
+        """A leading logoff cannot close the assigned user's baseline session."""
+        scenario = self._logoff_owner_scenario(
+            [
+                StorylineEvent(
+                    id="mac-1-warmup-close",
+                    time="+10s",
+                    actor="maya.ross",
+                    system="MAC-01",
+                    activity="End the prior local session",
+                    events=[{"type": "logoff"}],
+                ),
+                StorylineEvent(
+                    id="mac-1-login",
+                    time="+3m",
+                    actor="maya.ross",
+                    system="MAC-01",
+                    activity="Fresh login",
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
+            ]
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        errors = [i for i in issues if "no earlier storyline session" in i.message]
+        assert [i.severity for i in errors] == ["error"]
+        assert errors[0].field_path == "storyline.0.events.0"
+        assert "[mac-1-warmup-close]" in errors[0].message
+        assert "no_matching_session" in errors[0].message
+
+    def test_validate_logoff_after_pre_window_storyline_logon_passes(self):
+        """A warm-up storyline logon listed later in the file still owns the logoff."""
+        scenario = self._logoff_owner_scenario(
+            [
+                StorylineEvent(
+                    id="mac-1-warmup-close",
+                    time="+30s",
+                    actor="maya.ross",
+                    system="MAC-01",
+                    activity="End the prior local session",
+                    events=[{"type": "logoff"}],
+                ),
+                StorylineEvent(
+                    id="mac-1-setup-session",
+                    time="2026-11-02T12:50:00Z",
+                    actor="maya.ross",
+                    system="MAC-01",
+                    activity="Pre-window session",
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
+            ]
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert not [i for i in issues if "no earlier storyline session" in i.message]
+
+    def test_validate_logoff_after_storyline_process_passes(self):
+        """A storyline process can open the session a later logoff closes."""
+        scenario = self._logoff_owner_scenario(
+            [
+                StorylineEvent(
+                    id="mac-1-shell",
+                    time="+5m",
+                    actor="maya.ross",
+                    system="MAC-01",
+                    activity="Shell",
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": "/bin/zsh",
+                            "command_line": "/bin/zsh",
+                        },
+                        {"type": "logoff"},
+                    ],
+                ),
+            ]
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert not [i for i in issues if "no earlier storyline session" in i.message]
 
     def test_account_deleted_without_created_warning(self):
         """Account deletion without prior creation should warn."""
