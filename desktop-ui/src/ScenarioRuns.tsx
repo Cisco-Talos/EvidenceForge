@@ -4,7 +4,7 @@ import type { CatalogItem, ImportedBundle, StudioApi, StudioJob, StudioSnapshot 
 import { JobActionContext } from "./JobActionContext";
 import { ImportedBundleRow } from "./BundleLibrary";
 import { JobCard } from "./components";
-import { generationInputs, OperationStatus } from "./ScenarioStates";
+import { generationInputs, inputsNeedAttention, OperationStatus } from "./ScenarioStates";
 import { ScorecardPanel } from "./ScorecardPanel";
 import { latestJob, latestRunState, latestSavedEvaluation, orderedBundles, scoringSummary } from "./workspaceSummaries";
 
@@ -42,7 +42,8 @@ export function ScenarioRuns({ jobs, imports, sizes, item, snapshot, api, focusJ
     const newest = latestJob(linked);
     const saved = latestSavedEvaluation(linked);
     const inputs = generationInputs(generation, item, snapshot);
-    const current = inputs.state === "current";
+    // A run of another release keeps its version badge and saved score without a warning.
+    const current = !inputsNeedAttention(inputs);
     const outcome = scoringSummary(generation, newest, item, snapshot);
     return <JobCard key={entry.id} idPrefix="workspace-run" job={generation} name={item.name} grouped latest={generation.id === newestRun?.id} sizeBytes={sizes[entry.id]} highlighted={highlighted === generation.id} api={api} onError={onError} onChanged={onChanged}
       summaryExtra={<span className="run-score-summary"><span><OperationStatus status={latestRunState("Evaluation", newest, current)} focusable={false} /><strong>{outcome.headline}</strong></span>{!current && <small className="summary-inputs" title={inputs.detail}><TriangleAlert size={12} aria-hidden="true" />{inputs.label}</small>}</span>}

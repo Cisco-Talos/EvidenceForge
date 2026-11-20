@@ -54,16 +54,42 @@ function validationState(item: CatalogItem, record?: ValidationRecord, dependenc
   return { label: "Validation", state: "success", detail: "Current revision passed validation." };
 }
 
-export interface RunInputStatus { state: "current" | "changed" | "unverified"; label: string; detail: string }
+/**
+ * How a run's captured inputs relate to the current scenario. `version` is a run of a different
+ * published release: valid for that release and labeled with it, but not a run of this revision.
+ */
+export interface RunInputStatus { state: "current" | "version" | "changed" | "unverified"; label: string; detail: string }
 
-/** Missing legacy provenance cannot establish that inputs actually changed. */
+/** Only changed or unverifiable inputs warn; a run of another release just carries its version. */
+export function inputsNeedAttention(inputs: RunInputStatus | undefined): boolean {
+  return inputs?.state === "changed" || inputs?.state === "unverified";
+}
+
+/** The release a run generated from, when it captured a published version. */
+function capturedRelease(job: StudioJob): string | null {
+  return job.scenario_source?.status === "published" && job.scenario_source.version ? job.scenario_source.version : null;
+}
+
+/**
+ * Missing legacy provenance cannot establish that inputs actually changed. Same content wins
+ * over file digests: publishing a draft unchanged rewrites its file but not what runs consume.
+ */
 export function generationInputs(job: StudioJob, item: CatalogItem, snapshot: StudioSnapshot): RunInputStatus {
+  const identity = job.scenario_source?.content_identity;
+  if (identity && identity === snapshot.content_identities?.[item.id]) return { state: "current", label: "Current content", detail: "This run generated from the same scenario content, packs, and configuration as the current revision." };
+  const changed = (detail: string): RunInputStatus => {
+    // Drafts are not versioned, so only a run of another release can be labeled by version.
+    const release = capturedRelease(job);
+    return release && release !== item.version
+      ? { state: "version", label: `v${release}`, detail: `This run generated from release ${release}; the current scenario is ${item.version ? `version ${item.version}` : "a draft"}. Its result describes that release.` }
+      : { state: "changed", label: "Inputs changed", detail };
+  };
   if (!job.source_sha256 || !item.source_sha256) return { state: "unverified", label: "Inputs unverified", detail: "This run does not record enough scenario provenance to compare its inputs with the current files." };
-  if (job.source_sha256 !== item.source_sha256) return { state: "changed", label: "Inputs changed", detail: "The scenario YAML differs from this run's captured revision. Its result still describes the generated data." };
+  if (job.source_sha256 !== item.source_sha256) return changed("The scenario YAML differs from this run's captured revision. Its result still describes the generated data.");
   const health = snapshot.dependencies?.[item.id];
   if (job.dependency_sha256) {
     if (!health) return { state: "unverified", label: "Inputs unverified", detail: "Current dependencies have not been checked yet. The run retains its captured inputs and result." };
-    if (job.dependency_sha256 !== health.fingerprint) return { state: "changed", label: "Inputs changed", detail: "Packs, included files, or configuration differ from this run's captured inputs. Its result still describes the generated data." };
+    if (job.dependency_sha256 !== health.fingerprint) return changed("Packs, included files, or configuration differ from this run's captured inputs. Its result still describes the generated data.");
   } else if (jobSubmittedAt(job) < (health?.changed_at || 0)) {
     return { state: "unverified", label: "Inputs unverified", detail: "The scenario YAML still matches. This older run has no dependency fingerprint, so a later dependency check cannot establish whether its packs, includes, or configuration changed." };
   }
@@ -96,6 +122,16 @@ export function scenarioStates(item: CatalogItem, snapshot: StudioSnapshot): Ope
   const evaluations = snapshot.jobs.filter((job) => job.kind === "evaluation" && !!job.generation_id && allIds.has(job.generation_id));
   const currentEvaluations = evaluations.filter((job) => !!job.generation_id && currentIds.has(job.generation_id));
   const evaluation = latest(currentEvaluations.filter((job) => job.generation_id === generation?.id));
+  // Runs of another release are not stale: this revision simply has not been generated yet.
+  const latestCompleted = latest(generations.filter((job) => job.status === "completed"));
+  const olderRelease = !generation && latestCompleted ? generationInputs(latestCompleted, item, snapshot) : undefined;
+  if (olderRelease?.state === "version") {
+    return [
+      validation,
+      { label: "Generation", state: "none", detail: `This revision has not been generated yet. The latest run is from ${olderRelease.label}.` },
+      { label: "Evaluation", state: "none", detail: "Generate this revision to evaluate it." },
+    ];
+  }
   const evaluationStatus = jobState("Evaluation", evaluation, evaluations.some((job) => job.status === "completed"));
   if (generation && !evaluation && evaluations.some((job) => job.status === "completed")) {
     evaluationStatus.detail = `Evaluation belongs to an earlier run. Latest run #${generation.id.slice(0, 8)} has not been evaluated.`;

@@ -815,6 +815,9 @@ class StudioSnapshot(BaseModel):
     views: list[SavedView]
     validations: dict[str, ValidationRecord]
     dependencies: dict[str, DependencyHealth] = Field(default_factory=dict)
+    # Current content identity for scenarios whose runs captured different files; a run whose
+    # `scenario_source.content_identity` matches generated from the same content.
+    content_identities: dict[str, str] = Field(default_factory=dict)
     forecasts: dict[str, PredictionRecord] = Field(default_factory=dict)
     conversations: list[Conversation]
     codex_health: CodexHealth
@@ -925,6 +928,8 @@ class StudioService:
         self.asset_lock = asyncio.Lock()
         self.library_lock = asyncio.Lock()
         self.artifact_groups: dict[str, ArtifactGroup] = {}
+        # Derived, recomputable: current-scenario content identities keyed by exact inputs.
+        self._content_identities: dict[tuple[str, str, str | None], str | None] = {}
         self.workspace_selection_lock = asyncio.Lock()
         self.asset_inventories: dict[str, Inventory] = {}
         self.prediction_task: asyncio.Task[None] | None = None
@@ -1730,10 +1735,72 @@ class StudioService:
             await self.emit(item.id, "scenario.forecast", json.loads(record.model_dump_json()))
             return record
 
+    def _scenario_content_identities(
+        self,
+        items: list[CatalogItem],
+        jobs: list[dict[str, Any]],
+        dependencies: dict[str, dict[str, Any]],
+    ) -> dict[str, str]:
+        """Identify current scenario content for scenarios whose runs captured other files.
+
+        A run whose source or dependency digests differ may still have generated from the same
+        content (for example, a draft that was then published unchanged). Only those scenarios
+        are compiled, and each result is cached by the exact source digest and dependency
+        fingerprint, so an unchanged library costs nothing here.
+        """
+        by_path: dict[str, CatalogItem] = {}
+        for item in items:
+            if item.kind == "scenario":
+                for path in self.store.source_paths(item):
+                    by_path[str(path)] = item
+        needed: dict[str, tuple[CatalogItem, str | None]] = {}
+        for job in jobs:
+            if job.get("kind") != "generation":
+                continue
+            item = by_path.get(str(job.get("scenario")))
+            if item is None or item.id in needed:
+                continue
+            fingerprint = (dependencies.get(item.id) or {}).get("fingerprint")
+            if job.get("source_sha256") == item.source_sha256 and (
+                job.get("dependency_sha256") == fingerprint
+            ):
+                continue
+            needed[item.id] = (item, fingerprint)
+        if len(self._content_identities) > 512:
+            self._content_identities.clear()
+        identities: dict[str, str] = {}
+        for item, fingerprint in needed.values():
+            key = (item.id, item.source_sha256, fingerprint)
+            if key not in self._content_identities:
+                self._content_identities[key] = self._compile_content_identity(item.path)
+            if identity := self._content_identities[key]:
+                identities[item.id] = identity
+        return identities
+
+    def _compile_content_identity(self, source: Path) -> str | None:
+        """Compile a scenario exactly as a queued run would and digest its content."""
+        from evidenceforge.composition.artifacts import compiled_content_identity
+        from evidenceforge.composition.compiler import compile_scenario
+        from evidenceforge.studio.contexts import context_path
+
+        workspace = self.settings.workspace
+        try:
+            compiled = compile_scenario(
+                source, project_root=workspace, context=context_path(source, workspace)
+            )
+            return compiled_content_identity(compiled)
+        except (EvidenceForgeError, OSError, ValueError, yaml.YAMLError) as error:
+            logging.getLogger(__name__).debug(
+                "Cannot identify scenario content (%s)", type(error).__name__
+            )
+            return None
+
     def snapshot(self) -> dict[str, Any]:
         """Return a coherent view for first load and reconnection."""
         workspace = self.settings.workspace
         items = self.store.items(workspace)
+        jobs = [job_summary(payload) for payload in self.store.job_payloads(workspace)]
+        dependencies = self.store.dependency_health([item.id for item in items])
         starters = [
             item.id for item in items if item.kind == "scenario" and is_starter_draft(item.path)
         ]
@@ -1771,7 +1838,8 @@ class StudioService:
             "folders": self.store.folders(workspace),
             "views": [json.loads(view.model_dump_json()) for view in self.store.views(workspace)],
             "validations": self.store.validations([item.id for item in items]),
-            "dependencies": self.store.dependency_health([item.id for item in items]),
+            "dependencies": dependencies,
+            "content_identities": self._scenario_content_identities(items, jobs, dependencies),
             "forecasts": self.store.resource_predictions(
                 [item.id for item in items if item.id not in starters]
             ),
@@ -1784,7 +1852,7 @@ class StudioService:
                 if self.linux_sandbox_notice is not None
                 else None
             ),
-            "jobs": [job_summary(payload) for payload in self.store.job_payloads(workspace)],
+            "jobs": jobs,
             "removed_job_ids": self.store.removed_job_ids(workspace),
             "imported_bundles": [
                 {

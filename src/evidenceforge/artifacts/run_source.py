@@ -11,6 +11,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict
 
+from evidenceforge.composition.artifacts import content_identity
 from evidenceforge.composition.models import GenerationManifestDocument
 from evidenceforge.config.provider import _register_trusted_derived_cache
 
@@ -29,6 +30,9 @@ class CapturedScenario(BaseModel):
     version: str | None = None
     draft_id: str | None = None
     status: Literal["draft", "published", "legacy", "unknown"] = "unknown"
+    # Digest of what the run generated from, independent of lifecycle metadata and pack
+    # provenance (see `composition.artifacts.content_identity`). Absent for manifest-only sources.
+    content_identity: str | None = None
 
 
 def _stamp(path: Path, limit: int) -> _SourceStamp:
@@ -62,6 +66,7 @@ def _read_source(path: Path, expected: str, stamp: _SourceStamp) -> CapturedScen
         scenario = document["scenario"]
         provenance = document.get("provenance", {})
         artifact = provenance.get("artifact") if isinstance(provenance, dict) else None
+        identity = content_identity(document)
         if isinstance(artifact, dict) and artifact.get("kind") == "scenario":
             return CapturedScenario(
                 name=artifact["name"],
@@ -70,8 +75,9 @@ def _read_source(path: Path, expected: str, stamp: _SourceStamp) -> CapturedScen
                 version=artifact.get("version"),
                 draft_id=artifact.get("draft_id"),
                 status=artifact.get("status", "unknown"),
+                content_identity=identity,
             )
-        return CapturedScenario(name=scenario["name"], status="legacy")
+        return CapturedScenario(name=scenario["name"], status="legacy", content_identity=identity)
     except (OSError, ValueError, KeyError, yaml.YAMLError) as error:
         logger.debug("Cannot inspect captured source (%s)", type(error).__name__)
         return None

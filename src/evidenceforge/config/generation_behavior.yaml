@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 532
+current_revision: 533
 history_start_revision: 1
-behavior_surface_sha256: ea217ce2f86720276b86319f0981c24968a2175d4a657624c09df2c9d8f1d391
+behavior_surface_sha256: d7a9cfd2d0d0ea44c720348ceee86e900b94eccaa95e8b9258b4bc3a71342ed3
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6125,3 +6125,11 @@ changes:
   summary: Linux and macOS share one foreground lifetime table; listeners and bare shells
     stay open. Storyline images are not self-written; an uninstalled one gets a parent-owned
     creation before launch. Baseline SMB work ends before its session.
+- revision: 533
+  id: scenario-content-identity
+  impact: none
+  domains:
+  - run-provenance
+  summary: Add a content identity for resolved scenarios that ignores lifecycle metadata and
+    pack provenance, used by Studio to compare runs with the current scenario. Generated output
+    is unchanged.
