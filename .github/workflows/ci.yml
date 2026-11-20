@@ -43,6 +43,10 @@ jobs:
     timeout-minutes: 10
     outputs:
       digest: ${{ steps.identity.outputs.digest }}
+      # True only for a pull request run by this workflow whose testable source equals its base:
+      # the change touches only docs excluded from the CI identity (changelog, TODO, release notes,
+      # worklogs). Release and forced runs never take this shortcut.
+      docs_only: ${{ steps.identity.outputs.docs_only }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -59,11 +63,15 @@ jobs:
         run: uv sync --locked --extra studio --extra dev
       - name: Identify tested inputs
         id: identity
-        run: uv run --no-sync python -m scripts.ci_evidence identity
+        # A pull request checkout is the merge commit, so HEAD^1 is the base branch tip.
+        run: uv run --no-sync python -m scripts.ci_evidence identity ${{ github.event_name == 'pull_request' && github.workflow == 'CI' && !inputs.force-tests && !inputs.release-coverage && '--compare HEAD^1' || '' }}
   lint:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs:
+      - inputs
+    if: needs.inputs.outputs.docs_only != 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -203,6 +211,7 @@ jobs:
           retention-days: 14
     needs:
       - inputs
+    if: needs.inputs.outputs.docs_only != 'true'
     env:
       GH_TOKEN: ${{ github.token }}
       CI_CHECK_ID: routine-${{ matrix.os }}-${{ inputs.release-coverage && matrix.os == 'ubuntu-latest' && 'cov' || 'plain' }}-${{ matrix.index }}
@@ -340,6 +349,7 @@ jobs:
           retention-days: 7
     needs:
       - inputs
+    if: needs.inputs.outputs.docs_only != 'true'
     env:
       GH_TOKEN: ${{ github.token }}
       PYTHONUTF8: '1'
@@ -353,6 +363,9 @@ jobs:
       queue: max
   studio-state-recovery:
     name: Studio state recovery (${{ matrix.os }})
+    needs:
+      - inputs
+    if: needs.inputs.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -413,6 +426,7 @@ jobs:
           retention-days: 7
     needs:
       - inputs
+    if: needs.inputs.outputs.docs_only != 'true'
     env:
       GH_TOKEN: ${{ github.token }}
       CI_CHECK_ID: durability-windows-latest
@@ -436,7 +450,11 @@ jobs:
       - coverage
     if: always()
     steps:
+      - name: Accept a docs-only change
+        if: needs.inputs.result == 'success' && needs.inputs.outputs.docs_only == 'true'
+        run: echo "Only docs excluded from the CI identity changed; nothing testable to run."
       - name: Check required jobs
+        if: needs.inputs.outputs.docs_only != 'true'
         run: |
           if [ "${{ needs.lint.result }}" != "success" ]; then
             echo "Lint finished with result: ${{ needs.lint.result }}"
@@ -464,21 +482,27 @@ jobs:
 
           if [ "${{ inputs.release-coverage }}" = true ] && [ "${{ needs.coverage.result }}" != success ]; then exit 1; fi
       - name: Checkout code
+        if: needs.inputs.outputs.docs_only != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.source-ref || github.sha }}
           fetch-depth: 0
       - name: Install uv
+        if: needs.inputs.outputs.docs_only != 'true'
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
       - name: Set up Python
+        if: needs.inputs.outputs.docs_only != 'true'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
       - name: Install locked dependencies
+        if: needs.inputs.outputs.docs_only != 'true'
         run: uv sync --locked --extra studio --extra dev
       - name: Download routine shard inventories
+        if: needs.inputs.outputs.docs_only != 'true'
         run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern "ci-evidence-routine-*" --dir ci-results/validation
       - name: Require complete disjoint routine execution
+        if: needs.inputs.outputs.docs_only != 'true'
         run: uv run --no-sync python -m scripts.ci_evidence validate --directory ci-results/validation --expected-group "$LINUX_GROUP" --expected-group routine-windows-latest-plain --count 8
     timeout-minutes: 10
     env:

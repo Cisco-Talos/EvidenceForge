@@ -88,6 +88,14 @@ def source_digest(reference: str = "HEAD") -> str:
     return hashlib.sha256(b"\0".join(sorted(entries))).hexdigest()
 
 
+def unchanged_source(reference: str, digest: str) -> bool:
+    """Return whether a ref has the same testable source as HEAD (only ignored docs differ)."""
+    try:
+        return source_digest(reference) == digest
+    except subprocess.CalledProcessError:
+        return False
+
+
 class ArtifactRedirect(HTTPRedirectHandler):
     """Strip API credentials when GitHub redirects to its artifact storage host."""
 
@@ -502,9 +510,18 @@ def main() -> None:
     parser.add_argument("--coverage", action="store_true")
     parser.add_argument("--expected-group", action="append", default=[])
     parser.add_argument("--count", type=int, default=8)
+    parser.add_argument(
+        "--compare",
+        help="With identity, report docs_only=true when this ref has the same testable source",
+    )
     args = parser.parse_args()
     if args.command == "identity":
-        output("digest", source_digest())
+        digest = source_digest()
+        output("digest", digest)
+        output(
+            "docs_only",
+            "true" if args.compare and unchanged_source(args.compare, digest) else "false",
+        )
         return
     if args.command == "validate":
         if args.directory is None:
