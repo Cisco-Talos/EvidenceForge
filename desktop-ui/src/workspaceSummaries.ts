@@ -2,7 +2,7 @@ import type { CatalogItem, DependencyHealth, ImportedBundle, StudioJob, StudioSn
 import { formatBundleSize, formatTime } from "./components";
 import { recentJobs, jobSubmittedAt } from "./jobOrder";
 import { jobDisplayStatus } from "./jobOutcomes";
-import { generationInputs, generationIsCurrent, jobState, type OperationState, type RunInputStatus } from "./ScenarioStates";
+import { generationInputs, generationIsCurrent, inputsNeedAttention, jobState, type OperationState, type RunInputStatus } from "./ScenarioStates";
 
 export interface SectionSummary {
   headline: string; detail: string; inputs?: RunInputStatus;
@@ -77,7 +77,7 @@ export function runsSummary(jobs: StudioJob[], imports: ImportedBundle[], evalua
   const score = scoringSummary(latest, saved || evaluation, item, snapshot);
   const active = jobs.filter((job) => ["running", "queued", "paused"].includes(job.status));
   return { ...generation,
-    score: { headline: score.headline, status: latestRunState("Evaluation", saved || evaluation, !generation.inputs || generation.inputs.state === "current"),
+    score: { headline: score.headline, status: latestRunState("Evaluation", saved || evaluation, !inputsNeedAttention(generation.inputs)),
       attempt: saved && evaluation && saved.id !== evaluation.id ? `${scoringSummary(latest, evaluation, item, snapshot).headline} · Showing the previous saved score` : undefined },
     detail: [countLabel(jobs.length + imports.length, "run"), active.length && jobStatusCounts(active), imports.length && `${imports.length} imported`, latest && generation.detail].filter(Boolean).join(" · ") };
 }

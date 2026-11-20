@@ -1,9 +1,10 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { ChevronRight, TriangleAlert } from "lucide-react";
+import { inputsNeedAttention } from "./ScenarioStates";
 import type { SectionSummary } from "./workspaceSummaries";
 
 export function HeaderSummary({ summary }: { summary: SectionSummary }) {
-  const inputs = summary.inputs && summary.inputs.state !== "current" && <span className="summary-inputs" title={summary.inputs.detail}><TriangleAlert size={12} aria-hidden="true" />{summary.inputs.label}</span>;
+  const inputs = inputsNeedAttention(summary.inputs) && summary.inputs && <span className="summary-inputs" title={summary.inputs.detail}><TriangleAlert size={12} aria-hidden="true" />{summary.inputs.label}</span>;
   return <span className="header-summary"><span className="summary-outcome">{summary.headline}</span>{summary.score && <span className="summary-review"><span className={`summary-score score-${summary.score.status.state}`} title={summary.score.status.detail}>Score · {summary.score.headline}</span>{inputs}</span>}<span className="summary-context" title={summary.detail}>{summary.detail}</span>{summary.score?.attempt && <span className="summary-evaluation-attempt">{summary.score.attempt}</span>}{!summary.score && inputs}</span>;
 }
 

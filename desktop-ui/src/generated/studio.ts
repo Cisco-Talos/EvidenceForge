@@ -2542,6 +2542,8 @@ export interface components {
              * @enum {string}
              */
             status: "draft" | "published" | "legacy" | "unknown";
+            /** Content Identity */
+            content_identity?: string | null;
         };
         /**
          * CatalogItem
@@ -5153,6 +5155,10 @@ export interface components {
             /** Dependencies */
             dependencies?: {
                 [key: string]: components["schemas"]["DependencyHealth"];
+            };
+            /** Content Identities */
+            content_identities?: {
+                [key: string]: string;
             };
             /** Forecasts */
             forecasts?: {

@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import platform
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -119,6 +120,46 @@ def serialize_resolved_document(document: ResolvedScenarioDocument) -> bytes:
         width=100,
     )
     return text.replace("\r\n", "\n").encode("utf-8")
+
+
+# Where a pack was found (workspace path, imported package, captured release) is provenance, not
+# content: the same pack version resolves from different places for a draft and its release.
+_PACK_PROVENANCE_FIELDS = frozenset({"source", "location"})
+
+
+def content_identity(document: Mapping[str, Any]) -> str | None:
+    """Digest what generation consumes from a parsed resolved-scenario document.
+
+    Covers the compiled scenario, effective configuration, embedded assets and selected pack
+    contents. Lifecycle metadata (draft/published status, publisher, version, lineage) is not
+    part of the compiled scenario, and pack provenance is excluded, so a draft and the release
+    published from it share one identity when their content is the same.
+    """
+    scenario = document.get("scenario")
+    effective = document.get("effective_config")
+    provenance = document.get("provenance")
+    if not isinstance(scenario, dict) or not isinstance(effective, dict):
+        return None
+    packs = provenance.get("selected_packs", []) if isinstance(provenance, dict) else []
+    if not isinstance(packs, list):
+        return None
+    payload = {
+        "scenario": scenario,
+        "effective_config": effective,
+        "assets": document.get("assets") or {},
+        "packs": [
+            {key: value for key, value in pack.items() if key not in _PACK_PROVENANCE_FIELDS}
+            for pack in packs
+            if isinstance(pack, dict)
+        ],
+    }
+    return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
+def compiled_content_identity(compiled: CompiledScenario) -> str | None:
+    """Content identity of a compilation, read back exactly as a captured run input is read."""
+    document = yaml.safe_load(serialize_resolved_document(build_resolved_document(compiled)))
+    return content_identity(document) if isinstance(document, dict) else None
 
 
 def write_resolved_scenario(compiled: CompiledScenario, output_root: Path) -> Path:

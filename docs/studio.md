@@ -639,6 +639,13 @@ selected overlays, and embedded corpora. Later authoring affects new runs only. 
 uses the current scenario; checkpoint resume continues the original captured run. Checkpoint
 cadence defaults to 24 simulated hours and can be changed for new runs in Settings.
 
+Studio compares each run's captured content with the current scenario, not its file bytes. A run
+generated from a draft stays current after you publish that draft unchanged, because publishing
+only adds release metadata. A run of another published version keeps that version's badge with no
+warning; the readiness strip then shows **Generate** as not yet run for the current version. A run
+from a draft whose content has since changed shows **Inputs changed**, since drafts have no
+version to label it with.
+
 Runs and jobs are listed newest first by original submission time. Each run's header has a
 copy button for its bundle path. Expand a run to monitor progress, operate its generation, view
 files, evaluate it, or export its bundle as a ZIP. **View files** opens a folder tree of the
