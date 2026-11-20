@@ -34,6 +34,7 @@ import sys
 import tempfile
 import time
 from contextlib import nullcontext
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import uuid4
@@ -124,6 +125,26 @@ if TYPE_CHECKING:
 
 
 _DEFAULT_CHECKPOINT_HOURS = 24
+
+
+class IncompleteGenerationAction(StrEnum):
+    """What to do with an incomplete generation workspace found at the output path."""
+
+    RESUME = "resume"
+    OVERWRITE = "overwrite"
+    ABORT = "abort"
+
+
+def _parse_incomplete_generation_action(value: str) -> IncompleteGenerationAction:
+    """Accept an action in any letter case; an unknown answer asks again.
+
+    Typer validates prompt answers against Python types, so the choice is an Enum rather than
+    a Click parameter type.
+    """
+    try:
+        return IncompleteGenerationAction(value.strip().lower())
+    except ValueError:
+        raise typer.BadParameter(f"{value!r} is not one of resume, overwrite, abort") from None
 
 
 def _generation_prompt_available() -> bool:
@@ -1293,14 +1314,15 @@ def _prepare_generation_options(
                 overwrite = True
             else:
                 decision = typer.prompt(
-                    "Incomplete generation found; choose an action (resume, overwrite, abort)",
-                    type=click.Choice(("resume", "overwrite", "abort"), case_sensitive=False),
-                    default="abort",
+                    "Incomplete generation found; choose an action",
+                    type=IncompleteGenerationAction,
+                    default=IncompleteGenerationAction.ABORT,
                     show_choices=True,
+                    value_proc=_parse_incomplete_generation_action,
                 )
-                if decision == "resume":
+                if decision is IncompleteGenerationAction.RESUME:
                     resume = True
-                elif decision == "overwrite":
+                elif decision is IncompleteGenerationAction.OVERWRITE:
                     overwrite = True
                 else:
                     console.print("[dim]Aborted.[/dim]")
