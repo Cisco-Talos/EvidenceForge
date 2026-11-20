@@ -411,7 +411,11 @@ conversations so you can reopen one directly. While a conversation is open, sele
 title in the top bar, or **Back to workspace**, to return to the Overview. The source file path, schema and digests are in **Properties… → Technical details**.
 
 The sidebar lists your projects under **Projects**. Select one to show only its scenarios or packs,
-or drag a row onto a project to move it there. **Scenarios** open grouped by project and **Packs**
+or drag a row onto a project to move it there. **New project** and **Edit project…** can set a
+**Default pack for new scenarios**: a released industry or organization pack that Codex uses when
+it authors a scenario in that project that has not chosen one yet. Codex writes the pack into the
+scenario YAML, so the file stays self-contained and resolves the same way from the CLI; existing
+pack choices are never replaced, and moving a scenario into the project does not change it. **Scenarios** open grouped by project and **Packs**
 grouped by publisher; use **Views** to sort by name or by most recently updated instead (packs can
 also be grouped by project). Select a group heading to collapse or expand it; groups start expanded. **Filter** holds every filter for the current
 library, including hidden items and pack type, author, version and location. Each scenario or pack

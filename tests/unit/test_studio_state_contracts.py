@@ -12,11 +12,12 @@ from evidenceforge.studio import settings, store
 from evidenceforge.studio import state_records_v1 as frozen
 from evidenceforge.studio import state_records_v2 as frozen_v2
 from evidenceforge.studio import state_records_v5 as frozen_v5
+from evidenceforge.studio import state_records_v6 as frozen_v6
 from evidenceforge.studio import state_settings_v4 as frozen_settings_v4
 
 MODELS = (
     (store.CatalogItem, frozen_v2.CatalogItem),
-    (store.Project, frozen.Project),
+    (store.Project, frozen_v6.Project),
     (store.ImportedBundle, frozen.ImportedBundle),
     (store.Conversation, frozen_v2.Conversation),
     (store.SavedView, frozen_v5.SavedView),

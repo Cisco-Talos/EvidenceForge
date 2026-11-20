@@ -27,7 +27,7 @@ from evidenceforge.studio.state_migrations import (
 )
 from evidenceforge.studio.state_schema import BASELINE_SQL, FTS_SQL, LEDGER_SQL, LEGACY_TABLE_SETS
 
-DATABASE_VERSION = 5
+DATABASE_VERSION = 6
 FTS_TABLES = {
     "items_fts",
     "items_fts_data",
@@ -136,6 +136,15 @@ MIGRATIONS = (
         description="Accept publisher grouping and grouped library defaults for new views",
         affected=("views", "library_preferences"),
         # Stored rows already carry an explicit sort; only new rows take the grouped defaults.
+        sql="",
+    ),
+    Migration(
+        id="studio-db-0006",
+        source=5,
+        target=6,
+        description="Let a project name a default pack for new scenario authoring",
+        affected=("projects",),
+        # Existing projects have no default pack; the optional field needs no row rewrite.
         sql="",
     ),
 )
@@ -345,6 +354,10 @@ def validate_records(connection: sqlite3.Connection) -> None:
 
         models["views"] = SavedViewV5
         models["library_preferences"] = LibraryPreferencesV5
+    if connection.execute("PRAGMA user_version").fetchone()[0] >= 6:
+        from evidenceforge.studio.state_records_v6 import Project as ProjectV6
+
+        models["projects"] = ProjectV6
     for table, model in models.items():
         if table not in existing:
             continue

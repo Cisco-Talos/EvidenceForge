@@ -211,6 +211,7 @@ from evidenceforge.studio.store import (
     LibraryPreferences,
     LibraryView,
     Project,
+    ProjectDefaultPack,
     SavedView,
     StudioEvent,
     StudioStore,
@@ -539,16 +540,18 @@ class ProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=240)
     overlay_enabled: bool = False
+    default_pack: ProjectDefaultPack | None = None
 
 
 class ProjectUpdate(BaseModel):
-    """Rename or describe an existing project."""
+    """Rename or describe an existing project; `default_pack: null` clears its default."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=240)
     overlay_enabled: bool | None = None
+    default_pack: ProjectDefaultPack | None = None
 
 
 class ValidationRequest(BaseModel):
@@ -1919,6 +1922,20 @@ def _bundle_file_listing(root: Path) -> dict[str, Any]:
                 return {"root": str(root), "files": files, "truncated": True}
             files.append({"path": path.relative_to(root).as_posix(), "size": path.stat().st_size})
     return {"root": str(root), "files": files, "truncated": False}
+
+
+def project_pack_instructions(project: Project | None, kind: str | None) -> str:
+    """Tell a Studio scenario conversation about its project's default pack, if any."""
+    if project is None or project.default_pack is None or kind != "scenario":
+        return ""
+    pack = project.default_pack
+    return (
+        f" This scenario belongs to the Studio project {project.name!r}, whose default "
+        f"{pack.kind} pack is {pack.publisher}/{pack.name} version {pack.version}. When the "
+        f"scenario does not yet choose its {pack.kind} pack, compose it with that exact released "
+        "pack unless the user asks otherwise, writing it into the scenario YAML so the file stays "
+        "self-contained. Never replace pack choices the scenario already declares."
+    )
 
 
 def create_app(
@@ -3673,6 +3690,23 @@ def create_app(
     def projects(studio: StudioService = Depends(authorized)) -> list[Project]:
         return studio.store.projects(studio.settings.workspace)
 
+    def require_released_pack(studio: StudioService, pack: ProjectDefaultPack | None) -> None:
+        """A project default must name a released pack that this workspace can resolve."""
+        if pack is None:
+            return
+        kind = f"{pack.kind}_pack"
+        if not any(
+            item.kind == kind
+            and item.publisher == pack.publisher
+            and item.name == pack.name
+            and item.version == pack.version
+            for item in studio.store.items(studio.settings.workspace)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Choose a released {pack.kind} pack that is available in this workspace",
+            )
+
     @app.post("/v1/projects")
     async def create_project(
         request: ProjectRequest, studio: StudioService = Depends(authorized)
@@ -3680,11 +3714,13 @@ def create_app(
         name = request.name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="Project name cannot be blank")
+        require_released_pack(studio, request.default_pack)
         project = Project(
             workspace=studio.settings.workspace,
             name=name,
             description=request.description.strip(),
             overlay_enabled=request.overlay_enabled,
+            default_pack=request.default_pack,
         )
         try:
             studio.store.save_project(project)
@@ -3713,6 +3749,9 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="Choose whether project configuration is enabled"
             )
+        if "default_pack" in changes:
+            require_released_pack(studio, update.default_pack)
+            changes["default_pack"] = update.default_pack
         if any(
             other.id != project.id
             and other.name.casefold() == changes.get("name", project.name).casefold()
@@ -4368,6 +4407,13 @@ def create_app(
                 skill = await studio.resolve_turn_skill(skill_name, conversation.workspace)
                 inputs.append({"type": "skill", "name": skill_name, "path": str(skill["path"])})
             cli_command = shell_command(_eforge_command(controller_settings(studio.settings)))
+            # A project's default pack guides new authoring here; it is never inherited by the
+            # scenario file itself, so CLI and skill users (who have no projects) are unaffected.
+            project_id = item.project_id if item is not None else conversation.draft_project_id
+            project_instructions = project_pack_instructions(
+                studio.store.project(project_id) if project_id else None,
+                item.kind if item is not None else conversation.draft_kind,
+            )
             configuration_instructions = (
                 f" The EvidenceForge CLI command prefix selected by Studio is {cli_command}. "
                 "Use that exact command prefix for every EvidenceForge command in this conversation, "
@@ -4438,7 +4484,10 @@ def create_app(
                         f"This conversation concerns the EvidenceForge {context_kind} at {target}. "
                         f"{draft_name_context}"
                         "Follow user requests and EvidenceForge skills. Keep deterministic "
-                        "generation in eforge." + configuration_instructions + access.instructions
+                        "generation in eforge."
+                        + project_instructions
+                        + configuration_instructions
+                        + access.instructions
                     ),
                 }
                 if conversation.model_id:
@@ -4459,7 +4508,10 @@ def create_app(
                         "model": conversation.model_id,
                         "developerInstructions": f"This conversation concerns {str(item.path) if item is not None else str(conversation.draft_path)}. "
                         "Follow user requests and EvidenceForge skills. Keep deterministic "
-                        "generation in eforge." + configuration_instructions + access.instructions,
+                        "generation in eforge."
+                        + project_instructions
+                        + configuration_instructions
+                        + access.instructions,
                     },
                 )
                 verify_chat_permissions(resumed, access)
