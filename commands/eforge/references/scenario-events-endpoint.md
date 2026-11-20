@@ -60,7 +60,12 @@ target. Type 9 is invalid because it has no remote authentication target.
 ## `logoff`
 
 Fields: `type`, optional `technique`, and optional `description`. It closes the compatible owned
-session; do not duplicate closure evidence already owned by an SSH or RDP bundle.
+session; do not duplicate closure evidence already owned by an SSH or RDP bundle. A logoff closes
+only a session opened by an earlier storyline action for the same actor and system (a `logon`,
+`ssh_session`, `rdp_session`, or session-owning process). Baseline and warm-up sessions are never
+closed, and `logon_grace_period` does not apply. To close a pre-window session, author an earlier
+`logon` at an absolute time inside `time_window.warmup`; validation rejects a logoff with no
+possible earlier owner.
 
 ## `account_created`
 

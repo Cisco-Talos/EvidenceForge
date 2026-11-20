@@ -23,6 +23,15 @@ Scenario 2.0, the pinned technology pack, 9 users/23 systems, six-hour November 
 2026 window and two-hour warmup are retained. Native ES, bounded ULF and zsh history
 remain selected with complete process coverage.
 
+## Pre-window sessions
+
+On November 20, 2026 the storyline was resynchronized with the canonical scenario's
+November 11 repair: explicit `mac-*-setup-session` warm-up logons now own the
+`mac-*-warmup-close` logoffs, and the help-desk RDP session is its own `evt-012-rdp`
+step. Without them, the strict authored-intent ledger aborted generation with
+`no_matching_session`; validation now rejects such unowned logoffs. Apart from its
+name, description and output destination, `scenario.yaml` matches the canonical copy.
+
 ## Historical assessments
 
 Loops 1–42 under `blind-test/` predate these scenario timing edits. Their data,
