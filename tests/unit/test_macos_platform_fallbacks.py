@@ -244,6 +244,11 @@ def test_mac_exposure_carriers_preserve_argv_value_wire_projection_and_bounded_l
         assert arguments[1].split("=", 1)[1] == value
         assert result.encoded_value in result.command
         assert _macos_foreground_lifetime(arguments[0], result.command) is not None
+    # env running another program takes that program's lifetime, not env's query timing.
+    assert _macos_foreground_lifetime(
+        "/usr/bin/env", "/usr/bin/env SECRET=x another-program"
+    ) == _macos_foreground_lifetime("another-program", "another-program")
     assert (
-        _macos_foreground_lifetime("/usr/bin/env", "/usr/bin/env SECRET=x another-program") is None
+        _macos_foreground_lifetime("/usr/bin/env", "/usr/bin/env SECRET=x /usr/bin/tail -f /x")
+        is None
     )

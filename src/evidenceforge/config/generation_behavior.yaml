@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 531
+current_revision: 532
 history_start_revision: 1
-behavior_surface_sha256: 8a2deb467327447f8706906a22280281bdf1fa0a5076f3af8dd5443b35c2c877
+behavior_surface_sha256: ea217ce2f86720276b86319f0981c24968a2175d4a657624c09df2c9d8f1d391
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6106,3 +6106,22 @@ changes:
   - cisco_asa
   summary: Sensors observe, derive UIDs and resolve capture profiles under one case-folded
     deployed identity on every dispatch path, matching ground truth and the evaluator.
+- revision: 532
+  id: converged-posix-process-lifetimes
+  impact: material
+  domains:
+  - baseline-smb
+  - executable-provenance
+  - process-lifetimes
+  - storyline-process-effects
+  formats:
+  - bash_history
+  - ecar
+  - macos_endpoint_security
+  - macos_unified_log
+  - windows_event_security
+  - windows_event_sysmon
+  - zsh_history
+  summary: Linux and macOS share one foreground lifetime table; listeners and bare shells
+    stay open. Storyline images are not self-written; an uninstalled one gets a parent-owned
+    creation before launch. Baseline SMB work ends before its session.

@@ -1,0 +1,39 @@
+# Where an executable is assumed to exist before the simulated window starts.
+#
+# A storyline process whose image is under one of these prefixes, is a catalogued
+# application install or system binary, or was created earlier in the storyline
+# (download, redirect or transfer) launches without file-creation evidence. Any
+# other image receives one implied creation, attributed to the launching parent,
+# just before it starts. Prefixes match case-insensitively; Windows prefixes use
+# backslashes.
+schema_version: "1.0"
+preinstalled_prefixes:
+  windows:
+    - C:\Windows\System32\
+    - C:\Windows\SysWOW64\
+    - C:\Windows\WinSxS\
+    - C:\Windows\Microsoft.NET\
+    - C:\Program Files\
+    - C:\Program Files (x86)\
+  linux:
+    - /bin/
+    - /sbin/
+    - /usr/bin/
+    - /usr/sbin/
+    - /usr/local/bin/
+    - /usr/local/sbin/
+    - /usr/lib/
+    - /usr/libexec/
+    - /lib/
+  macos:
+    - /bin/
+    - /sbin/
+    - /usr/bin/
+    - /usr/sbin/
+    - /usr/libexec/
+    - /usr/lib/
+    - /System/
+    - /Library/Apple/
+    - /Applications/
+    - /opt/homebrew/
+    - /usr/local/bin/

@@ -51,7 +51,8 @@ def test_deferred_ssh_transport_authenticates_loaded_binary_after_path_replaceme
         _START + timedelta(seconds=10),
         logon,
         descriptor.native_path,
-        descriptor.native_path,
+        # A resident worker: it must still be running when it later opens SSH.
+        f"{descriptor.native_path} --keep-alive",
         parent_pid=1,
         suppress_command_file_effect=True,
         require_exact_parent=True,

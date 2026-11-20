@@ -363,7 +363,7 @@ envelopes and OS-native paths. Reusing an SMB application channel can produce ne
 evidence without another FLOW. Source timing advances process frontiers only for phases
 that the particular endpoint actually renders.
 
-For bounded Linux foreground commands, PROCESS/TERMINATE reflects the modeled command lifetime. Exact numeric `sleep <duration>` commands use the requested seconds up to 86,400, while unsupported sleep syntax keeps the short fallback. When a session has an owning close deadline, foreground termination plus shell-release jitter remains before that owner closes.
+For bounded Linux and macOS foreground commands, PROCESS/TERMINATE reflects the modeled command lifetime from the shared table. Exact numeric `sleep <duration>` commands use the requested seconds up to 86,400, while unsupported sleep syntax keeps the short fallback. When a session has an owning close deadline, foreground termination plus shell-release jitter remains before that owner closes.
 
 The bounded Mac filesystem bundle uses FILE/CLOSE for its explicit close occurrence, an
 EvidenceForge extension. It preserves the resulting canonical content/file version; it does

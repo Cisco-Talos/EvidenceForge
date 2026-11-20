@@ -19,6 +19,7 @@ from evidenceforge.generation.activity.application_catalog import (
     get_apps_for_persona,
 )
 from evidenceforge.generation.activity.process_helpers import _macos_foreground_lifetime
+from evidenceforge.generation.activity.process_lifetimes import posix_command_lifetime
 from evidenceforge.generation.deployment_compiler import compile_deployment_registry
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -59,7 +60,7 @@ def test_admin_queries_compile_only_native_arm64_host_build_without_baseline_ass
 
 
 @pytest.mark.parametrize(
-    "image,command,bounded",
+    "image,command,profiled",
     [
         ("/bin/launchctl", "/bin/launchctl list", True),
         ("/usr/bin/plutil", "/usr/bin/plutil -help", True),
@@ -73,10 +74,13 @@ def test_admin_queries_compile_only_native_arm64_host_build_without_baseline_ass
         ("/bin/launchctl", "/bin/launchctl list; /usr/bin/id", False),
     ],
 )
-def test_only_profiled_query_forms_get_short_lifetimes(
-    image: str, command: str, bounded: bool
+def test_only_profiled_query_forms_get_profile_timing(
+    image: str, command: str, profiled: bool
 ) -> None:
-    assert (_macos_foreground_lifetime(image, command) is not None) is bounded
+    # Other forms are not query-fast: they take the lifetime shared with Linux.
+    expected = (0.008, 2.5) if profiled else posix_command_lifetime(image, command)
+    assert expected is not None
+    assert _macos_foreground_lifetime(image, command) == expected
 
 
 @pytest.mark.parametrize("name", ["launchctl", "plutil"])

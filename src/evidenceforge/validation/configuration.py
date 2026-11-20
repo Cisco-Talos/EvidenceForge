@@ -1101,6 +1101,9 @@ def _validate_effective_configuration(
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
     from evidenceforge.generation.activity.email_background import load_email_background
     from evidenceforge.generation.activity.endpoint_noise import load_endpoint_noise
+    from evidenceforge.generation.activity.executable_provenance import (
+        load_executable_provenance,
+    )
     from evidenceforge.generation.activity.external_actor_profiles import (
         load_external_actor_profiles,
     )
@@ -1114,6 +1117,7 @@ def _validate_effective_configuration(
     from evidenceforge.generation.activity.process_access_patterns import (
         load_process_access_patterns,
     )
+    from evidenceforge.generation.activity.process_lifetimes import load_process_lifetimes
     from evidenceforge.generation.activity.process_network import load_process_network_map
     from evidenceforge.generation.activity.process_output_profiles import (
         load_process_output_profiles,
@@ -1237,6 +1241,26 @@ def _validate_effective_configuration(
                 "ERROR",
                 "process_output_profiles.yaml",
                 f"invalid process output profile: {exc}",
+            )
+        )
+    try:
+        load_executable_provenance()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "executable_provenance.yaml",
+                f"invalid executable provenance policy: {exc}",
+            )
+        )
+    try:
+        load_process_lifetimes()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "process_lifetimes.yaml",
+                f"invalid process lifetime table: {exc}",
             )
         )
     try:

@@ -134,11 +134,11 @@ exact-template runtime using positive finite `minimum`, `median`, `maximum` seco
 Appends `mappings`. Each mapping associates an executable with a network service/port behavior used
 for process-to-network correlation. Add one only when the application actually owns that traffic.
 Avoid duplicate executables: runtime indexing is last-wins. `ambient` defaults to true; false requires concrete network intent for launch correlation and generic attribution, including configured application lists. Parsed endpoints and explicit canonical connection/PID intent remain valid. Local CLI queries cannot justify unrelated SaaS traffic.
-### Output and fallback executable sizes
+### Lifetimes, provenance, output and fallback sizes
 
-`process_output_profiles.yaml` keyed-merges archive `profiles` with typed
-`output_size_log10` bounds. `runtime_executable_profiles.yaml` keyed-merges platform
-`profiles` with `size_log10` bounds. Keep both at their canonical content owners.
+`process_lifetimes.yaml` orders Linux/macOS foreground lifetimes: first match wins, `rules` keyed-merge by `id` (new ids append), lists append. Listeners and interactive shells never end on their own; `env` takes its program's lifetime. Mac profile templates, app bundles and `lifetime: long` profiles take precedence.
+`executable_provenance.yaml` deep-merges `preinstalled_prefixes`; other storyline images not created earlier get one implied parent-owned creation before launch. Never add temporary or user-writable directories.
+`process_output_profiles.yaml` keyed-merges archive `profiles` with typed `output_size_log10` bounds. `runtime_executable_profiles.yaml` keyed-merges platform `profiles` with `size_log10` bounds. Keep both at their canonical content owners.
 ### `system_processes.yaml`
 
 Deep-merges `scheduled_tasks`, `system_services`, `system_binaries`, `common_loaded_modules`, and

@@ -634,15 +634,16 @@ def test_mac_history_requires_an_interactive_shell_and_keeps_bash_separate(
             True,
         ),
         ("/opt/homebrew/bin/ssh", "/opt/homebrew/bin/ssh -V", True),
-        ("/opt/homebrew/bin/ssh", "/opt/homebrew/bin/ssh server.example.test", False),
+        # Outside their templates, catalogued commands end as they would on Linux.
+        ("/opt/homebrew/bin/ssh", "/opt/homebrew/bin/ssh server.example.test", True),
         ("/opt/homebrew/bin/kubectl", "/opt/homebrew/bin/kubectl get pods", True),
         ("/opt/homebrew/bin/kubectl", "/opt/homebrew/bin/kubectl get pods --watch", False),
-        ("/opt/homebrew/bin/git", "/opt/homebrew/bin/git status &", False),
-        ("/usr/bin/systemctl", "/usr/bin/systemctl status", False),
+        ("/opt/homebrew/bin/git", "/opt/homebrew/bin/git status &", True),
+        ("/usr/bin/systemctl", "/usr/bin/systemctl status", True),
         ("/bin/zsh", "-zsh", False),
     ],
 )
-def test_mac_lifetime_admits_only_profiled_short_commands(
+def test_mac_lifetime_uses_profiled_templates_then_the_shared_posix_table(
     image: str, command: str, bounded: bool
 ) -> None:
     from evidenceforge.generation.activity.process_helpers import _macos_foreground_lifetime

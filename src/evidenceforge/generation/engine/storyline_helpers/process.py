@@ -7,6 +7,10 @@ import re
 import shlex
 
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
+from evidenceforge.generation.activity.process_lifetimes import (
+    is_interactive_shell,
+    is_long_running_command,
+)
 
 _IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 
@@ -147,41 +151,6 @@ _MEDIUM_COMMANDS: set[str] = {
 }
 
 
-_LONG_RUNNING_PATTERNS: list[str] = [
-    "TCPClient",
-    "TCPListener",
-    "$s.Read",
-    "ncat",
-    "socat",
-    "nc -l",
-    "nc.exe -l",
-    "meterpreter",
-    "beacon",
-    "reverse_tcp",
-    "bind_tcp",
-    "-persist",
-    "--keep-alive",
-    "while(true)",
-    "while True",
-    "Start-Sleep -Seconds 99",
-    "tail -f",
-]
-
-
-_LONG_RUNNING_EXES: set[str] = {
-    "mstsc.exe",
-    "mstsc",
-    "rdpclip.exe",
-    "rdpclip",
-    "healthmonitorsvc.exe",
-    "ncat",
-    "ncat.exe",
-    "nc",
-    "nc.exe",
-    "socat",
-}
-
-
 def _estimate_process_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
     """Estimate how long a story process should run before terminating.
 
@@ -199,13 +168,12 @@ def _estimate_process_lifetime(process_name: str, command_line: str) -> tuple[fl
     if exe == "psexesvc.exe":
         return (8.0, 45.0)
 
-    # Check long-running first
-    if exe in _LONG_RUNNING_EXES:
+    # Listeners, keep-alive loops and bare interactive shells end only when closed.
+    if is_long_running_command(process_name, command_line) or is_interactive_shell(
+        process_name, command_line
+    ):
         return None
     cl_lower = command_line.lower()
-    for pattern in _LONG_RUNNING_PATTERNS:
-        if pattern.lower() in cl_lower:
-            return None
 
     # For cmd.exe /c, classify based on the inner command
     if exe in ("cmd.exe", "cmd") and "/c " in cl_lower:

@@ -165,7 +165,9 @@ def test_first_local_command_waits_for_new_session_shell(tmp_path: Path) -> None
     assert any("/usr/bin/id" in path.read_text() for path in tmp_path.rglob("*.zsh_history"))
 
 
-def test_unknown_foreground_command_keeps_its_shell_until_explicit_release(tmp_path: Path) -> None:
+def test_following_foreground_command_keeps_its_shell_until_explicit_release(
+    tmp_path: Path,
+) -> None:
     engine = _engine(tmp_path)
     try:
         first = engine._execute_typed_event(

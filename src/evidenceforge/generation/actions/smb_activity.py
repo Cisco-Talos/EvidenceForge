@@ -152,6 +152,9 @@ from evidenceforge.utils.time import ensure_utc, parse_duration
 _MAX_PERSISTENT_SMB_OPERATIONS = MAX_PERSISTENT_SMB_OPERATIONS
 _MAX_PERSISTENT_SMB_SOURCE_MEMBERS = 6 + 3 * _MAX_PERSISTENT_SMB_OPERATIONS
 _SMB_FILE_ANALYZERS = ("MIME", "MD5", "SHA1", "SHA256")
+# An operation-lived client helper exits this long after its SMB operation completes.
+_SMB_OPERATION_CLIENT_CLOSE_MIN_MS = 250
+_SMB_OPERATION_CLIENT_CLOSE_MAX_MS = 3_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -4484,7 +4487,9 @@ class SmbActivityActionBundle:
                 f"{facts.activity_result.completed_at.isoformat()}"
             )
             termination_time = facts.activity_result.completed_at + timedelta(
-                milliseconds=250 + seed % 2751
+                milliseconds=_SMB_OPERATION_CLIENT_CLOSE_MIN_MS
+                + seed
+                % (_SMB_OPERATION_CLIENT_CLOSE_MAX_MS - _SMB_OPERATION_CLIENT_CLOSE_MIN_MS + 1)
             )
         self.executor._remember_foreground_process_finalizer(
             system=self.request.parent_system,

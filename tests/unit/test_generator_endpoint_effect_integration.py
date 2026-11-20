@@ -423,9 +423,18 @@ def _events(emitter: Mock) -> list[OccurrenceBuilder]:
     return [call.args[0] for call in emitter.emit.call_args_list]
 
 
-def test_guaranteed_file_create_uses_exact_process_plan_and_preserves_fields() -> None:
+# A command whose syntax names a required, state-mutating (DURABLE_FINAL) file the
+# process itself writes: the ``semantic-command-file`` endpoint effect.
+_POWERSHELL_IMAGE = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+_STAGED_ARCHIVE = r"C:\Users\Public\stage.zip"
+_COMPRESS_ARCHIVE_COMMAND = (
+    r"powershell.exe -NoProfile -Command Compress-Archive -Path C:\Users\Public\Documents "
+    r"-DestinationPath C:\Users\Public\stage.zip"
+)
+
+
+def test_command_file_create_uses_exact_process_plan_and_preserves_fields() -> None:
     generator, state, emitter, user, system, timestamp = _fixture()
-    image = r"C:\Users\Public\dropper.exe"
 
     with patch.object(
         ProcessPreflightPlanner,
@@ -437,9 +446,8 @@ def test_guaranteed_file_create_uses_exact_process_plan_and_preserves_fields() -
             system,
             timestamp,
             "0x12345",
-            image,
-            image,
-            ensure_file_event=True,
+            _POWERSHELL_IMAGE,
+            _COMPRESS_ARCHIVE_COMMAND,
         )
 
     process_identity = state.get_process_identity(system.hostname, pid)
@@ -449,7 +457,7 @@ def test_guaranteed_file_create_uses_exact_process_plan_and_preserves_fields() -
         for event in _events(emitter)
         if event.event_type == "file_create" and event.file is not None
     )
-    assert file_event.file.path == image
+    assert file_event.file.path == _STAGED_ARCHIVE
     assert file_event.file.action == "create"
     assert file_event.process is not None
     assert file_event.process.pid == pid
@@ -686,9 +694,8 @@ def test_process_artifacts_commit_before_timing_and_projection(
             system,
             timestamp,
             "0x12345",
-            r"C:\Users\Public\dropper.exe",
-            r"C:\Users\Public\dropper.exe",
-            ensure_file_event=True,
+            _POWERSHELL_IMAGE,
+            _COMPRESS_ARCHIVE_COMMAND,
         )
 
     assert order.count("artifact") == 1
@@ -709,6 +716,7 @@ def test_process_artifacts_commit_before_timing_and_projection(
         "file_create",
     ]
     file_event = next(event for event in _events(emitter) if event.event_type == "file_create")
+    assert file_event.file.path == _STAGED_ARCHIVE
     assert file_event.file.artifact_identity is not None
     assert file_event.identity_plan.object_id == file_event.file.artifact_identity.artifact_id
     census = artifact_registry.census()
@@ -839,9 +847,8 @@ def test_process_action_cohort_preflight_failure_releases_source_timing(
             system,
             timestamp,
             "0x12345",
-            r"C:\Users\Public\preflight-failure.exe",
-            r"C:\Users\Public\preflight-failure.exe",
-            ensure_file_event=True,
+            _POWERSHELL_IMAGE,
+            _COMPRESS_ARCHIVE_COMMAND,
         )
 
     assert state.materialization_digest() == before_state
@@ -1126,9 +1133,11 @@ def test_scanner_effect_intent_bypasses_process_endpoint_action_cohort(
             system,
             timestamp,
             "0x12345",
-            r"C:\Users\Public\scanner-dropper.exe",
-            "nmap -sT -p 80 10.10.2.30",
-            ensure_file_event=True,
+            _POWERSHELL_IMAGE,
+            (
+                r"powershell.exe -NoProfile -Command Compress-Archive -Path C:\Users\Public\scan "
+                r"-DestinationPath 'C:\Users\Public\stage.zip'; nmap -sT -p 80 10.10.2.30"
+            ),
         )
 
     assert scanner_process_visibility == [True]
@@ -1147,6 +1156,8 @@ def test_scanner_effect_intent_bypasses_process_endpoint_action_cohort(
     process_event, file_event = emitted[:2]
     assert process_event.identity_plan is not None
     assert process_event.identity_plan.session is None
+    assert file_event.file is not None
+    assert file_event.file.path == _STAGED_ARCHIVE
     assert file_event.lifecycle is None
 
 
@@ -1431,8 +1442,13 @@ def test_unregistered_state_session_multi_occurrence_rejects_without_owner_resid
     emitter.emit.assert_not_called()
 
 
-def test_required_executable_file_commits_one_exact_artifact_before_publication() -> None:
-    """The root and file row share one committed executable/content identity."""
+def test_non_system_image_launch_has_no_self_created_image_file_effect() -> None:
+    """A launched process never writes its own image; only its root binary is committed.
+
+    ``ensure_file_event`` is still accepted, but a process cannot create its image after it
+    starts, so no process-owned file row may name the image. The root binary remains one
+    exact committed artifact before publication.
+    """
 
     (
         generator,
@@ -1463,20 +1479,25 @@ def test_required_executable_file_commits_one_exact_artifact_before_publication(
     process_event = next(
         event for event in _events(emitter) if event.event_type == "process_create"
     )
-    file_event = next(event for event in _events(emitter) if event.event_type == "file_create")
     assert process_event.process is not None
     assert process_event.process.pid == pid
     assert process_event.process.binary_identity is not None
-    assert file_event.file is not None
-    assert file_event.file.artifact_identity is not None
-    assert file_event.file.content_identity is not None
-    record = artifact_registry.resolve_version(
-        file_event.file.artifact_identity.artifact_version_id
+    assert not any(
+        event.file is not None and event.file.path.casefold() == image.casefold()
+        for event in _events(emitter)
+    )
+    assert not any(event.event_type == "file_create" for event in _events(emitter))
+    record = artifact_registry.resolve_record_for_execution_path(
+        system.hostname,
+        user.username,
+        image,
+        "windows",
     )
     assert record is not None
-    assert record.artifact == file_event.file.artifact_identity
-    assert record.content == file_event.file.content_identity
     assert record.binary == process_event.process.binary_identity
+    audit = generator.execution_effect_audit_snapshot()
+    assert audit.planned_node_count == 0
+    assert audit.realized_effect_occurrence_count == 0
     census = artifact_registry.census()
     assert census.live_versions == 1
     assert census.prepared_publications == 0
@@ -1949,9 +1970,8 @@ def test_required_near_window_contradiction_has_zero_root_mutation() -> None:
             system,
             timestamp,
             "0x12345",
-            r"C:\Users\Public\near-end.exe",
-            r"C:\Users\Public\near-end.exe",
-            ensure_file_event=True,
+            _POWERSHELL_IMAGE,
+            _COMPRESS_ARCHIVE_COMMAND,
         )
 
     assert tuple(state.list_running_processes()) == before_processes
@@ -2175,14 +2195,15 @@ def test_sessionless_linux_process_effect_retains_exact_lifecycle_actor() -> Non
             linux,
             timestamp,
             "",
-            "/opt/tools/collector",
-            "/opt/tools/collector --read /tmp/input",
-            ensure_file_event=True,
+            "/usr/bin/tar",
+            "/usr/bin/tar -cf /tmp/stage.tar /etc/hosts",
         )
 
     process_identity = state.get_process_identity(linux.hostname, pid)
     assert process_identity is not None
     file_event = next(event for event in _events(emitter) if event.event_type == "file_create")
+    assert file_event.file is not None
+    assert file_event.file.path == "/tmp/stage.tar"
     assert file_event.identity_plan is not None
     assert file_event.identity_plan.actor_id == process_identity.object_id
 
@@ -2283,10 +2304,8 @@ def test_failed_preflight_cancels_new_reservations_but_keeps_caller_token(
         system=system,
         time=timestamp,
         logon_id="0x12345",
-        process_name=r"C:\Users\Public\dropper.exe",
-        command_line=r"C:\Users\Public\dropper.exe",
-        ensure_file_event=True,
-        suppress_command_file_effect=True,
+        process_name=_POWERSHELL_IMAGE,
+        command_line=_COMPRESS_ARCHIVE_COMMAND,
     )
     with patch.object(
         ProcessPreflightPlanner,
@@ -2296,7 +2315,9 @@ def test_failed_preflight_cancels_new_reservations_but_keeps_caller_token(
         prepared = ProcessExecutionActionBundle(generator, request).preflight().prepared_effects
     assert prepared is not None and prepared.endpoint is not None
     supplied = prepared.endpoint.effects[0]
+    assert supplied.spec.instance_key == "semantic-command-file"
     assert isinstance(supplied.payload, PreparedFileEffectPayload)
+    assert supplied.payload.path == _STAGED_ARCHIVE
     assert supplied.payload.artifact_publication is not None
     second_path = r"C:\Users\Public\second.txt"
     second = PreparedEndpointEffect(
@@ -2310,8 +2331,11 @@ def test_failed_preflight_cancels_new_reservations_but_keeps_caller_token(
         event_type="file_create",
         payload=PreparedFileEffectPayload(path=second_path, action=FileEffectAction.CREATE),
     )
+    # The caller now owns the command-file token, so the planner must not re-derive it.
     request = replace(
-        request, ensure_file_event=False, requested_endpoint_effects=(supplied, second)
+        request,
+        suppress_command_file_effect=True,
+        requested_endpoint_effects=(supplied, second),
     )
     before = state.materialization_digest()
     census = registry.census()
@@ -2346,6 +2370,12 @@ def test_failed_preflight_cancels_new_reservations_but_keeps_caller_token(
     assert state.materialization_digest() == before
     emitter.emit.assert_not_called()
     assert registry.cancel_prepared(supplied.payload.artifact_publication)
+    # The abandoned first preflight also holds its own root-binary token; it is distinct
+    # from the command-file token and must be the only other surviving reservation.
+    assert prepared.root_binary_publication is not None
+    assert prepared.root_binary_publication is not supplied.payload.artifact_publication
+    assert registry.census().prepared_publications == 1
+    assert registry.cancel_prepared(prepared.root_binary_publication)
     assert registry.census().prepared_publications == 0
 
 

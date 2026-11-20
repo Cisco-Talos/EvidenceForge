@@ -710,8 +710,19 @@ Process-execution callers supply one process create or process terminate intent.
 `ProcessExecutionActionBundle` and `ProcessTerminationActionBundle` own the
 internal boundary around canonical process lifecycle evidence: parent/session
 ownership, source-visible create/terminate timing, command-owned network
-effects, guaranteed process-image file evidence, and probabilistic
-file/module/registry endpoint side effects. The current slice keeps the detailed
+effects, and probabilistic file/module/registry endpoint side effects.
+Linux and macOS foreground lifetimes come from one ordered data table
+(`config/activity/process_lifetimes.yaml`). macOS applies its qualified
+spawn-profile templates, application bundles and long-lived catalogued
+applications first; every other Mac command ends as it would on Linux.
+Listeners, followed output and bare interactive shells stay open on every
+platform until an authored close or their session ends. Executable provenance is
+a storyline prerequisite rather than a process-owned effect: an image that is
+neither preinstalled (`config/activity/executable_provenance.yaml`, catalogued
+installs and system binaries) nor created earlier in the storyline receives one
+implied creation by its launching parent before launch, recorded in ground truth
+as `implied_image_create`. A launch waits until an image the storyline is still
+creating exists. The current slice keeps the detailed
 identity repair and side-effect builders in the activity-generator adapter so
 existing callers, emitters, and public scenario behavior remain stable while
 other bundles gain one shared process lifecycle path.

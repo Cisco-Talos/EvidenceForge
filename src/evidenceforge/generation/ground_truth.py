@@ -973,6 +973,8 @@ class GroundTruthGenerator:
                     iocs["processes"].add(f"`{event['command_line']}`")
                 if "output_file" in event:
                     iocs["files"].add(event["output_file"])
+                if "implied_image_create" in event:
+                    iocs["files"].add(event["implied_image_create"])
             elif event["type"] == "connection":
                 if "dst_ip" in event:
                     dst_ip = event["dst_ip"]

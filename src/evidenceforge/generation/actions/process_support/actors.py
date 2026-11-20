@@ -226,6 +226,8 @@ class ProcessActorResolver:
             _get_os_category(system.os) in {"linux", "macos"}
             and request.source_visible_by is None
             and not request.from_storyline
+            # A bundle that pins its helper's launch time owns that helper's schedule.
+            and not request.preserve_requested_time
             and _posix_shell_process_reserves_foreground(
                 _get_os_category(system.os), process_name, command_line
             )
