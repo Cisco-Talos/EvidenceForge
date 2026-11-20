@@ -20,6 +20,7 @@ from evidenceforge.generation.activity.process_helpers import (
     _macos_process_uses_shell,
     _posix_shell_process_reserves_foreground,
 )
+from evidenceforge.generation.activity.process_lifetimes import posix_command_lifetime
 from evidenceforge.generation.activity.process_network import ambient_network_allowed
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import Scenario
@@ -181,8 +182,14 @@ def test_mac_runtime_catalog_uses_bounded_direct_native_invocations(application:
         assert _macos_process_uses_shell(image)
         assert _posix_shell_process_reserves_foreground("macos", image, command)
         assert "Get-CimInstance" not in command and "Get-WmiObject" not in command
-    # A known runtime is not a blanket short-lived classification.
-    assert _macos_foreground_lifetime(image, image + " arbitrary-daemon") is None
+    # A known runtime is not a blanket short-lived classification: other invocations
+    # take the lifetime shared with Linux, and bundle-hosted runtimes stay open.
+    expected = (
+        None
+        if ".app/Contents/" in image
+        else posix_command_lifetime(image, image + " arbitrary-daemon")
+    )
+    assert _macos_foreground_lifetime(image, image + " arbitrary-daemon") == expected
 
 
 def test_compiled_logical_apps_share_installed_runtime_and_preserve_old_availability() -> None:

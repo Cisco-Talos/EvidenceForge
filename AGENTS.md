@@ -578,10 +578,15 @@ For process execution, route canonical process create/terminate lifecycle and
 process-owned side effects through the process-execution action bundle. The
 bundle owns the boundary between modeled execution intent and `SecurityEvent`
 evidence: session/parent ownership, source-visible create/terminate timing,
-command-owned network effects, guaranteed process-image file evidence, and
-probabilistic file/module/registry endpoint side effects. Other bundles may call
-the public process entrypoints, but they should not duplicate process lifecycle
-or side-effect generation locally.
+command-owned network effects, and probabilistic file/module/registry endpoint
+side effects. Other bundles may call the public process entrypoints, but they
+should not duplicate process lifecycle or side-effect generation locally.
+Lifetime classification for Linux and macOS foreground commands comes from the
+shared data table in `config/activity/process_lifetimes.yaml`; do not add
+per-platform lifetime lists. A process never writes its own image: a storyline
+executable that is not installed and was not created earlier (download,
+redirect, copy, transfer) receives one implied creation by its launching parent
+before launch, owned by the storyline process handler as a prerequisite.
 
 For authentication and session lifecycle, route successful logons, failed
 logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM

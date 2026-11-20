@@ -95,6 +95,17 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "dict_fields": {"profiles"},
         "scalar_fields": {"schema_version": str},
     },
+    "activity/executable_provenance.yaml": {
+        "string_fields": {"schema_version"},
+        "dict_fields": {"preinstalled_prefixes"},
+    },
+    "activity/process_lifetimes.yaml": {
+        "string_fields": {"schema_version"},
+        "value_list_fields": {"default_seconds"},
+        "dict_fields": {"long_running", "interactive_shells"},
+        "string_list_fields": {"command_wrappers"},
+        "list_fields": {"rules": "id"},
+    },
     "activity/runtime_executable_profiles.yaml": {
         "dict_fields": {"profiles"},
         "scalar_fields": {"schema_version": str},

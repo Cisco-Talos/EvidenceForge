@@ -248,6 +248,7 @@ class ScenarioValidator:
         self._validate_storyline_event_ids()
         self._validate_storyline_time_window()
         self._validate_expansion_redundancy()
+        self._validate_implied_executable_creations()
         self._validate_process_network_pairing()
         self._validate_firewall_config()
         self._validate_observation_profile()
@@ -4320,6 +4321,80 @@ class ScenarioValidator:
                         ),
                     )
                 )
+
+    def _validate_implied_executable_creations(self) -> None:
+        """Note storyline executables that will receive an implied creation.
+
+        An executable that is not installed (system path, catalogued application or
+        binary) and that no earlier step writes (download, redirect, copy, transfer)
+        is created by its launching parent just before it runs. Authors who want a
+        modeled delivery (dropper, download, SMB or SCP transfer) can add that step.
+        """
+        from evidenceforge.generation.activity.executable_provenance import (
+            executable_preexists,
+        )
+        from evidenceforge.generation.activity.helpers import _get_os_category
+        from evidenceforge.generation.engine.storyline import StorylineMixin
+        from evidenceforge.generation.engine.storyline_helpers.process import (
+            _normalize_storyline_process_image,
+        )
+
+        systems = {
+            system.hostname.casefold(): system for system in self.scenario.environment.systems
+        }
+        for section_name, steps in (
+            ("storyline", self.scenario.storyline or []),
+            ("red_herrings", self.scenario.red_herrings or []),
+        ):
+            created: set[tuple[str, str]] = set()
+
+            def key(hostname: str, path: str, os_category: str) -> tuple[str, str]:
+                if os_category == "windows":
+                    return hostname.casefold(), path.replace("/", "\\").casefold()
+                return hostname.casefold(), path
+
+            for step_index, step in enumerate(steps):
+                system = systems.get(str(getattr(step, "system", "") or "").casefold())
+                if system is None:
+                    continue
+                os_category = _get_os_category(system.os)
+                for spec_index, spec in enumerate(step.events):
+                    if spec.type != "process":
+                        continue
+                    command_line = spec.command_line or spec.process_name
+                    try:
+                        image = _normalize_storyline_process_image(
+                            spec.process_name, os_category, username=str(step.actor or "")
+                        )
+                    except ValueError:
+                        image = spec.process_name
+                    image_key = key(system.hostname, image, os_category)
+                    if image_key not in created and not executable_preexists(
+                        image, os_category, str(step.actor or "")
+                    ):
+                        created.add(image_key)
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="info",
+                                field_path=f"{section_name}.{step_index}.events.{spec_index}",
+                                message=(
+                                    f"'{image}' is not installed and no earlier step writes it; "
+                                    "generation adds one implied creation by its launching "
+                                    "parent just before it runs."
+                                ),
+                                suggestion=(
+                                    "Add an earlier download, copy or transfer step if the "
+                                    "delivery itself is part of the narrative."
+                                ),
+                            )
+                        )
+                    output_file = StorylineMixin._extract_output_file(command_line, os_category)
+                    if output_file:
+                        created.add(key(system.hostname, output_file, os_category))
+                    scp = StorylineMixin._extract_scp_destination(command_line, os_category)
+                    if scp is not None:
+                        target_host, target_path, _user = scp
+                        created.add((target_host.casefold(), target_path))
 
     def _validate_expansion_redundancy(self) -> None:
         """Warn when scenario manually specifies events the causal expansion engine auto-generates.

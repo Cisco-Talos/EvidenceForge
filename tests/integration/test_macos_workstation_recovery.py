@@ -231,12 +231,12 @@ def test_combined_macos_workstation_exact_recovery(tmp_path: Path) -> None:
         census = host.process_census
         assert census is not None
         assert census.exit_accounting_complete and census.known_exit_identities_match
+        # Every unpublished in-window exit is explained by an observation row: an
+        # unknown outcome, or a source filter such as unknown image security facts.
         unknown = sum(
             row.count
             for row in host.observations
-            if row.phase == "exit"
-            and row.reason == "exit_outcome_unknown"
-            and row.status != "out_of_window"
+            if row.phase == "exit" and row.status not in {"visible", "out_of_window"}
         )
         assert census.expected_exits == census.known_exits + unknown
         assert census.published_exits == census.known_exits

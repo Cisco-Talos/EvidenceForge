@@ -8648,9 +8648,11 @@ class TestActivityGenerator:
             test_system,
             timestamp,
             "0x12345",
-            r"C:\Users\Public\dropper.exe",
-            r"C:\Users\Public\dropper.exe",
-            ensure_file_event=True,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            (
+                r"powershell.exe -NoProfile -Command Compress-Archive -Path "
+                r"C:\Users\Public\Documents -DestinationPath C:\Users\Public\stage.zip"
+            ),
         )
 
         events = [
@@ -8662,7 +8664,7 @@ class TestActivityGenerator:
             for event in events
             if event.event_type == "file_create"
             and event.file is not None
-            and event.file.path == r"C:\Users\Public\dropper.exe"
+            and event.file.path == r"C:\Users\Public\stage.zip"
         )
         assert file_event.timestamp > process_event.timestamp
 

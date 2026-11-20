@@ -232,6 +232,18 @@ _FAMILIES = (
         "Process-to-network correlation mappings.",
     ),
     _family(
+        "activity/executable_provenance.yaml",
+        "deep-mapping",
+        "config-apps-processes.md",
+        "Path prefixes whose executables exist before the simulated window.",
+    ),
+    _family(
+        "activity/process_lifetimes.yaml",
+        "mixed",
+        "config-apps-processes.md",
+        "Ordered foreground command lifetimes shared by Linux and macOS.",
+    ),
+    _family(
         "activity/process_output_profiles.yaml",
         "keyed-entry",
         "config-apps-processes.md",

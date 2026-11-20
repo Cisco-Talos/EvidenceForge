@@ -18,6 +18,10 @@ Fields: `type`, required `process_name`, optional `command_line`, `process_ref`,
 `outcome`, `launch_method`, `supplementary`, `technique`, and `description`. `command_line` defaults to the process name at
 generation time. Use unique `process_ref` values only when later children need exact lineage;
 `parent_ref` names an earlier durable reference. `supplementary` is `auto` (default) or `none`.
+An image that is not installed and that no earlier step writes (download/redirect output, copy
+destination, SCP target) gets one implied creation by its launching parent before it runs;
+`eforge validate` notes each. Author the delivery step when it matters to the narrative.
+Listeners, followed output and bare interactive shells stay open until terminated or logoff.
 
 For a qualified fresh Mac app, `launch_method: finder` selects the canonical launchd/
 xpcproxy/app startup with an existing GUI login. It is incompatible with `parent_ref`

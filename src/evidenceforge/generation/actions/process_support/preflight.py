@@ -339,63 +339,6 @@ class ProcessPreflightPlanner:
         process_username = actor.username
         os_category = _get_os_category(request.system.os)
         exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        bundle_owned_service_payload = exe_lower in {
-            "psexesvc.exe",
-            "healthmonitorsvc.exe",
-        }
-        if (
-            request.ensure_file_event
-            and not bundle_owned_service_payload
-            and os_category != "macos"
-        ):
-            # A Mac execution does not establish installation or a self-write.
-            # Its files require explicit command/artifact effects below.
-            lower_path = process_name.lower()
-            windows_path = lower_path.replace("/", "\\")
-            is_system_binary = (
-                windows_path.startswith("c:\\windows\\system32\\")
-                or windows_path.startswith("c:\\windows\\syswow64\\")
-                or windows_path.startswith("c:\\program files\\")
-                or windows_path.startswith("c:\\program files (x86)\\")
-                or lower_path.startswith(
-                    (
-                        "/bin/",
-                        "/sbin/",
-                        "/usr/bin/",
-                        "/usr/sbin/",
-                        "/usr/local/bin/",
-                        "/usr/local/sbin/",
-                    )
-                )
-            )
-            if not is_system_binary:
-                occurrence_time = max(
-                    actor.started_at + timedelta(milliseconds=120),
-                    source_ready_floor,
-                )
-                planned.append(
-                    PreparedEndpointEffect(
-                        spec=EndpointEffectSpec(
-                            intent=FileEffectIntent(
-                                action=FileEffectAction.CREATE,
-                                path=process_name,
-                            ),
-                            occurrence_times=(occurrence_time,),
-                            instance_key="guaranteed-process-image-create",
-                            state_disposition=EndpointStateDisposition.DURABLE_FINAL,
-                            retention_deadline=max(
-                                endpoint_window_end,
-                                occurrence_time + timedelta(microseconds=1),
-                            ),
-                        ),
-                        event_type="file_create",
-                        payload=PreparedFileEffectPayload(
-                            path=process_name,
-                            action=FileEffectAction.CREATE,
-                        ),
-                    )
-                )
-
         semantic_file_effect = None
         if not request.suppress_command_file_effect:
             from evidenceforge.generation.activity.edr_pools import select_command_file_side_effect
@@ -1090,13 +1033,19 @@ class ProcessPreflightPlanner:
         if os_category == "windows":
             return _windows_process_lifetime_plan(actor.image, actor.command_line)
         if os_category == "macos":
+            if request.preserve_requested_time and request.lifecycle_group_id:
+                # A bundle-pinned helper (a mounted SMB operation) ends with its operation.
+                return ProcessLifetimePlan(
+                    mode=ProcessLifetimeMode.SESSION_OWNED,
+                    classification="macos-bundle-operation-helper",
+                )
             lifetime = _posix_foreground_lifetime(os_category, actor.image, actor.command_line)
             if lifetime is not None:
                 return ProcessLifetimePlan(
                     mode=ProcessLifetimeMode.BOUNDED,
                     minimum_seconds=lifetime[0],
                     maximum_seconds=lifetime[1],
-                    classification="macos-profiled-foreground-command",
+                    classification="macos-foreground-command",
                 )
             return ProcessLifetimePlan(
                 mode=ProcessLifetimeMode.SESSION_OWNED,

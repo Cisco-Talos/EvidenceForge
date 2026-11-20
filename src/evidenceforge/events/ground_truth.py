@@ -43,6 +43,7 @@ class GroundTruthAttributesBase(BaseModel):
     """Known ground-truth attribute fields across tracked event kinds."""
 
     hostname: str | None = None
+    implied_image_create: str | None = None
     canonical_occurrence_count: int | None = None
     http_statuses: list[int] | None = None
     network_destinations: list[str] | None = None

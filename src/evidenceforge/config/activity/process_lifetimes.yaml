@@ -1,0 +1,175 @@
+# Foreground command lifetimes shared by every POSIX platform.
+#
+# Rules are evaluated in order and the first match wins. Each rule's `when`
+# list is any-of; the keys inside one `when` entry must all match. Matching is
+# case-insensitive. `executables` compares the image basename;
+# `command_has_argument` matches a whole whitespace-delimited argument.
+# `lifetime: unbounded` keeps the process running until an authored close or
+# its owning session ends. `lifetime: requested-sleep` bounds a `sleep` by its
+# numeric argument and falls back to `seconds` otherwise.
+#
+# macOS consults its qualified spawn-profile templates, application bundles and
+# catalogued long-lived applications before this table (see spawn_rules.yaml).
+schema_version: "1.0"
+default_seconds: [1.0, 8.0]
+
+# Listeners, reverse shells and keep-alive loops: unbounded on every platform.
+# Storyline termination estimates read the same list. `executables` matches the
+# image or any whole command token (so `cmd /c ncat ...` counts but `truncate`
+# does not); `command_contains` matches a case-insensitive substring.
+long_running:
+  executables:
+    - mstsc.exe
+    - mstsc
+    - rdpclip.exe
+    - rdpclip
+    - healthmonitorsvc.exe
+    - ncat
+    - ncat.exe
+    - nc
+    - nc.exe
+    - socat
+  command_contains:
+    - TCPClient
+    - TCPListener
+    - $s.Read
+    - meterpreter
+    - beacon
+    - reverse_tcp
+    - bind_tcp
+    - -persist
+    - --keep-alive
+    - while(true)
+    - while True
+    - Start-Sleep -Seconds 99
+    - tail -f
+
+# Wrappers that run another program: the wrapped program's lifetime applies.
+# Leading options and NAME=value assignments are skipped; with nothing left to
+# run, the wrapper itself is classified by the rules below.
+command_wrappers: [env]
+
+# A shell started without a command or script is interactive: it lasts as long
+# as its user or attacker keeps it open.
+interactive_shells:
+  executables: [sh, bash, dash, zsh, ksh, mksh, tcsh, csh, fish]
+  options: [-i, -l, --login, -il, -li, --norc, --noprofile]
+
+rules:
+  - id: follow-output
+    lifetime: unbounded
+    when:
+      - command_contains: ["tail -f", "watch ", "--follow"]
+      - command_has_argument: [--watch]
+      - executables: [journalctl]
+        command_has_argument: [-f]
+      - executables: [docker, kubectl]
+        command_has_all_arguments: [logs, -f]
+  - id: long-running
+    lifetime: unbounded
+    when:
+      - long_running: true
+  - id: interactive-shell
+    lifetime: unbounded
+    when:
+      - interactive_shell: true
+  - id: apt-transport-method
+    seconds: [5.0, 60.0]
+    when:
+      - image_contains: [/usr/lib/apt/methods/]
+      - command_starts_with: [/usr/lib/apt/methods/]
+  - id: runtime-version-query
+    seconds: [0.05, 2.0]
+    when:
+      - executables: [python, python3, node, npm, git]
+        command_has_argument: [--version, -v, version]
+  - id: package-index-refresh
+    seconds: [20.0, 180.0]
+    when:
+      - executables: [apt, apt-get, dnf, yum]
+        command_contains: [update, upgradable, makecache, check-update]
+  - id: trivial-query
+    seconds: [0.05, 0.8]
+    when:
+      - executables: [cat, date, ls, pwd, "true", whoami, id, uname, hostname, df, free]
+  - id: sleep
+    lifetime: requested-sleep
+    seconds: [0.2, 2.0]
+    when:
+      - executables: [sleep]
+  - id: test
+    seconds: [0.2, 2.0]
+    when:
+      - executables: [test]
+  - id: database-client-password-prompt
+    seconds: [8.0, 45.0]
+    when:
+      - executables: [mysql, psql]
+        command_has_argument: [-p]
+  - id: database-client
+    seconds: [1.5, 12.0]
+    when:
+      - executables: [mysql, psql]
+  - id: database-probe
+    seconds: [0.8, 8.0]
+    when:
+      - executables: [sqlite3, redis-cli, pg_isready]
+  - id: service-manager
+    seconds: [0.8, 9.0]
+    when:
+      - executables: [systemctl, journalctl]
+  - id: filesystem-walk
+    seconds: [0.8, 8.0]
+    when:
+      - executables: [du, find]
+  - id: text-and-socket-query
+    seconds: [0.35, 5.0]
+    when:
+      - executables: [grep, head, tail, wc, env, printenv, ss, ip, ps]
+  - id: transfer
+    seconds: [0.8, 12.0]
+    when:
+      - executables: [curl, wget]
+  - id: smb-client-batch
+    seconds: [1.0, 20.0]
+    when:
+      - executables: [smbclient]
+        command_has_argument: [-c]
+  - id: smb-client-interactive
+    lifetime: unbounded
+    when:
+      - executables: [smbclient]
+  - id: git-remote
+    seconds: [3.0, 90.0]
+    when:
+      - executables: [git]
+        command_has_argument: [pull, fetch, clone]
+  - id: git-local
+    seconds: [0.3, 12.0]
+    when:
+      - executables: [git]
+  - id: npm-build
+    seconds: [8.0, 180.0]
+    when:
+      - executables: [npm]
+        command_contains: [" run build"]
+  - id: ssh-client
+    seconds: [30.0, 3600.0]
+    when:
+      - executables: [ssh]
+  - id: archive-and-orchestration
+    seconds: [3.0, 18.0]
+    when:
+      - executables: [gzip, tar, zip, scp, kubectl, docker]
+  - id: build-and-dump
+    seconds: [8.0, 45.0]
+    when:
+      - executables: [make, gcc, cargo, npm, python, python3, mysqldump]
+  - id: editor-application
+    lifetime: unbounded
+    when:
+      - executables: [code, codium]
+  - id: terminal-editor
+    seconds: [20.0, 95.0]
+    when:
+      - executables: [vim, vi, nano, emacs]

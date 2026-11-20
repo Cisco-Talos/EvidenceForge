@@ -10,11 +10,17 @@ import ntpath
 import random
 import re
 import shlex
-from collections.abc import Sequence
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
+from evidenceforge.generation.activity.process_lifetimes import (
+    numeric_sleep_seconds as numeric_sleep_seconds,
+)
+from evidenceforge.generation.activity.process_lifetimes import (
+    posix_command_lifetime,
+    unwrapped_command,
+)
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
@@ -87,111 +93,9 @@ def _windows_service_process_account(process_name: str, command_line: str) -> st
     return None
 
 
-def numeric_sleep_seconds(arguments: Sequence[str] | None) -> Decimal | None:
-    """Read one literal numeric sleep operand without executing or capping its duration."""
-    if (
-        arguments is None
-        or len(arguments) != 2
-        or arguments[0].rsplit("/", 1)[-1].lower() != "sleep"
-        or re.fullmatch(r"(?:\d+(?:\.\d*)?|\.\d+)", arguments[1]) is None
-    ):
-        return None
-    try:
-        requested = Decimal(arguments[1])
-    except InvalidOperation:
-        return None
-    return requested if requested.is_finite() and requested >= 0 else None
-
-
 def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
     """Estimate foreground Linux command lifetime for shell-history ordering."""
-    exe_name = process_name.rsplit("/", 1)[-1].lower()
-    command = command_line.lower()
-    follows_output = (
-        any(pattern in command for pattern in ("tail -f", "watch ", "--follow"))
-        or (exe_name == "journalctl" and " -f " in f" {command} ")
-        or (
-            exe_name in {"docker", "kubectl"}
-            and " logs " in f" {command} "
-            and " -f " in f" {command} "
-        )
-    )
-    if follows_output:
-        return None
-    if "/usr/lib/apt/methods/" in process_name.lower() or command.startswith(
-        "/usr/lib/apt/methods/"
-    ):
-        return (5.0, 60.0)
-    if exe_name in {"python", "python3", "node", "npm", "git"} and any(
-        marker in f" {command} " for marker in (" --version ", " -v ", " version ")
-    ):
-        return (0.05, 2.0)
-    if exe_name in {"apt", "apt-get", "dnf", "yum"} and any(
-        token in command for token in ("update", "upgradable", "makecache", "check-update")
-    ):
-        return (20.0, 180.0)
-    if exe_name in {
-        "cat",
-        "date",
-        "ls",
-        "pwd",
-        "true",
-        "whoami",
-        "id",
-        "uname",
-        "hostname",
-        "df",
-        "free",
-    }:
-        return (0.05, 0.8)
-    if exe_name == "sleep":
-        try:
-            argv = shlex.split(command_line)
-        except ValueError:
-            argv = []
-        requested = numeric_sleep_seconds(argv)
-        if requested is not None:
-            bounded = min(requested, Decimal(86_400))
-            bounded_seconds = float(bounded)
-            lower = max(0.05, bounded_seconds)
-            completion_slack = min(2.0, max(0.05, bounded_seconds * 0.02))
-            return (lower, lower + completion_slack)
-        return (0.2, 2.0)
-    if exe_name == "test":
-        return (0.2, 2.0)
-    if exe_name in {"mysql", "psql"}:
-        if " -p " in f" {command} " or command.endswith(" -p"):
-            return (8.0, 45.0)
-        return (1.5, 12.0)
-    if exe_name in {"sqlite3", "redis-cli", "pg_isready"}:
-        return (0.8, 8.0)
-    if exe_name in {"systemctl", "journalctl"}:
-        return (0.8, 9.0)
-    if exe_name in {"du", "find"}:
-        return (0.8, 8.0)
-    if exe_name in {"grep", "head", "tail", "wc", "env", "printenv", "ss", "ip", "ps"}:
-        return (0.35, 5.0)
-    if exe_name in {"curl", "wget"}:
-        return (0.8, 12.0)
-    if exe_name == "smbclient":
-        return (1.0, 20.0) if " -c " in f" {command} " else None
-    if exe_name == "git":
-        if any(token in f" {command} " for token in (" pull ", " fetch ", " clone ")):
-            return (3.0, 90.0)
-        return (0.3, 12.0)
-    if exe_name == "npm" and " run build" in command:
-        return (8.0, 180.0)
-    if exe_name == "ssh":
-        return (30.0, 3600.0)
-    if exe_name in {"gzip", "tar", "zip", "scp", "kubectl", "docker"}:
-        return (3.0, 18.0)
-    if exe_name in {"make", "gcc", "cargo", "npm", "python", "python3", "mysqldump"}:
-        return (8.0, 45.0)
-    if exe_name in {"code", "codium"}:
-        return None
-    if exe_name in {"vim", "vi", "nano", "emacs"}:
-        return (20.0, 95.0)
-    return (1.0, 8.0)
+    return posix_command_lifetime(process_name, command_line)
 
 
 def _linux_shell_process_reserves_foreground(process_name: str, command_line: str) -> bool:
@@ -218,16 +122,38 @@ def _linux_shell_process_reserves_foreground(process_name: str, command_line: st
 
 
 def _macos_foreground_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
-    """Bound only commands admitted by the Mac spawn profile's short templates.
+    """Classify a Mac foreground command's lifetime.
 
-    These are modeled bounds, not calibrated workstation measurements. Unknown
-    commands retain explicit session/operation ownership rather than inheriting
-    a Linux fallback lifetime. Existing overlay templates control admission.
+    A command admitted by its spawn profile's short templates keeps that profile's
+    timing. Application bundles and their helpers, and catalogued long-lived Mac
+    applications, stay unbounded (session or operation owned). Every other command,
+    including a catalogued short command used in another form, uses the lifetime
+    table shared with Linux: it ends as it would there, and listeners, followed
+    output and interactive shells stay unbounded on both.
     """
     from evidenceforge.generation.activity.spawn_rules import get_parent_config
 
     name = process_name.rsplit("/", 1)[-1]
     profile = get_parent_config("macos", name)
+    profiled = _macos_profiled_short_lifetime(profile, command_line)
+    if profiled is not None:
+        return profiled
+    wrapped = unwrapped_command(process_name, command_line)
+    if wrapped is not None:
+        return _macos_foreground_lifetime(*wrapped)
+    if ".app/Contents/" in process_name or profile.get("lifetime") == "long":
+        return None
+    return posix_command_lifetime(process_name, command_line)
+
+
+def _macos_profiled_short_lifetime(
+    profile: dict[str, Any], command_line: str
+) -> tuple[float, float] | None:
+    """Bound a command only when it matches one of its profile's short templates.
+
+    These are modeled bounds, not calibrated workstation measurements. Existing
+    overlay templates control admission.
+    """
     if profile.get("lifetime") != "short":
         return None
     try:

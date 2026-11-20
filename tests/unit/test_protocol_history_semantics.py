@@ -16,6 +16,7 @@ from evidenceforge.generation.activity.network_transport import (
     native_connection_history,
 )
 from evidenceforge.generation.activity.process_helpers import _macos_foreground_lifetime
+from evidenceforge.generation.activity.process_lifetimes import posix_command_lifetime
 
 
 @pytest.mark.parametrize("protocol", ["tcp", "udp"])
@@ -66,7 +67,12 @@ def test_scoped_history_override_replaces_only_selected_profile() -> None:
 
 def test_query_bounds_do_not_admit_unknown_command_or_shell_options() -> None:
     assert _macos_foreground_lifetime("/usr/bin/id", "/usr/bin/id") == (0.008, 2.5)
-    assert _macos_foreground_lifetime("/usr/bin/id", "/usr/bin/id --unknown") is None
-    assert _macos_foreground_lifetime("/bin/zsh", "/bin/zsh -c 'sleep 90'") is None
+    # Forms outside the profiled query templates take the lifetime shared with Linux.
+    for image, command in (
+        ("/usr/bin/id", "/usr/bin/id --unknown"),
+        ("/bin/zsh", "/bin/zsh -c 'sleep 90'"),
+    ):
+        assert _macos_foreground_lifetime(image, command) == posix_command_lifetime(image, command)
+        assert _macos_foreground_lifetime(image, command) != (0.008, 2.5)
     with pytest.raises(ValidationError, match="minimum <= median <= maximum"):
         ShortCommandTiming(minimum=1, median=0.5, maximum=2, sigma=0.8)

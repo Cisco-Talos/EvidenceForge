@@ -9812,6 +9812,43 @@ class BaselineMixin:
             for system in self.scenario.environment.systems
         )
 
+    def _baseline_smb_closes_within_client_session(
+        self, *, hostname: str, username: str, started_at: datetime, closed_at: datetime
+    ) -> bool:
+        """Return whether an interactive SMB operation ends before its session's known end."""
+
+        from evidenceforge.generation.actions.process_support.policy import (
+            _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS,
+        )
+        from evidenceforge.generation.actions.smb_activity import (
+            _SMB_OPERATION_CLIENT_CLOSE_MAX_MS,
+        )
+
+        # The client helper exits after the operation, then the shell releases it.
+        margin = timedelta(
+            milliseconds=_SMB_OPERATION_CLIENT_CLOSE_MAX_MS
+            + _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS
+            + 25
+        )
+        for session in self.state_manager.get_active_sessions_on_system_at(hostname, started_at):
+            if session.username != username or session.logon_type not in (2, 10, 11):
+                continue
+            end_plan = self.state_manager.get_session_end_plan(session.logon_id)
+            deadlines = [
+                ensure_utc(deadline)
+                for deadline in (
+                    end_plan.canonical_end
+                    if end_plan is not None and end_plan.is_authoritative
+                    else None,
+                    self.state_manager.get_session_end_time(session.logon_id),
+                    session.network_close_time,
+                )
+                if deadline is not None
+            ]
+            if deadlines and ensure_utc(closed_at) + margin >= min(deadlines):
+                return False
+        return True
+
     def _generate_baseline_smb_activity(self, current_hour: datetime) -> None:
         """Execute the hour's planned SMB actions in canonical timestamp order."""
 
@@ -9863,6 +9900,15 @@ class BaselineMixin:
                     activity_source="baseline",
                 )
                 if preparation.closed_at > self.end_time:
+                    continue
+                if not self._baseline_smb_closes_within_client_session(
+                    hostname=intent.source_system.hostname,
+                    username=intent.actor.username,
+                    started_at=intent.time,
+                    closed_at=preparation.closed_at,
+                ):
+                    # The interactive owner logs off first; it cannot start an operation
+                    # whose client helper would outlive the session.
                     continue
                 canonical_duration = preparation.duration
             close_bound = self._baseline_network_close_bound_seconds(
@@ -10031,6 +10077,13 @@ class BaselineMixin:
                     activity_source="baseline",
                 )
                 if preparation.closed_at > self.end_time:
+                    continue
+                if not self._baseline_smb_closes_within_client_session(
+                    hostname=system.hostname,
+                    username=actor.username,
+                    started_at=timestamp,
+                    closed_at=preparation.closed_at,
+                ):
                     continue
                 canonical_duration = preparation.duration
             close_bound = self._baseline_network_close_bound_seconds(

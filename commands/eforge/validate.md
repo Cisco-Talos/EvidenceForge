@@ -73,7 +73,7 @@ Inspect only the implicated authored fragment rather than loading every include 
 - Errors block generation. Report the root cause and smallest safe next action.
 - Repair and revalidate errors before warnings. Warnings do not block generation; after errors
   reach zero, group warnings by cause and identify intentional exceptions.
-- Info notes are observations, not warnings. Mention them only when useful.
+- Info notes are observations, not warnings. Mention them only when useful (an implied-creation note just means no earlier step delivers that image).
 - Coverage checks use the selected formats and host platforms; unrequested alternatives need no
   extra sensors, but explicit loss or unobservable important facts still produce findings.
   `ssl`/`https` are opaque to Zeek HTTP, so keep an intentional visibility warning when an

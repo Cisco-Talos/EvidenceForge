@@ -100,6 +100,18 @@ def handle_process(
     )
     command_line = spec.command_line or process_name
     command_derivation = CommandDerivation(command_line)
+    image_available_at = getattr(self, "_storyline_file_available_at", {}).get(
+        self._storyline_local_file_key(system, process_name)
+    )
+    if image_available_at is not None and time <= image_available_at:
+        # A file the storyline is still creating cannot run before it exists.
+        ready_rng = random.Random(
+            _stable_seed(
+                f"storyline-image-ready:{system.hostname}:{process_name}:"
+                f"{image_available_at.isoformat()}"
+            )
+        )
+        time = image_available_at + timedelta(milliseconds=ready_rng.randint(1_200, 2_000))
     provider = self.activity_generator.macos_execution_metadata if os_category == "macos" else None
     launch_session = self.state_manager.get_session_at(logon_id, time) if provider else None
     finder = getattr(spec, "launch_method", None) == "finder" or (
@@ -426,6 +438,17 @@ def handle_process(
             derivation_step("catalog_direct_exec", image=process_name),
         )
         process_command_line = direct_exec
+    if not service_backed_process:
+        _emit_implied_image_create(
+            self,
+            system=system,
+            process_name=process_name,
+            username=process_actor.username,
+            parent_pid=parent_pid,
+            launch_time=time,
+            os_category=os_category,
+            malicious_event=malicious_event,
+        )
     pid = self.activity_generator.generate_process(
         user=process_actor,
         system=system,
@@ -866,7 +889,88 @@ def _emit_process_output_file(
                 storyline_origin=True,
             )
         )
+        self._remember_storyline_file_available(
+            system=system,
+            path=output_file,
+            available_at=file_time,
+        )
         malicious_event["output_file"] = output_file
+
+
+def _emit_implied_image_create(
+    self: StorylineMixin,
+    *,
+    system: System,
+    process_name: str,
+    username: str,
+    parent_pid: int | None,
+    launch_time: datetime,
+    os_category: str,
+    malicious_event: dict[str, Any],
+) -> None:
+    """Create a launched image that no earlier evidence put on the host.
+
+    An executable already installed (system path, catalogued application or binary)
+    or produced earlier in the storyline (download, redirect, transfer) gets no
+    creation. Any other image was necessarily written before it ran: its launching
+    parent (dropper, exploited service, shell or desktop) is attributed with one
+    creation shortly before the launch. Ground truth records it as implied.
+    """
+    from evidenceforge.generation.activity.executable_provenance import executable_preexists
+
+    if executable_preexists(process_name, os_category, username):
+        return
+    file_key = self._storyline_local_file_key(system, process_name)
+    if file_key in getattr(self, "_storyline_file_available_at", {}):
+        return
+    parent = (
+        self.state_manager.get_process(system.hostname, parent_pid)
+        if parent_pid is not None and parent_pid > 0
+        else None
+    )
+    if parent is None:
+        return
+    launch = ensure_utc(launch_time)
+    parent_start = ensure_utc(parent.start_time)
+    if launch - parent_start < timedelta(milliseconds=20):
+        return
+    implied_rng = random.Random(
+        _stable_seed(f"implied-image-create:{system.hostname}:{process_name}:{launch.isoformat()}")
+    )
+    file_time = launch - timedelta(milliseconds=implied_rng.randint(350, 2_500))
+    floor = parent_start + timedelta(milliseconds=10)
+    if file_time <= floor:
+        file_time = parent_start + (launch - parent_start) / 2
+    from evidenceforge.events.base import OccurrenceBuilder
+    from evidenceforge.events.contexts import AuthContext, FileContext, ProcessContext
+
+    host_ctx = self.activity_generator._build_host_context(system)
+    self.dispatcher.dispatch_builder(
+        OccurrenceBuilder(
+            timestamp=file_time,
+            event_type="file_create",
+            src_host=host_ctx,
+            auth=AuthContext(username=parent.username),
+            process=ProcessContext(
+                pid=parent.pid,
+                parent_pid=parent.parent_pid,
+                image=parent.image,
+                command_line=parent.command_line,
+                username=parent.username,
+                integrity_level=parent.integrity_level,
+                logon_id=parent.logon_id,
+                start_time=parent.start_time,
+            ),
+            file=FileContext(path=process_name, action="create", pid=parent.pid),
+            storyline_origin=True,
+        )
+    )
+    self._remember_storyline_file_available(
+        system=system,
+        path=process_name,
+        available_at=file_time,
+    )
+    malicious_event["implied_image_create"] = process_name
 
 
 def _emit_process_http_companion(

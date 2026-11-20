@@ -126,8 +126,6 @@ _render_beacon_template = periodic_helpers._render_beacon_template
 _render_dns_tunnel_response_template = periodic_helpers._render_dns_tunnel_response_template
 _weighted_profile_entry = periodic_helpers._weighted_profile_entry
 _IPV4_LITERAL_RE = process_helpers._IPV4_LITERAL_RE
-_LONG_RUNNING_EXES = process_helpers._LONG_RUNNING_EXES
-_LONG_RUNNING_PATTERNS = process_helpers._LONG_RUNNING_PATTERNS
 _MEDIUM_COMMANDS = process_helpers._MEDIUM_COMMANDS
 _SHORT_COMMANDS = process_helpers._SHORT_COMMANDS
 _estimate_process_lifetime = process_helpers._estimate_process_lifetime
@@ -737,6 +735,44 @@ POWERSHELL_COMMANDS = [
     "Invoke-Command -ComputerName DC-01 -ScriptBlock { Get-ADUser -Filter * -Properties * | Export-Csv C:\\temp\\users.csv }",
     "New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'WindowsUpdate' -Value 'powershell.exe -w hidden -ep bypass -f C:\\Users\\Public\\update.ps1'",
 ]
+
+
+_SHORT_O_OUTPUT_TOOLS: frozenset[str] = frozenset(
+    {"curl", "wget", "nmap", "tar", "zip", "7z", "7za", "mysql", "mysqldump", "psql", "sqlcmd"}
+)
+_COPY_COMMANDS: frozenset[str] = frozenset({"cp", "mv", "copy", "move", "xcopy"})
+_SHELL_OPERATORS: frozenset[str] = frozenset({"&&", "||", ";", "|", "&"})
+
+
+def _command_token_name(token: str) -> str:
+    """Return a command token's lowercase basename without a Windows ``.exe`` suffix."""
+    name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name.removesuffix(".exe")
+
+
+def _copy_destination(parts: list[str], os_category: str) -> str | None:
+    """Return the destination a copy or move command writes, when it names one."""
+    for index, token in enumerate(parts):
+        if _command_token_name(token) not in _COPY_COMMANDS:
+            continue
+        operands: list[str] = []
+        for operand in parts[index + 1 :]:
+            if operand in _SHELL_OPERATORS:
+                break
+            if operand.startswith("-") or (os_category == "windows" and operand.startswith("/")):
+                continue
+            operands.append(operand.strip("\"'"))
+        if len(operands) < 2:
+            return None
+        destination = operands[-1]
+        separator = "\\" if os_category == "windows" else "/"
+        if destination.endswith(("/", "\\")):
+            source_name = operands[0].replace("\\", "/").rsplit("/", 1)[-1]
+            return f"{destination}{source_name}" if source_name else None
+        if separator not in destination.replace("/", separator):
+            return None
+        return destination
+    return None
 
 
 class StorylineMixin:
@@ -4848,43 +4884,39 @@ class StorylineMixin:
 
     @staticmethod
     def _extract_output_file(command_line: str, os_category: str) -> str | None:
-        """Extract output file path from a command line string.
+        """Extract the file a storyline command writes, if its syntax names one.
 
-        Detects common output file patterns in PowerShell, cmd, and Linux commands.
+        Covers PowerShell output cmdlets, shell redirects, downloader and archiver
+        output flags, Windows transfer utilities, and copy/move destinations.
         Returns the file path if found, None otherwise.
         """
         try:
             parts = shlex.split(command_line, posix=os_category != "windows")
         except ValueError:
             parts = command_line.split()
-        command_name = parts[0].rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() if parts else ""
+        command_name = _command_token_name(parts[0]) if parts else ""
 
         patterns = [
             r'Export-Csv\s+[\'"]?([^\s\'">;]+)',  # PowerShell Export-Csv
             r'-OutFile\s+[\'"]?([^\s\'">;]+)',  # PowerShell -OutFile
             r'Out-File\s+[\'"]?([^\s\'">;]+)',  # PowerShell Out-File
-            r'>\s*[\'"]?([^\s\'">;]+)',  # Shell redirect >
+            # Shell redirect; descriptor duplication (2>&1) is not a file.
+            r'(?<![0-9&])>>?\s*(?!&)[\'"]?([^\s\'">;&|]+)',
             r'--output[= ]\s*[\'"]?([^\s\'">;]+)',  # --output flag
+            r'Start-BitsTransfer\b.*?-Destination\s+[\'"]?([^\s\'">;]+)',
+            r'Copy-Item\b.*?-Destination\s+[\'"]?([^\s\'">;]+)',
+            # certutil -urlcache [-split] [-f] URL OUTFILE
+            r'certutil(?:\.exe)?\s+(?:-\w+\s+)*-urlcache\s+(?:-\w+\s+)*\S+://\S+\s+[\'"]?([^\s\'">;]+)',
+            # bitsadmin /transfer JOB [/priority P] URL OUTFILE
+            r'bitsadmin(?:\.exe)?\s+/transfer\s+\S+\s+(?:/\w+\s+\w+\s+)*\S+://\S+\s+[\'"]?([^\s\'">;]+)',
         ]
-        short_o_output_tools = {
-            "curl",
-            "wget",
-            "nmap",
-            "tar",
-            "zip",
-            "7z",
-            "mysql",
-            "mysqldump",
-            "psql",
-            "sqlcmd",
-        }
-        if command_name in short_o_output_tools:
+        if command_name in _SHORT_O_OUTPUT_TOOLS:
             patterns.append(r'-o\s+[\'"]?([^\s\'">;]+)')  # Tool-specific output flag
         for pattern in patterns:
             match = re.search(pattern, command_line, re.IGNORECASE)
-            if match:
+            if match and not match.group(1).lower().startswith(("/dev/", "nul", "$null")):
                 return match.group(1)
-        return None
+        return _copy_destination(parts, os_category)
 
     @staticmethod
     def _extract_scp_destination(

@@ -37,6 +37,8 @@ caches data after first load. Two files (`network_params.yaml`,
 | `traffic_profiles.yaml` | `traffic_profiles.py` | Role-based and persona-based network traffic profiles. See `docs/design/traffic-profiles-design.md`. |
 | `web_session_profiles.yaml` | `web_session_profiles.py` | Inbound web server visitor classes, request profiles, and User-Agent pools. Human visitors use `site_maps.yaml`; top-level `web` traffic rates fan out into page assets. |
 | `process_network_map.yaml` | `process_network.py` | Process-to-network service mappings for PID attribution and process-network correlation. |
+| `executable_provenance.yaml` | `executable_provenance.py` | Path prefixes whose executables predate the window; other storyline images receive one implied, parent-attributed creation. |
+| `process_lifetimes.yaml` | `process_lifetimes.py` | Ordered foreground command lifetimes shared by Linux and macOS, plus the long-running and interactive-shell lists. |
 | `process_output_profiles.yaml` | `process_output_profiles.py` | Deterministic logical-size ranges for command-owned archive outputs. |
 | `runtime_executable_profiles.yaml` | `runtime_executable_profiles.py` | Deterministic positive fallback sizes for unresolved runtime executable artifacts. |
 | `process_access_patterns.yaml` | `process_access_patterns.py` | Sysmon Event 10 baseline source/target pairs and weighted GrantedAccess masks. |
