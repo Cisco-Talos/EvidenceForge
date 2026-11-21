@@ -269,7 +269,7 @@ files or another installation.
 | Collection/timing | `observation_profiles.yaml`, `timing_profiles.yaml` |
 | Generated identities | `public_identity_profiles.yaml`, `email_background.yaml`, `suspicious_benign.yaml`, `command_parameter_pools.yaml` |
 | SMB provider/process profiles | `smb_profiles.yaml` |
-| SMB corpus defaults | `storage_catalog.yaml`; portable storage vocabulary belongs in a pack |
+| SMB corpus defaults | `storage_catalog.yaml`; automatic `file_size_policy` and native `policy_repository` are separate from portable pack vocabulary |
 
 The config skill's focused references document schemas, merge behavior, and dependencies. Always
 prefer current package data and CLI inventories over copied lists in prose.
@@ -330,3 +330,22 @@ allocation. No new scenario field or generic native-file conversion is implied. 
 metadata and operation admission are contracts to preserve, not knobs for bypassing unsupported
 facts. Run `uv run eforge validate-config` after overlay edits and validate affected scenarios
 from the same project root.
+
+Successful remote NTLM validation uses optional
+`windows_auth_realism.yaml.success_ntlm_validation` with positive ordered
+`minimum_ms`/`maximum_ms` (defaults 8.0/120.0). The auth family shrinks this
+preferred support inside the actual transport before sampling; missing whole
+subtrees preserve the historical support, while malformed present values fail.
+
+`macos_execution_metadata.yaml.filesystem_root_identity: apfs_presented_root`
+selects the qualified presented `/` inode2 in the canonical directory provider.
+Absent policy retains legacy ordinary-directory allocation; ordinary directories
+and installed files must not alias the reserved identity. This selects a bounded
+root identity, not a full APFS layout or calibrated filesystem history.
+
+`macos_execution_metadata.yaml.native_generation_history: posix_hidden_births`
+resolves native audit generations from canonical fork/exec chronology plus the
+existing modeled POSIX hidden-birth count since each host boot. It does not add
+random gaps or infer hidden exec counts. Missing policy keeps legacy dense
+resolution. Native ES and eCAR share the map; source filtering never allocates
+generations. This is modeled history, not a calibrated kernel workload.

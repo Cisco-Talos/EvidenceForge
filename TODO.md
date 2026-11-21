@@ -70,7 +70,33 @@ bundle details summarize generated data. See the
 Current goal: fix analyst-rejection issues and finish remaining quality work
 without turning `TODO.md` back into a high-conflict work journal.
 
+**Assessment baseline (November 20):** `scenarios/iteration-test` now uses the
+approved expanded realism candidate and begins a fresh assessment epoch at loop 1.
+Do not compare or combine its scores with the previous canonical or exploratory
+candidate histories. The previous benchmark is preserved at
+`scenarios/iteration-test-previous-2026-11-20`; see the
+[promotion and history worklog](docs/worklog/2026-11-20-engine-capability-comparison.md).
+
 ### Active and Near-Term
+
+- [ ] **P1 — HTTP/1.1 response-phase ordering across persistent transactions:**
+  The new-epoch realism panel found one physical connection whose second response
+  body precedes its first response body in both sensor views. Model response/body
+  phases through the shared HTTP channel and network timing owners, preserving
+  request pipelining, immutable transport budgets, multipart/bodyless siblings,
+  source observation ordering and exact recovery. Do not repair this by sorting
+  rendered rows or adding a per-file delay. See the
+  [new-epoch assessment worklog](docs/worklog/2026-11-20-new-epoch-assessment-loops-01-20.md)
+  and `scenarios/iteration-test/blind-test/loop-27/REPORT.md`.
+
+- [ ] **P1 — Paired opaque CONNECT stream budgets before commit:** Reconcile the
+  client/proxy and proxy/origin stream budgets through their shared canonical
+  owner before either leg commits, including TLS certificate/record floors and
+  exact recovery. The current independently planned minimum budgets can disagree
+  across a transparent completed tunnel. Preserve visibility and measured byte
+  semantics; do not bypass TLS floors or rewrite one rendered leg. See the same
+  [assessment worklog](docs/worklog/2026-11-20-new-epoch-assessment-loops-01-20.md)
+  and `scenarios/iteration-test/blind-test/loop-23/proxy-stream-candidate-contract.md`.
 
 - [ ] **P1 — Explicit DNS tunnel process linkage across platforms:** Add an authored
   process reference to `dns_tunnel` and carry the exact live process identity through

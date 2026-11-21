@@ -1,0 +1,52 @@
+{
+  "scope": "Read-only stat and immediate entry COUNTS only for fixed public OS directories; no names or content retained, no homes/thirdparty directory enumeration. Single macOS27.2.1arm64 example, not general calibration.",
+  "platform": "27.2.1",
+  "machine": "arm64",
+  "rows": [
+    {
+      "path": "/",
+      "immediate_entries": 23,
+      "nlink": 23,
+      "size": 736,
+      "blocks": 0,
+      "inode": 2,
+      "device": 16777233
+    },
+    {
+      "path": "/bin",
+      "immediate_entries": 37,
+      "nlink": 39,
+      "size": 1248,
+      "blocks": 0,
+      "inode": 1152921500312611923,
+      "device": 16777233
+    },
+    {
+      "path": "/sbin",
+      "immediate_entries": 72,
+      "nlink": 74,
+      "size": 2368,
+      "blocks": 0,
+      "inode": 1152921500312612004,
+      "device": 16777233
+    },
+    {
+      "path": "/usr/bin",
+      "immediate_entries": 934,
+      "nlink": 936,
+      "size": 29952,
+      "blocks": 0,
+      "inode": 1152921500312612123,
+      "device": 16777233
+    },
+    {
+      "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS",
+      "immediate_entries": 1,
+      "nlink": 3,
+      "size": 96,
+      "blocks": 0,
+      "inode": 1152921500311916003,
+      "device": 16777233
+    }
+  ]
+}

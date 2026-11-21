@@ -1,0 +1,14 @@
+{
+  "revision": 564,
+  "id": "canonical-finder-weighted-transition-allocation",
+  "impact": "localized",
+  "domains": [
+    "macos-finder-lifecycle",
+    "canonical-phase-timing"
+  ],
+  "formats": [
+    "macos_endpoint_security",
+    "ecar"
+  ],
+  "summary": "Allocate Finder interior canonical phases using separately scoped positive transition weights within unchanged first/final readiness anchors. Preserve exact retained source retries and native clock projection."
+}

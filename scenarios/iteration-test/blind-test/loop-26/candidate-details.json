@@ -1,0 +1,17 @@
+{
+  "selected_family": [
+    "Canonical Finder interior phase allocation within fixed readiness anchors"
+  ],
+  "code_change_for_loop": true,
+  "fix_classification": "family_level",
+  "focused_validation": {
+    "before": "Actual native three-launch control FAIL against563: residuals second_gap-2*first_gap[-1,0,1]us; birth/final readiness/Mach order already pass. Prior24 native census9/9GUI triplets have1:2ratio; two SSH exit chains remain separately scoped27 candidate.",
+    "scope": "Pure positive weighted allocation of canonical interior transitions conditioned on existing readiness budget. All ordinary Finder entry adapters share owner; Terminal independent startup and authored command phases unchanged. Same first/final anchors, native wall/birth/Mach truth and exact retained source replay. No new State/cache/quota/raw RNG or empirical latency calibration claim.",
+    "central": "147PASS9deselect221.27s including10pure allocation and real native three-launch control, all Finder generation/identity/credentials/native clock/manifest routine cases",
+    "recovery": "9slow Finder phase/precommit/lost-return/source-release controlsPASS31.97s",
+    "siblings": "90Terminal/reference routinePASS66deselect5.88s; slow Terminal suite not claimed",
+    "rng": "3PASS7.56s unchanged census",
+    "config": "105files zero issues; existing overlayable timing support reused",
+    "ruff": "all check/format PASS after explicit zip strict=False in new tests; production digest unchanged by test-only formatting"
+  }
+}

@@ -1,0 +1,199 @@
+[
+  {
+    "kind": "connection",
+    "time": "2026-11-02T17:35:24.755535Z",
+    "network": {
+      "application_layer_only": false,
+      "closed_at": "2026-11-02T17:35:27.413312+00:00",
+      "conn_state": "SF",
+      "dst_ip": "10.10.2.20",
+      "dst_port": 445,
+      "hostname": "FILE-SRV-01",
+      "initiating_pid": -1,
+      "link_local": false,
+      "protocol": "tcp",
+      "responding_pid": -1,
+      "service": "smb",
+      "src_ip": "10.10.1.22",
+      "src_port": 44244,
+      "stable_id": "network-connection-34243c47-8ea2-4e92-8aef-d47b2387154c",
+      "started_at": "2026-11-02T17:35:24.755535+00:00",
+      "zeek_uid": "CN6aV5VWz9QV99YyPt"
+    },
+    "source_expectations": [
+      {
+        "format": "zeek_conn",
+        "source": "zeek:zeek-core",
+        "expected": "absent",
+        "reason": "modeled_collection_loss",
+        "loss": {
+          "base_probability": 0.001,
+          "dropped": true,
+          "identity": "zeek|zeek_conn|connection|FILE-SRV-01|action-lifecycle:46ffabff-66b2-460e-b503-3c7abc448f0d|1793640924755535",
+          "probability": 0.0010786667678015394,
+          "sample": 0.0004871140073138269,
+          "seed": 42
+        }
+      }
+    ]
+  },
+  {
+    "kind": "smb_tree_connect",
+    "time": "2026-11-02T17:35:24.895380Z",
+    "network": {
+      "application_layer_only": true,
+      "closed_at": "2026-11-02T17:35:27.413312+00:00",
+      "conn_state": "SF",
+      "dst_ip": "10.10.2.20",
+      "dst_port": 445,
+      "hostname": "FILE-SRV-01",
+      "initiating_pid": -1,
+      "link_local": false,
+      "protocol": "tcp",
+      "responding_pid": -1,
+      "service": "smb",
+      "src_ip": "10.10.1.22",
+      "src_port": 44244,
+      "stable_id": "network-connection-34243c47-8ea2-4e92-8aef-d47b2387154c",
+      "started_at": "2026-11-02T17:35:24.755535+00:00",
+      "zeek_uid": "CN6aV5VWz9QV99YyPt"
+    },
+    "source_expectations": [
+      {
+        "format": "zeek_smb_files",
+        "source": "zeek:zeek-core",
+        "expected": "absent",
+        "reason": "source_rule_filtering",
+        "loss": {}
+      },
+      {
+        "format": "zeek_smb_mapping",
+        "source": "zeek:zeek-core",
+        "expected": "present",
+        "reason": null,
+        "loss": {
+          "base_probability": 0.004,
+          "dropped": false,
+          "identity": "zeek|zeek_smb_mapping|smb_tree_connect|FILE-SRV-01|action-lifecycle:46ffabff-66b2-460e-b503-3c7abc448f0d|1793640924895380",
+          "probability": 0.004314667071206158,
+          "sample": 0.7919842910609648,
+          "seed": 42
+        }
+      }
+    ]
+  },
+  {
+    "kind": "smb_file_open",
+    "time": "2026-11-02T17:35:25.348183Z",
+    "network": {
+      "application_layer_only": true,
+      "closed_at": "2026-11-02T17:35:27.413312+00:00",
+      "conn_state": "SF",
+      "dst_ip": "10.10.2.20",
+      "dst_port": 445,
+      "hostname": "FILE-SRV-01",
+      "initiating_pid": -1,
+      "link_local": false,
+      "protocol": "tcp",
+      "responding_pid": -1,
+      "service": "smb",
+      "src_ip": "10.10.1.22",
+      "src_port": 44244,
+      "stable_id": "network-connection-34243c47-8ea2-4e92-8aef-d47b2387154c",
+      "started_at": "2026-11-02T17:35:24.755535+00:00",
+      "zeek_uid": "CN6aV5VWz9QV99YyPt"
+    },
+    "source_expectations": [
+      {
+        "format": "zeek_smb_files",
+        "source": "zeek:zeek-core",
+        "expected": "absent",
+        "reason": "source_rule_filtering",
+        "loss": {}
+      },
+      {
+        "format": "zeek_smb_mapping",
+        "source": "zeek:zeek-core",
+        "expected": "absent",
+        "reason": "source_rule_filtering",
+        "loss": {}
+      }
+    ]
+  },
+  {
+    "kind": "smb_file_read",
+    "time": "2026-11-02T17:35:25.481599Z",
+    "network": {
+      "application_layer_only": true,
+      "closed_at": "2026-11-02T17:35:27.413312+00:00",
+      "conn_state": "SF",
+      "dst_ip": "10.10.2.20",
+      "dst_port": 445,
+      "hostname": "FILE-SRV-01",
+      "initiating_pid": -1,
+      "link_local": false,
+      "protocol": "tcp",
+      "responding_pid": -1,
+      "service": "smb",
+      "src_ip": "10.10.1.22",
+      "src_port": 44244,
+      "stable_id": "network-connection-34243c47-8ea2-4e92-8aef-d47b2387154c",
+      "started_at": "2026-11-02T17:35:24.755535+00:00",
+      "zeek_uid": "CN6aV5VWz9QV99YyPt"
+    },
+    "source_expectations": [
+      {
+        "format": "zeek_smb_files",
+        "source": "zeek:zeek-core",
+        "expected": "absent",
+        "reason": "source_rule_filtering",
+        "loss": {}
+      },
+      {
+        "format": "zeek_smb_mapping",
+        "source": "zeek:zeek-core",
+        "expected": "absent",
+        "reason": "source_rule_filtering",
+        "loss": {}
+      }
+    ]
+  },
+  {
+    "kind": "smb_file_close",
+    "time": "2026-11-02T17:35:26.210473Z",
+    "network": {
+      "application_layer_only": true,
+      "closed_at": "2026-11-02T17:35:27.413312+00:00",
+      "conn_state": "SF",
+      "dst_ip": "10.10.2.20",
+      "dst_port": 445,
+      "hostname": "FILE-SRV-01",
+      "initiating_pid": -1,
+      "link_local": false,
+      "protocol": "tcp",
+      "responding_pid": -1,
+      "service": "smb",
+      "src_ip": "10.10.1.22",
+      "src_port": 44244,
+      "stable_id": "network-connection-34243c47-8ea2-4e92-8aef-d47b2387154c",
+      "started_at": "2026-11-02T17:35:24.755535+00:00",
+      "zeek_uid": "CN6aV5VWz9QV99YyPt"
+    },
+    "source_expectations": [
+      {
+        "format": "zeek_smb_files",
+        "source": "zeek:zeek-core",
+        "expected": "absent",
+        "reason": "source_rule_filtering",
+        "loss": {}
+      },
+      {
+        "format": "zeek_smb_mapping",
+        "source": "zeek:zeek-core",
+        "expected": "absent",
+        "reason": "source_rule_filtering",
+        "loss": {}
+      }
+    ]
+  }
+]

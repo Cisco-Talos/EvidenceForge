@@ -104,9 +104,13 @@ class NetworkVisibilityEngine:
             return ""
         return self._interface_for(sensor, ip)
 
+    def resolve_endpoint_ip(self, ip: str) -> str:
+        """Return the modeled real endpoint behind a configured static NAT address."""
+        return self._vip_to_real_ip.get(ip, ip)
+
     def _interface_for(self, sensor: NetworkSensor, ip: str) -> str:
         """Return the interface whose real-address segment contains ``ip``."""
-        address = ipaddress.ip_address(self._vip_to_real_ip.get(ip, ip))
+        address = ipaddress.ip_address(self.resolve_endpoint_ip(ip))
         for name, network in self._segment_networks.items():
             if address in network:
                 return sensor.interfaces.get(name, name)

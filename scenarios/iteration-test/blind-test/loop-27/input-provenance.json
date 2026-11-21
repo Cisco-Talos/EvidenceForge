@@ -1,0 +1,42 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 27,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 565,
+  "behavior_surface_sha256": "d53dc56dfd9276ea25e1a2c3e2fe5bd11d7f6cf918e14af94491486c4fcfc831",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "Exact Mac SSH descendant close phase allocation within existing transport and receiver anchors"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "before": "Actual exact Mac close-owner control FAIL against564: successive shell/child/receiver gaps(680299,680299)us, while correct postorder/live ownership/fixed receiver constraints pass. Prior24native census2/2equal close chains.",
+    "scope": "Reuse pure bounded phase allocator for exact Mac SSH close only. Conditional positive transition weights use existing configured Mac termination support. Existing continuation freezes times before source publication; transport/receiver/session anchors, postorder and dependency/hold frontiers retained. Linux exact/compatibility behavior unchanged. No new State/cache/quota/retention/RNG site or empirical latency calibration claim.",
+    "central": "129PASS16.74s including real exact close control, all close lost-return/journal/filtered owner, logout/retention/exec siblings, pure allocator and manifest",
+    "native": "3slow public receiver casesPASS11.75s: authored Mac source/full endpoint; Linux source/network-only; Windows source/full endpoint",
+    "rng": "3PASS7.23s unchanged exact census",
+    "config": "105files zero issues; existing Mac termination window reused",
+    "ruff": "check/format1689PASS"
+  },
+  "fix_classification": "adapter_to_family_model",
+  "rendered_verification": {
+    "security_process_creates": 931,
+    "populated_alternate_target_subjects": 37,
+    "unique_sysmon_child_joins": 927,
+    "child_effective_logon_mismatches": 0,
+    "data_files": 115,
+    "changed_files_from24": 10,
+    "change_scope": "Only ten Windows Security XML files changed; remaining105data files byte-identical, source-isolation-probe.json"
+  }
+}

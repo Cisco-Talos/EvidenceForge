@@ -1,0 +1,189 @@
+{
+  "scope": "All native output files compared by SHA256; no claim of field-level restriction without a further parsed delta.",
+  "before_loop": 21,
+  "after_loop": 22,
+  "before_files": 118,
+  "after_files": 118,
+  "changed_files": [
+    {
+      "file": "DC-01.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 2668162,
+      "after_bytes": 2668162
+    },
+    {
+      "file": "DC-01.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 8320286,
+      "after_bytes": 8320286
+    },
+    {
+      "file": "DC-01.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 6840494,
+      "after_bytes": 6840494
+    },
+    {
+      "file": "DC-02.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 2258121,
+      "after_bytes": 2258121
+    },
+    {
+      "file": "DC-02.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 7419566,
+      "after_bytes": 7419566
+    },
+    {
+      "file": "DC-02.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 5613942,
+      "after_bytes": 5613942
+    },
+    {
+      "file": "FILE-SRV-01.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 667704,
+      "after_bytes": 667704
+    },
+    {
+      "file": "FILE-SRV-01.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 1775115,
+      "after_bytes": 1775115
+    },
+    {
+      "file": "FILE-SRV-01.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 856756,
+      "after_bytes": 856756
+    },
+    {
+      "file": "MAIL-FIN-01.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 473595,
+      "after_bytes": 473595
+    },
+    {
+      "file": "MAIL-FIN-01.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 1087305,
+      "after_bytes": 1087305
+    },
+    {
+      "file": "MAIL-FIN-01.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 626189,
+      "after_bytes": 626189
+    },
+    {
+      "file": "WS-AJOHNSON-01.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 774143,
+      "after_bytes": 774143
+    },
+    {
+      "file": "WS-AJOHNSON-01.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 919237,
+      "after_bytes": 919237
+    },
+    {
+      "file": "WS-AJOHNSON-01.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 753533,
+      "after_bytes": 753533
+    },
+    {
+      "file": "WS-DRAMIREZ-01.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 418848,
+      "after_bytes": 418848
+    },
+    {
+      "file": "WS-DRAMIREZ-01.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 673273,
+      "after_bytes": 673273
+    },
+    {
+      "file": "WS-DRAMIREZ-01.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 453229,
+      "after_bytes": 453229
+    },
+    {
+      "file": "WS-EBROOKS-01.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 411371,
+      "after_bytes": 411371
+    },
+    {
+      "file": "WS-EBROOKS-01.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 594438,
+      "after_bytes": 594438
+    },
+    {
+      "file": "WS-EBROOKS-01.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 452451,
+      "after_bytes": 452451
+    },
+    {
+      "file": "WS-MCHEN-01.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 782747,
+      "after_bytes": 782747
+    },
+    {
+      "file": "WS-MCHEN-01.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 969681,
+      "after_bytes": 969681
+    },
+    {
+      "file": "WS-MCHEN-01.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 844142,
+      "after_bytes": 844142
+    },
+    {
+      "file": "WS-PPATEL-01.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 648031,
+      "after_bytes": 648031
+    },
+    {
+      "file": "WS-PPATEL-01.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 1044444,
+      "after_bytes": 1044444
+    },
+    {
+      "file": "WS-PPATEL-01.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 834485,
+      "after_bytes": 834485
+    },
+    {
+      "file": "WS-SMARTINEZ-01.meridianhcs.local/ecar.json",
+      "kind": "changed",
+      "before_bytes": 531023,
+      "after_bytes": 531023
+    },
+    {
+      "file": "WS-SMARTINEZ-01.meridianhcs.local/windows_event_security.xml",
+      "kind": "changed",
+      "before_bytes": 768614,
+      "after_bytes": 768614
+    },
+    {
+      "file": "WS-SMARTINEZ-01.meridianhcs.local/windows_event_sysmon.xml",
+      "kind": "changed",
+      "before_bytes": 719031,
+      "after_bytes": 719031
+    }
+  ]
+}

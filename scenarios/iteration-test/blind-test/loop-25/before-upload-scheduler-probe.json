@@ -1,0 +1,170 @@
+{
+  "diagnostic_root": "/private/tmp/eforge-upload-scheduler-o7_mbngy",
+  "curl_create": {
+    "timestamp_ms": 1728900135997,
+    "id": "8d8b9532-458c-4b76-bc37-c7c8047314c8",
+    "hostname": "WS01",
+    "object": "PROCESS",
+    "action": "CREATE",
+    "objectID": "a796e623-dc70-4aaa-bfb7-895d274b633b",
+    "actorID": "94d71304-a9b3-445f-bc5b-04f0cda743b3",
+    "pid": 3092018,
+    "tid": 3092018,
+    "ppid": 3091625,
+    "principal": "alice",
+    "properties": {
+      "command_line": "/usr/bin/curl --fail --silent --show-error --proxy http://proxy.meridianhcs.com:8080 --form 'metadata={\"ticket\":\"MHS-48217\",\"component\":\"ehr-connector\"};type=application/json' --form 'diagnostics=@/tmp/mhs-support-48217.tar.gz;type=application/gzip' http://support.valeworks-health.net/api/v1/cases/MHS-48217/attachments",
+      "image_path": "/usr/bin/curl",
+      "parent_image_path": "/bin/bash",
+      "logon_id": "0x7af6f50",
+      "session_id": "245",
+      "src_pid": "3091625",
+      "source_process_uuid": "94d71304-a9b3-445f-bc5b-04f0cda743b3",
+      "source_pid": "3091625",
+      "source_image_path": "/bin/bash",
+      "source_principal": "alice"
+    }
+  },
+  "curl_closes": [
+    {
+      "timestamp_ms": 1728900171260,
+      "id": "e5b41463-02ed-4be3-bafb-45a50335adda",
+      "hostname": "WS01",
+      "object": "PROCESS",
+      "action": "TERMINATE",
+      "objectID": "a796e623-dc70-4aaa-bfb7-895d274b633b",
+      "pid": 3092018,
+      "tid": 3092018,
+      "principal": "alice",
+      "properties": {
+        "image_path": "/usr/bin/curl",
+        "logon_id": "0x7af6f50",
+        "session_id": "245"
+      }
+    }
+  ],
+  "http": [
+    {
+      "sensor": "client-tap",
+      "http": {
+        "ts": 1728900147.901227,
+        "uid": "CRmalhCaWcoY5mO5zKG",
+        "id.orig_h": "10.0.10.10",
+        "id.orig_p": 33128,
+        "id.resp_h": "10.0.20.10",
+        "id.resp_p": 8080,
+        "trans_depth": 1,
+        "method": "POST",
+        "host": "support.valeworks-health.net",
+        "uri": "http://support.valeworks-health.net/api/v1/cases/MHS-48217/attachments",
+        "version": "1.1",
+        "user_agent": "curl/7.81.0",
+        "request_body_len": 1573258,
+        "response_body_len": 96,
+        "status_code": 200,
+        "status_msg": "OK",
+        "orig_fuids": [
+          "FOj7MBItbZqgNV4HPt",
+          "FSkHNjA14ga82y1Ybzl"
+        ],
+        "orig_filenames": [
+          "mhs-support-48217.tar.gz"
+        ],
+        "orig_mime_types": [
+          "application/json",
+          "application/gzip"
+        ],
+        "resp_fuids": [
+          "FBeC5aLVZLM4ggIORcT"
+        ],
+        "resp_mime_types": [
+          "text/html"
+        ]
+      },
+      "conn": {
+        "ts": 1728900147.796841,
+        "uid": "CRmalhCaWcoY5mO5zKG",
+        "id.orig_h": "10.0.10.10",
+        "id.orig_p": 33128,
+        "id.resp_h": "10.0.20.10",
+        "id.resp_p": 8080,
+        "proto": "tcp",
+        "service": "http",
+        "duration": 19.301177,
+        "orig_bytes": 1573700,
+        "resp_bytes": 288,
+        "conn_state": "SF",
+        "local_orig": true,
+        "local_resp": true,
+        "missed_bytes": 0,
+        "history": "ShADadfF",
+        "orig_pkts": 1082,
+        "orig_ip_bytes": 1623000,
+        "resp_pkts": 539,
+        "resp_ip_bytes": 28396,
+        "ip_proto": 6
+      }
+    },
+    {
+      "sensor": "client-tap",
+      "http": {
+        "ts": 1728900147.974203,
+        "uid": "Cignpq5w0YBPvhH5wA",
+        "id.orig_h": "10.0.20.10",
+        "id.orig_p": 49112,
+        "id.resp_h": "52.44.186.73",
+        "id.resp_p": 80,
+        "trans_depth": 1,
+        "method": "POST",
+        "host": "support.valeworks-health.net",
+        "uri": "/api/v1/cases/MHS-48217/attachments",
+        "version": "1.1",
+        "user_agent": "curl/7.81.0",
+        "request_body_len": 1573258,
+        "response_body_len": 96,
+        "status_code": 200,
+        "status_msg": "OK",
+        "orig_fuids": [
+          "FkC8j1qe8NCeP8RZG",
+          "FKQwaymshDFwAZQ3N8"
+        ],
+        "orig_filenames": [
+          "mhs-support-48217.tar.gz"
+        ],
+        "orig_mime_types": [
+          "application/json",
+          "application/gzip"
+        ],
+        "resp_fuids": [
+          "FMSw8SU8HvzHctSVJSo"
+        ],
+        "resp_mime_types": [
+          "text/html"
+        ]
+      },
+      "conn": {
+        "ts": 1728900147.956553,
+        "uid": "Cignpq5w0YBPvhH5wA",
+        "id.orig_h": "10.0.20.10",
+        "id.orig_p": 49112,
+        "id.resp_h": "52.44.186.73",
+        "id.resp_p": 80,
+        "proto": "tcp",
+        "service": "http",
+        "duration": 19.141465,
+        "orig_bytes": 1573682,
+        "resp_bytes": 288,
+        "conn_state": "SF",
+        "local_orig": true,
+        "local_resp": false,
+        "missed_bytes": 5486,
+        "history": "ShADaTtdfFG",
+        "orig_pkts": 1078,
+        "orig_ip_bytes": 1617000,
+        "resp_pkts": 539,
+        "resp_ip_bytes": 28676,
+        "ip_proto": 6
+      }
+    }
+  ]
+}

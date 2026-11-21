@@ -1,3 +1,10 @@
+# One physical first-detection phase; modeled policy, not empirical calibration.
+tls_detection_phase:
+  minimum_ms: 3
+  median_ms: 119.46
+  maximum_ms: 650
+  sigma: 0.78
+
 # Modeled application readiness after TCP open; not measured calibration.
 http_request_phase:
   minimum_ms: 3
@@ -355,3 +362,10 @@ ssl_histories:
     weight: 30
   - history: Cs
     weight: 25
+
+# Shared physical traffic support; logical RDP quotas must cover later draws.
+rdp_payload_bounds:
+  initiator_minimum_bytes: 50000
+  initiator_maximum_bytes: 500000
+  responder_minimum_bytes: 100000
+  responder_maximum_bytes: 2000000

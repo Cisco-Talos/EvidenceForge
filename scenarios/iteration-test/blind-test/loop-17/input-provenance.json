@@ -1,0 +1,45 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 17,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 552,
+  "behavior_surface_sha256": "bc165d96086900c120d6cbc3e08e729078ffcb1c08a3752599d737b91f23b995",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "purpose-aware Windows SYSVOL/GPO and NETLOGON script metadata catalog",
+    "RDP logical traffic envelope provisioning correction required after first generation failure"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "central": "135passed4.51s3deselected; model/layout/frozen/config/storage/legacy-size/manifest",
+    "prototype": "actualcompiled-worldbefore1FAIL; isolatedcompiler/model91PASS after correcting two invalid fixtures and qualifying finite-cap manifest contract",
+    "native_rng": "5passed14.02s; actual SYSVOL and NETLOGON reads across Windows/eCAR/Zeek plus3unchanged global temporal RNG policy gates",
+    "task_siblings": "60passed2.73s1deselected",
+    "checkpoint": "2passed105.00s15deselected",
+    "config_validation": "105files0issues",
+    "ruff": "check/formatpass1667files",
+    "scope": "Known explicit-domain Windows DC policy role; legacy/disabled/custom/file-set/explicit roots and seeds preserved. No new filesystem alias or live AD/DFSR content-mutation model. No full routine/release gate claimed",
+    "rdp_envelope_repair": {
+      "before": "allowed min-first/max-reconnect reproduces exact manager budget rejection; initial test mistaken physical/logical counters corrected and retained",
+      "central": "31passed3.21s3deselected then58stampedpass4.50s73deselected incl27manifest",
+      "native_recovery_rng": "74passed31.68s25deselected, deferred/native/replay/recovery/prepared/concurrent plus3unchanged global RNG policy",
+      "checkpoint": "2passed15deselected; see retained log for actual duration",
+      "config": "105files0issues; current/oldfrozen exact byte draws/RNGstate; partial/custom/invalid policy and namedvalidator",
+      "ruff": "check/formatpass1669files",
+      "scope": "First-packet-scaled quota replaced by shared support provision. Existing logical operation allowance8 and byte/admission/retention guards preserved; physical reconnect count is distinct. No full routine/release gate."
+    }
+  },
+  "generation_attempt": 2,
+  "retry_of": "failed-attempt-1"
+}

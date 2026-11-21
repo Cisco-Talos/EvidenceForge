@@ -165,3 +165,8 @@ special_privileges:
   - SeTakeOwnershipPrivilege
   - SeTcbPrivilege
   - SeDelegateSessionUserImpersonatePrivilege
+
+# Preferred canonical lead; short transports shrink the support before sampling.
+success_ntlm_validation:
+  minimum_ms: 8.0
+  maximum_ms: 120.0

@@ -1,0 +1,17 @@
+{
+  "selected_family": [
+    "Unknown-source default HTTP client presentation policy across both default selectors"
+  ],
+  "code_change_for_loop": true,
+  "fix_classification": "family_level",
+  "focused_validation": {
+    "before": "Actual selectors default to Windows for an unknown host even when a generic presentation profile is configured: two real selector controls FAIL, four selected-header/legacy controls PASS1.22s. Real ActivityGenerator unspecified-header control also FAILS1.22s. Selected explicit Mac/Windows/bot headers already survive: the initial normalizer hypothesis and spy controls were rejected and retained separately. Native26 census99browser transactions/3Windowsstrings36/33/30 is qualified distribution evidence, not a mandatory OS audience mix.",
+    "scope": "Optional validated unknown_source profile reuses seven existing catalog strings; one stateless adapter serves default picker and browser-family picker. Known OS/server/domain/package behavior, selected/absent headers and old frozen catalogs retain existing policy. Canonical HttpContext remains the shared wire-header owner. No baseline/normalizer/traffic-affinity change, invented browser version, audience-share claim, new State/cache/quota/raw timing RNG or authored UA override.",
+    "after": "230focused tests PASS2deselected15.40s, including12new real-selector/runtime/config/frozen-catalog/selected-header controls, stable external population, explicit proxy, known-OS/domain/package/role, canonical request-header, web profiles, affinities and browser siblings.",
+    "known_host_parity": "216known host/role/destination/seed cases, default and Chrome-family picks BYTEIDENTICAL to566.",
+    "rng": "3slow global timing RNG policy tests PASS7.43s, census unchanged.",
+    "config": "105files0errors0warnings.",
+    "manifest": "27manifest tests PASS2.73s. Initial behavior-change description exceeded240characters; shortened before successful567stamp, no generation under stale manifest.",
+    "ruff": "Whole-tree check PASS;1690files format check PASS."
+  }
+}

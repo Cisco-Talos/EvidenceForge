@@ -1,0 +1,43 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 29,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 567,
+  "behavior_surface_sha256": "c56d1cf3c8a8a4fec2a03522925083436552d676941dc3373b3dfb8c4939a184",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "Unknown-source default HTTP client presentation policy across both default selectors"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "before": "Actual selectors default to Windows for an unknown host even when a generic presentation profile is configured: two real selector controls FAIL, four selected-header/legacy controls PASS1.22s. Real ActivityGenerator unspecified-header control also FAILS1.22s. Selected explicit Mac/Windows/bot headers already survive: the initial normalizer hypothesis and spy controls were rejected and retained separately. Native26 census99browser transactions/3Windowsstrings36/33/30 is qualified distribution evidence, not a mandatory OS audience mix.",
+    "scope": "Optional validated unknown_source profile reuses seven existing catalog strings; one stateless adapter serves default picker and browser-family picker. Known OS/server/domain/package behavior, selected/absent headers and old frozen catalogs retain existing policy. Canonical HttpContext remains the shared wire-header owner. No baseline/normalizer/traffic-affinity change, invented browser version, audience-share claim, new State/cache/quota/raw timing RNG or authored UA override.",
+    "after": "230focused tests PASS2deselected15.40s, including12new real-selector/runtime/config/frozen-catalog/selected-header controls, stable external population, explicit proxy, known-OS/domain/package/role, canonical request-header, web profiles, affinities and browser siblings.",
+    "known_host_parity": "216known host/role/destination/seed cases, default and Chrome-family picks BYTEIDENTICAL to566.",
+    "rng": "3slow global timing RNG policy tests PASS7.43s, census unchanged.",
+    "config": "105files0errors0warnings.",
+    "manifest": "27manifest tests PASS2.73s. Initial behavior-change description exceeded240characters; shortened before successful567stamp, no generation under stale manifest.",
+    "ruff": "Whole-tree check PASS;1690files format check PASS."
+  },
+  "fix_classification": "family_level",
+  "rendered_verification": {
+    "security_process_creates": 931,
+    "populated_alternate_target_subjects": 37,
+    "unique_sysmon_child_joins": 927,
+    "child_effective_logon_mismatches": 0,
+    "data_files": 115,
+    "changed_files_from24": 10,
+    "change_scope": "Only ten Windows Security XML files changed; remaining105data files byte-identical, source-isolation-probe.json"
+  }
+}

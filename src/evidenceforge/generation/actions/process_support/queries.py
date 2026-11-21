@@ -230,10 +230,13 @@ class ProcessStateQueries:
                     and parent_proc.command_line.startswith("sshd: ")
                     and parent_proc.command_line.endswith(" [priv]")
                 )
+                child_session = self.state_manager.get_session(logon_id)
                 is_linux_login_priv_parent = (
                     parent_username == "root"
                     and parent_exe == "login"
-                    and parent_proc.command_line.startswith("login -- ")
+                    and child_session is not None
+                    and child_session.system == system.hostname
+                    and child_session.process_tree_root == parent_pid
                 )
                 if (
                     not is_linux_ssh_priv_parent

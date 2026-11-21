@@ -339,6 +339,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                             self._identity_directory,
                             window_start=self.warmup_start_time,
                             window_end=self.end_time,
+                            boot_times={
+                                hostname: self.start_time - timedelta(seconds=uptime)
+                                for hostname, uptime in getattr(
+                                    self, "_kernel_boot_uptimes", {}
+                                ).items()
+                            },
                         )
                         self._macos_installed_provisioning = result
                         self._macos_installed_provisioning_ready = True
@@ -1282,6 +1288,16 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             compile_native_deployment_registry,
         )
 
+        # Per-host kernel boot uptime: deterministic offset (seconds since boot at scenario start)
+        self._kernel_boot_uptimes: dict[str, float] = {}
+        self._audit_serials: dict[str, int] = {}  # per-host monotonic audit serial
+        for system in self.scenario.environment.systems:
+            boot_days = (_stable_seed(f"boot_days_{system.hostname}") % 28) + 3  # 3-30 days
+            self._kernel_boot_uptimes[system.hostname] = boot_days * 86400.0
+            self._audit_serials[system.hostname] = (
+                _stable_seed(f"audit_serial_{system.hostname}") % 5000
+            ) + 1000
+
         self.deployment_registry = compile_native_deployment_registry(
             self.scenario,
             self.world_model,
@@ -1329,16 +1345,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 system = self.activity_generator._ip_to_system.get(real_ip)
                 if system:
                     self.activity_generator._ip_to_system[vip] = system
-
-        # Per-host kernel boot uptime: deterministic offset (seconds since boot at scenario start)
-        self._kernel_boot_uptimes: dict[str, float] = {}
-        self._audit_serials: dict[str, int] = {}  # per-host monotonic audit serial
-        for system in self.scenario.environment.systems:
-            boot_days = (_stable_seed(f"boot_days_{system.hostname}") % 28) + 3  # 3-30 days
-            self._kernel_boot_uptimes[system.hostname] = boot_days * 86400.0
-            self._audit_serials[system.hostname] = (
-                _stable_seed(f"audit_serial_{system.hostname}") % 5000
-            ) + 1000
 
         # Phase 5.4: Pre-seed system process trees and detect infrastructure IPs
         self._infra_ips = self._detect_infrastructure_ips()
@@ -2102,10 +2108,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._expected_close_emitters = expected_emitters
 
         if primary is None:
+            from evidenceforge.config.provider import effective_config_scope
             from evidenceforge.generation.emitters.ecar import EcarEmitter
 
             identities = self.state_manager._macos_audit_identity_intents
-            identities.seal()
+            # Explicit close/retry can occur after generate's ambient scopes exit.
+            with effective_config_scope(self.compiled_scenario.effective_config):
+                with generation_seed_scope(self.generation_seed):
+                    self.state_manager.seal_macos_audit_identities(require_known_boot=True)
             for emitter in expected_emitters.values():
                 if isinstance(emitter, EcarEmitter):
                     emitter.resolve_native_audit_identities(identities)

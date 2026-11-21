@@ -19,7 +19,12 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
     },
     "activity/macos_execution_metadata.yaml": {
         "dict_fields": {"terminal", "directory_inode_range", "directory_age_range"},
-        "string_fields": {"schema_version", "profile"},
+        "string_fields": {
+            "schema_version",
+            "profile",
+            "filesystem_root_identity",
+            "native_generation_history",
+        },
         "string_list_fields": {"user_environment", "root_environment"},
         "scalar_fields": {
             "cpu_subtype": int,
@@ -30,6 +35,7 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         },
     },
     "activity/macos_installed_files.yaml": {
+        "string_list_fields": {"preboot_product_ids"},
         "dict_fields": {
             "volume_device",
             "first_inode",
@@ -74,6 +80,7 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
     },
     "activity/proxy_user_agents.yaml": {
         "dict_fields": {
+            "unknown_source",
             "domain_overrides",
             "workstation",
             "server",
@@ -155,6 +162,7 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
             "system_binaries",
             "common_loaded_modules",
             "process_loaded_modules",
+            "linux_console",
         },
         "list_fields": {"scheduled_tasks": None},
     },
@@ -210,6 +218,8 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
             "linux_smb_connection_owners": "role",
         },
         "dict_fields": {
+            "tls_detection_phase",
+            "rdp_payload_bounds",
             "dns_tunnel_rtt",
             "dns_tunnel_rcode_weights",
             "nmap_command_probe",
@@ -226,6 +236,7 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
     },
     "activity/windows_auth_realism.yaml": {
         "dict_fields": {
+            "success_ntlm_validation",
             "workstation_lock",
             "group_policy_refresh",
             "remote_auth_transport",
@@ -358,6 +369,6 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "string_dict_fields": {"classifications"},
     },
     "activity/storage_catalog.yaml": {
-        "dict_fields": {"population_counts", "profiles"},
+        "dict_fields": {"population_counts", "profiles", "file_size_policy", "policy_repository"},
     },
 }

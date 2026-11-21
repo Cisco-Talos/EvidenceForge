@@ -1,0 +1,235 @@
+{
+  "scope": "Positive native Sysmon GUID-joined smss-to-winlogon birth intervals, including both local and remote sessions. Missing pairs are not scored as defects. Distribution texture, not proof of impossible native behavior.",
+  "count": 16,
+  "native_499_to_501ms_count": 0,
+  "native_exact_500ms_count": 0,
+  "native_min": 0.363,
+  "native_max": 1.977,
+  "hosts": {
+    "DC-01.meridianhcs.local": {
+      "sha256": "5d4c053821b841a0f928f22b0f72e8a5b2d37def6c82e697c2b8136c7a90a300",
+      "pairs": [
+        {
+          "host": "DC-01.meridianhcs.local",
+          "child_pid": "4256",
+          "parent_pid": "4252",
+          "child_guid": "{83eb9c06-a4e4-6ae8-9c02-00108e09a34d}",
+          "parent_guid": "{83eb9c06-a4e3-6ae8-ed02-00007d8e1d96}",
+          "native_child_time": "2026-11-02 14:57:40.571",
+          "native_parent_time": "2026-11-02 14:57:39.221",
+          "native_gap_seconds": 1.35,
+          "provider_gap_seconds": 1.350464
+        },
+        {
+          "host": "DC-01.meridianhcs.local",
+          "child_pid": "5480",
+          "parent_pid": "5472",
+          "child_guid": "{83eb9c06-d207-6ae8-6702-0010d27f75e8}",
+          "parent_guid": "{83eb9c06-d206-6ae8-a900-00101ee55ddf}",
+          "native_child_time": "2026-11-02 18:10:15.862",
+          "native_parent_time": "2026-11-02 18:10:14.097",
+          "native_gap_seconds": 1.765,
+          "provider_gap_seconds": 1.764892
+        }
+      ]
+    },
+    "DC-02.meridianhcs.local": {
+      "sha256": "be51e59a0672e6103ea31a6807f1b96bfd31f5bffa1248a2c4071dd5623b989b",
+      "pairs": [
+        {
+          "host": "DC-02.meridianhcs.local",
+          "child_pid": "7552",
+          "parent_pid": "7548",
+          "child_guid": "{d55311aa-a21c-6ae8-4000-00109e88c3a8}",
+          "parent_guid": "{d55311aa-a21a-6ae8-2102-0010413cb21b}",
+          "native_child_time": "2026-11-02 14:45:48.517",
+          "native_parent_time": "2026-11-02 14:45:46.540",
+          "native_gap_seconds": 1.977,
+          "provider_gap_seconds": 1.976962
+        }
+      ]
+    },
+    "FILE-SRV-01.meridianhcs.local": {
+      "sha256": "48b4df7a06911b63bf30874e58902e896ed45f3e17f9df3d3abb31fe7e52bd9f",
+      "pairs": [
+        {
+          "host": "FILE-SRV-01.meridianhcs.local",
+          "child_pid": "4800",
+          "parent_pid": "4796",
+          "child_guid": "{1b54004d-8ec5-6ae8-6e00-00007d57670a}",
+          "parent_guid": "{1b54004d-8ec4-6ae8-fb02-00000b21c223}",
+          "native_child_time": "2026-11-02 13:23:17.280",
+          "native_parent_time": "2026-11-02 13:23:16.175",
+          "native_gap_seconds": 1.105,
+          "provider_gap_seconds": 1.102166
+        },
+        {
+          "host": "FILE-SRV-01.meridianhcs.local",
+          "child_pid": "5124",
+          "parent_pid": "5092",
+          "child_guid": "{1b54004d-a203-6ae8-7102-000019b20e10}",
+          "parent_guid": "{1b54004d-a202-6ae8-5800-000085b02872}",
+          "native_child_time": "2026-11-02 14:45:23.644",
+          "native_parent_time": "2026-11-02 14:45:22.136",
+          "native_gap_seconds": 1.508,
+          "provider_gap_seconds": 1.507663
+        },
+        {
+          "host": "FILE-SRV-01.meridianhcs.local",
+          "child_pid": "5160",
+          "parent_pid": "5148",
+          "child_guid": "{1b54004d-a20d-6ae8-8600-000057f72105}",
+          "parent_guid": "{1b54004d-a20b-6ae8-e902-0000d27b7b0a}",
+          "native_child_time": "2026-11-02 14:45:33.046",
+          "native_parent_time": "2026-11-02 14:45:31.712",
+          "native_gap_seconds": 1.334,
+          "provider_gap_seconds": 1.335003
+        }
+      ]
+    },
+    "MAIL-FIN-01.meridianhcs.local": {
+      "sha256": "37973c961d8ff5deb04cc6e56247074b9fc9bc6df7e746046050bcf382132028",
+      "pairs": [
+        {
+          "host": "MAIL-FIN-01.meridianhcs.local",
+          "child_pid": "3908",
+          "parent_pid": "3884",
+          "child_guid": "{bef5213c-919d-6ae8-9100-001034695281}",
+          "parent_guid": "{bef5213c-919b-6ae8-eb00-001020bdff43}",
+          "native_child_time": "2026-11-02 13:35:25.095",
+          "native_parent_time": "2026-11-02 13:35:23.745",
+          "native_gap_seconds": 1.35,
+          "provider_gap_seconds": 1.349313
+        },
+        {
+          "host": "MAIL-FIN-01.meridianhcs.local",
+          "child_pid": "4060",
+          "parent_pid": "4052",
+          "child_guid": "{bef5213c-9741-6ae8-ad00-00003c097dbf}",
+          "parent_guid": "{bef5213c-9740-6ae8-5d00-0000e5c3be42}",
+          "native_child_time": "2026-11-02 13:59:29.210",
+          "native_parent_time": "2026-11-02 13:59:28.170",
+          "native_gap_seconds": 1.04,
+          "provider_gap_seconds": 1.039032
+        },
+        {
+          "host": "MAIL-FIN-01.meridianhcs.local",
+          "child_pid": "4244",
+          "parent_pid": "4232",
+          "child_guid": "{bef5213c-9c7b-6ae8-7c00-0010e0259580}",
+          "parent_guid": "{bef5213c-9c79-6ae8-d400-000001c77c5e}",
+          "native_child_time": "2026-11-02 14:21:47.008",
+          "native_parent_time": "2026-11-02 14:21:45.655",
+          "native_gap_seconds": 1.353,
+          "provider_gap_seconds": 1.353301
+        }
+      ]
+    },
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "sha256": "460fd53de9de2f5adeb39b2627e5c0e79ec65facea11b3c7e8c4a6c407342320",
+      "pairs": [
+        {
+          "host": "WS-AJOHNSON-01.meridianhcs.local",
+          "child_pid": "5892",
+          "parent_pid": "5872",
+          "child_guid": "{fd907e59-b3d4-6ae8-6900-00004be8f762}",
+          "parent_guid": "{fd907e59-b3d3-6ae8-9602-0000ac6ada45}",
+          "native_child_time": "2026-11-02 16:01:24.728",
+          "native_parent_time": "2026-11-02 16:01:23.429",
+          "native_gap_seconds": 1.299,
+          "provider_gap_seconds": 1.29673
+        }
+      ]
+    },
+    "WS-DRAMIREZ-01.meridianhcs.local": {
+      "sha256": "459ad6375e89a3b07799c3a08aea27390bab5d3219b344b3a2f7cbabd56e08ce",
+      "pairs": []
+    },
+    "WS-EBROOKS-01.meridianhcs.local": {
+      "sha256": "35db4c4975ebde873126894e963f7caa9b56f0b4d9985266467f6ea399caeea8",
+      "pairs": [
+        {
+          "host": "WS-EBROOKS-01.meridianhcs.local",
+          "child_pid": "4328",
+          "parent_pid": "4320",
+          "child_guid": "{2fa70b62-9452-6ae8-4b02-0010f5f54aa9}",
+          "parent_guid": "{2fa70b62-9451-6ae8-5802-0000f7e56c90}",
+          "native_child_time": "2026-11-02 13:46:58.753",
+          "native_parent_time": "2026-11-02 13:46:57.582",
+          "native_gap_seconds": 1.171,
+          "provider_gap_seconds": 1.171459
+        },
+        {
+          "host": "WS-EBROOKS-01.meridianhcs.local",
+          "child_pid": "4096",
+          "parent_pid": "4080",
+          "child_guid": "{2fa70b62-9656-6ae8-4f00-0010732e4e00}",
+          "parent_guid": "{2fa70b62-9655-6ae8-2b02-00003d9e1bad}",
+          "native_child_time": "2026-11-02 13:55:34.736",
+          "native_parent_time": "2026-11-02 13:55:33.560",
+          "native_gap_seconds": 1.176,
+          "provider_gap_seconds": 1.180982
+        }
+      ]
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "sha256": "432596c2511f4737fbf6730864a94766ce2f52f6cf697f7141d9a5842d11ed4e",
+      "pairs": [
+        {
+          "host": "WS-MCHEN-01.meridianhcs.local",
+          "child_pid": "7440",
+          "parent_pid": "7396",
+          "child_guid": "{7b2a0e3f-a1bd-6ae8-0a02-0010808c8ce4}",
+          "parent_guid": "{7b2a0e3f-a1bc-6ae8-4502-0000c527bdd2}",
+          "native_child_time": "2026-11-02 14:44:13.227",
+          "native_parent_time": "2026-11-02 14:44:12.002",
+          "native_gap_seconds": 1.225,
+          "provider_gap_seconds": 1.22558
+        }
+      ]
+    },
+    "WS-PPATEL-01.meridianhcs.local": {
+      "sha256": "cfdfa58fb5c565553b34b094018a55ee69073a52829b3bee35f1ab29c5ba3409",
+      "pairs": [
+        {
+          "host": "WS-PPATEL-01.meridianhcs.local",
+          "child_pid": "6148",
+          "parent_pid": "6136",
+          "child_guid": "{398565f9-aef4-6ae8-8c02-00008e78272c}",
+          "parent_guid": "{398565f9-aef3-6ae8-b802-00100efabeeb}",
+          "native_child_time": "2026-11-02 15:40:36.454",
+          "native_parent_time": "2026-11-02 15:40:35.244",
+          "native_gap_seconds": 1.21,
+          "provider_gap_seconds": 1.209189
+        }
+      ]
+    },
+    "WS-SMARTINEZ-01.meridianhcs.local": {
+      "sha256": "ead6c666bf9001fcc6fd1873bb14bf15d4b97553ab655d0f8cc300ce987f0ef4",
+      "pairs": [
+        {
+          "host": "WS-SMARTINEZ-01.meridianhcs.local",
+          "child_pid": "7084",
+          "parent_pid": "7072",
+          "child_guid": "{f613acc2-8b5d-6ae8-bb00-00003a58b6b6}",
+          "parent_guid": "{f613acc2-8b5d-6ae8-1800-0010f621c00a}",
+          "native_child_time": "2026-11-02 13:08:45.977",
+          "native_parent_time": "2026-11-02 13:08:45.614",
+          "native_gap_seconds": 0.363,
+          "provider_gap_seconds": 0.363415
+        },
+        {
+          "host": "WS-SMARTINEZ-01.meridianhcs.local",
+          "child_pid": "7152",
+          "parent_pid": "7144",
+          "child_guid": "{f613acc2-9886-6ae8-5902-0010f2d1a279}",
+          "parent_guid": "{f613acc2-9885-6ae8-fd02-0000a96ba0c2}",
+          "native_child_time": "2026-11-02 14:04:54.338",
+          "native_parent_time": "2026-11-02 14:04:53.203",
+          "native_gap_seconds": 1.135,
+          "provider_gap_seconds": 1.132495
+        }
+      ]
+    }
+  }
+}

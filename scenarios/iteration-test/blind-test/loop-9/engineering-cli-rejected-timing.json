@@ -1,0 +1,20 @@
+{
+  "scope": "Ordinary CLI parent admission, provably impossible early source deadline: candidate rejects before timing samples or bootstrap bounds. This does not assert prepared-planning atomicity for every later rejection path. No source rows or desktop process graph are created.",
+  "before": {
+    "pid": 0,
+    "state_digest_unchanged": false,
+    "sample_counts": {
+      "windows.session.desktop_shell_start": 1,
+      "windows.session.user_manager_start": 1
+    },
+    "emitted": false,
+    "desktop_bootstrapped": false
+  },
+  "candidate": {
+    "pid": 0,
+    "state_digest_unchanged": true,
+    "sample_counts": {},
+    "emitted": false,
+    "desktop_bootstrapped": false
+  }
+}

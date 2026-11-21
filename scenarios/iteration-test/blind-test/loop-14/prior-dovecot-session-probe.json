@@ -1,0 +1,177 @@
+{
+  "scope": "Data-only Dovecot imap-login session field shape and decoded source-address comparison against native2.3.21/current client_get_session_id encoding. Does not infer real-world provenance or arbitrary sanitization policy.",
+  "source_sha256": {
+    "MAIL-CLIN-01.meridianhcs.local/syslog.log": "f9352b43119fb3da87120befc0c246a62400cda644044138b1390cdd2075b458",
+    "MAIL-EDGE-01.meridianhcs.local/syslog.log": "c81b43d70d9a219ede370de244f9c0e935d9164d421d8681c9dfb19630edb281"
+  },
+  "logins": 18,
+  "native_payload_shape": 0,
+  "encoded_ip_matches_login": 0,
+  "length_counts": {
+    "10": 18
+  },
+  "rows": [
+    {
+      "source": "MAIL-CLIN-01.meridianhcs.local/syslog.log",
+      "line": 64,
+      "client_ip": "10.10.1.22",
+      "server_ip": "10.10.2.26",
+      "token": "AAAAA0bXJS",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-CLIN-01.meridianhcs.local/syslog.log",
+      "line": 74,
+      "client_ip": "10.10.1.21",
+      "server_ip": "10.10.2.26",
+      "token": "AAAABhxMP/",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-CLIN-01.meridianhcs.local/syslog.log",
+      "line": 81,
+      "client_ip": "10.10.1.22",
+      "server_ip": "10.10.2.26",
+      "token": "AAAADSXrFB",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-CLIN-01.meridianhcs.local/syslog.log",
+      "line": 86,
+      "client_ip": "10.10.1.22",
+      "server_ip": "10.10.2.26",
+      "token": "AAAAAsxGbj",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-CLIN-01.meridianhcs.local/syslog.log",
+      "line": 158,
+      "client_ip": "10.10.1.22",
+      "server_ip": "10.10.2.26",
+      "token": "AAAABc2xUn",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 93,
+      "client_ip": "10.10.1.32",
+      "server_ip": "10.10.2.25",
+      "token": "AAAABM3KZv",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 102,
+      "client_ip": "10.10.1.35",
+      "server_ip": "10.10.2.25",
+      "token": "AAAABr7D1U",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 118,
+      "client_ip": "10.10.1.32",
+      "server_ip": "10.10.2.25",
+      "token": "AAAACbcczL",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 129,
+      "client_ip": "10.10.1.32",
+      "server_ip": "10.10.2.25",
+      "token": "AAAABXRBbI",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 207,
+      "client_ip": "10.10.1.32",
+      "server_ip": "10.10.2.25",
+      "token": "AAAAAoE2GL",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 289,
+      "client_ip": "10.10.1.35",
+      "server_ip": "10.10.2.25",
+      "token": "AAAABupNkL",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 330,
+      "client_ip": "10.10.1.31",
+      "server_ip": "10.10.2.25",
+      "token": "AAAABniiKN",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 342,
+      "client_ip": "10.10.1.31",
+      "server_ip": "10.10.2.25",
+      "token": "AAAAAeO23f",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 365,
+      "client_ip": "10.10.1.32",
+      "server_ip": "10.10.2.25",
+      "token": "AAAACosOU2",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 388,
+      "client_ip": "10.10.1.35",
+      "server_ip": "10.10.2.25",
+      "token": "AAAAAG4lrj",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 395,
+      "client_ip": "10.10.1.35",
+      "server_ip": "10.10.2.25",
+      "token": "AAAADvwCDQ",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 434,
+      "client_ip": "10.10.1.31",
+      "server_ip": "10.10.2.25",
+      "token": "AAAADRPp+c",
+      "characters": 10,
+      "native_payload_shape": false
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 464,
+      "client_ip": "10.10.1.32",
+      "server_ip": "10.10.2.25",
+      "token": "AAAACH+hXj",
+      "characters": 10,
+      "native_payload_shape": false
+    }
+  ]
+}

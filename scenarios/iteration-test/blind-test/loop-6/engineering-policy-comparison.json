@@ -1,0 +1,11 @@
+{
+  "scope": "Full policy prototype, same 1000 scheduled occurrences and unchanged drop decisions; production untouched",
+  "visible": 997,
+  "dropped": 3,
+  "old_delays_at_exact_milliseconds": 997,
+  "proposed_delays_at_exact_milliseconds": 0,
+  "proposed_range_us": [
+    3394,
+    245276
+  ]
+}

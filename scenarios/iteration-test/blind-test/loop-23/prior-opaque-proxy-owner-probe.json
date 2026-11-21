@@ -1,0 +1,506 @@
+[
+  {
+    "seed": 42,
+    "requested": [
+      null,
+      null
+    ],
+    "client_total": [
+      1054,
+      4115
+    ],
+    "client_tunnel": [
+      654,
+      3915
+    ],
+    "origin": [
+      760,
+      4489
+    ],
+    "tls": "TLSv12",
+    "resumed": false,
+    "chain": 2,
+    "client_group": "network-connection-4da59eb8-e265-494a-a0eb-d1977c98953e",
+    "origin_parent_group": "proxy-transaction-00000000048b7689",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 42,
+    "requested": [
+      100,
+      200
+    ],
+    "client_total": [
+      1054,
+      4115
+    ],
+    "client_tunnel": [
+      654,
+      3915
+    ],
+    "origin": [
+      720,
+      4473
+    ],
+    "tls": "TLSv12",
+    "resumed": false,
+    "chain": 2,
+    "client_group": "network-connection-296bb5a4-98f2-46b9-8093-bc12a35ce0a2",
+    "origin_parent_group": "proxy-transaction-00000000671a0638",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 42,
+    "requested": [
+      5000,
+      10000
+    ],
+    "client_total": [
+      5400,
+      10200
+    ],
+    "client_tunnel": [
+      5000,
+      10000
+    ],
+    "origin": [
+      5000,
+      10000
+    ],
+    "tls": "TLSv12",
+    "resumed": false,
+    "chain": 2,
+    "client_group": "network-connection-8aa1504b-88df-48f5-968f-80659bf93545",
+    "origin_parent_group": "proxy-transaction-000000007d633662",
+    "match": [
+      true,
+      true
+    ]
+  },
+  {
+    "seed": 43,
+    "requested": [
+      null,
+      null
+    ],
+    "client_total": [
+      821,
+      1317
+    ],
+    "client_tunnel": [
+      421,
+      1117
+    ],
+    "origin": [
+      725,
+      2940
+    ],
+    "tls": "TLSv13",
+    "resumed": false,
+    "chain": 0,
+    "client_group": "network-connection-b9c247af-0fde-4238-830c-195bc48cfc3a",
+    "origin_parent_group": "proxy-transaction-0000000081a38816",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 43,
+    "requested": [
+      100,
+      200
+    ],
+    "client_total": [
+      821,
+      1317
+    ],
+    "client_tunnel": [
+      421,
+      1117
+    ],
+    "origin": [
+      805,
+      4150
+    ],
+    "tls": "TLSv13",
+    "resumed": false,
+    "chain": 0,
+    "client_group": "network-connection-3c25c186-422b-42a4-80c2-d7abacb82198",
+    "origin_parent_group": "proxy-transaction-00000000e999ca37",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 43,
+    "requested": [
+      5000,
+      10000
+    ],
+    "client_total": [
+      5400,
+      10200
+    ],
+    "client_tunnel": [
+      5000,
+      10000
+    ],
+    "origin": [
+      5000,
+      10000
+    ],
+    "tls": "TLSv13",
+    "resumed": false,
+    "chain": 0,
+    "client_group": "network-connection-a9dc4811-f3ea-4df5-9893-cafe879e2df2",
+    "origin_parent_group": "proxy-transaction-00000000337d106e",
+    "match": [
+      true,
+      true
+    ]
+  },
+  {
+    "seed": 44,
+    "requested": [
+      null,
+      null
+    ],
+    "client_total": [
+      1148,
+      4103
+    ],
+    "client_tunnel": [
+      748,
+      3903
+    ],
+    "origin": [
+      736,
+      3531
+    ],
+    "tls": "TLSv13",
+    "resumed": false,
+    "chain": 0,
+    "client_group": "network-connection-61b91e4f-1acf-42ee-b692-6838a411ad7f",
+    "origin_parent_group": "proxy-transaction-00000000fd678075",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 44,
+    "requested": [
+      100,
+      200
+    ],
+    "client_total": [
+      1148,
+      4103
+    ],
+    "client_tunnel": [
+      748,
+      3903
+    ],
+    "origin": [
+      875,
+      3755
+    ],
+    "tls": "TLSv13",
+    "resumed": false,
+    "chain": 0,
+    "client_group": "network-connection-de6cabca-2c32-4f07-ab33-908f7dd369af",
+    "origin_parent_group": "proxy-transaction-00000000f3725e72",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 44,
+    "requested": [
+      5000,
+      10000
+    ],
+    "client_total": [
+      5400,
+      10200
+    ],
+    "client_tunnel": [
+      5000,
+      10000
+    ],
+    "origin": [
+      5000,
+      10000
+    ],
+    "tls": "TLSv13",
+    "resumed": false,
+    "chain": 0,
+    "client_group": "network-connection-bfd63f73-da19-4649-bbd2-5a1a8a534273",
+    "origin_parent_group": "proxy-transaction-0000000008e0aa5d",
+    "match": [
+      true,
+      true
+    ]
+  },
+  {
+    "seed": 45,
+    "requested": [
+      null,
+      null
+    ],
+    "client_total": [
+      710,
+      3732
+    ],
+    "client_tunnel": [
+      310,
+      3532
+    ],
+    "origin": [
+      581,
+      3031
+    ],
+    "tls": "TLSv13",
+    "resumed": false,
+    "chain": 0,
+    "client_group": "network-connection-4c1b177d-799d-41a6-af08-206b0ff015a7",
+    "origin_parent_group": "proxy-transaction-000000008a81b8c3",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 45,
+    "requested": [
+      100,
+      200
+    ],
+    "client_total": [
+      710,
+      3732
+    ],
+    "client_tunnel": [
+      310,
+      3532
+    ],
+    "origin": [
+      724,
+      3992
+    ],
+    "tls": "TLSv13",
+    "resumed": false,
+    "chain": 0,
+    "client_group": "network-connection-2cfe9244-ece9-4139-a004-f42c5cd3f601",
+    "origin_parent_group": "proxy-transaction-000000008ef3d1c7",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 45,
+    "requested": [
+      5000,
+      10000
+    ],
+    "client_total": [
+      5400,
+      10200
+    ],
+    "client_tunnel": [
+      5000,
+      10000
+    ],
+    "origin": [
+      5000,
+      10000
+    ],
+    "tls": "TLSv13",
+    "resumed": false,
+    "chain": 0,
+    "client_group": "network-connection-b18ce21c-42a6-49b1-8f6e-eab88507aecb",
+    "origin_parent_group": "proxy-transaction-000000000f208ed2",
+    "match": [
+      true,
+      true
+    ]
+  },
+  {
+    "seed": 46,
+    "requested": [
+      null,
+      null
+    ],
+    "client_total": [
+      807,
+      2942
+    ],
+    "client_tunnel": [
+      407,
+      2742
+    ],
+    "origin": [
+      570,
+      4452
+    ],
+    "tls": "TLSv12",
+    "resumed": false,
+    "chain": 2,
+    "client_group": "network-connection-47b2092b-4fb6-476a-819f-7cc77424e384",
+    "origin_parent_group": "proxy-transaction-00000000181a22ea",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 46,
+    "requested": [
+      100,
+      200
+    ],
+    "client_total": [
+      807,
+      2942
+    ],
+    "client_tunnel": [
+      407,
+      2742
+    ],
+    "origin": [
+      785,
+      4157
+    ],
+    "tls": "TLSv12",
+    "resumed": false,
+    "chain": 2,
+    "client_group": "network-connection-66ddca58-e3d1-4d81-9a88-67e1cb87a612",
+    "origin_parent_group": "proxy-transaction-0000000067b294bf",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 46,
+    "requested": [
+      5000,
+      10000
+    ],
+    "client_total": [
+      5400,
+      10200
+    ],
+    "client_tunnel": [
+      5000,
+      10000
+    ],
+    "origin": [
+      5000,
+      10000
+    ],
+    "tls": "TLSv12",
+    "resumed": false,
+    "chain": 2,
+    "client_group": "network-connection-1e97c9cf-5f24-4afb-bf6a-e76a7491a21e",
+    "origin_parent_group": "proxy-transaction-000000005da97b0d",
+    "match": [
+      true,
+      true
+    ]
+  },
+  {
+    "seed": 47,
+    "requested": [
+      null,
+      null
+    ],
+    "client_total": [
+      1218,
+      1699
+    ],
+    "client_tunnel": [
+      818,
+      1499
+    ],
+    "origin": [
+      626,
+      3670
+    ],
+    "tls": "TLSv12",
+    "resumed": false,
+    "chain": 2,
+    "client_group": "network-connection-3293d632-3a8c-4b4b-944a-57250f65e305",
+    "origin_parent_group": "proxy-transaction-000000006ea6c15b",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 47,
+    "requested": [
+      100,
+      200
+    ],
+    "client_total": [
+      1218,
+      1699
+    ],
+    "client_tunnel": [
+      818,
+      1499
+    ],
+    "origin": [
+      650,
+      3859
+    ],
+    "tls": "TLSv12",
+    "resumed": false,
+    "chain": 2,
+    "client_group": "network-connection-307649d7-872e-43d2-8654-fecf8b3f7f59",
+    "origin_parent_group": "proxy-transaction-0000000096b1efe1",
+    "match": [
+      false,
+      false
+    ]
+  },
+  {
+    "seed": 47,
+    "requested": [
+      5000,
+      10000
+    ],
+    "client_total": [
+      5400,
+      10200
+    ],
+    "client_tunnel": [
+      5000,
+      10000
+    ],
+    "origin": [
+      5000,
+      10000
+    ],
+    "tls": "TLSv12",
+    "resumed": false,
+    "chain": 2,
+    "client_group": "network-connection-68b54321-90a6-4a83-a1a4-927d47e70a14",
+    "origin_parent_group": "proxy-transaction-00000000046cc070",
+    "match": [
+      true,
+      true
+    ]
+  }
+]

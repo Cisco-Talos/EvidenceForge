@@ -1,0 +1,157 @@
+{
+  "scope": "Descriptive state-conditioned protocol presence for positively service-classified sensor observations; absence alone is not a contradiction",
+  "sensors": {
+    "zeek-core": {
+      "source_sha256": {
+        "ssl.json": "540fdfaad5659843693f960e44f27547734dffa4f7f8912a7eaa24fbef378464",
+        "http.json": "9eaec14bb06715b525c91405b6b49c426d5fa6b39081f1a77762211bc79b05ae",
+        "conn.json": "3fc051a11a0a5109c70a86715009c9fcfa5defca21caa91f49bb4c975bff83f6"
+      },
+      "state_distribution": {
+        "ssl": {
+          "OTH": {
+            "total": 4,
+            "with_protocol": 0,
+            "without_protocol": 4,
+            "missing_with_bidirectional_payload_no_gap": 4
+          },
+          "RSTO": {
+            "total": 23,
+            "with_protocol": 23
+          },
+          "RSTR": {
+            "total": 16,
+            "with_protocol": 16
+          },
+          "S1": {
+            "total": 4,
+            "with_protocol": 4
+          },
+          "S2": {
+            "total": 5,
+            "with_protocol": 5
+          },
+          "S3": {
+            "total": 1,
+            "with_protocol": 1
+          },
+          "SF": {
+            "total": 370,
+            "with_protocol": 370
+          }
+        },
+        "http": {
+          "RSTO": {
+            "total": 1,
+            "with_protocol": 1
+          },
+          "SF": {
+            "total": 2418,
+            "with_protocol": 2403,
+            "without_protocol": 15,
+            "missing_with_bidirectional_payload_no_gap": 15
+          }
+        }
+      },
+      "missing_examples": []
+    },
+    "zeek-db": {
+      "source_sha256": {
+        "ssl.json": "a4d0d2239f7dcc8fe85a168cca5e153459a39d6979d77c31d8a3cab5abdf4716",
+        "http.json": "31546820e76f2b58ac7fa59117c2221244706e9e3300e0653475ffc1f5441c28",
+        "conn.json": "bde8b094ce56fd2b10b1bd107f210fe1300f43dd3e75dd87a6140427902a30a4"
+      },
+      "state_distribution": {
+        "ssl": {
+          "RSTO": {
+            "total": 3,
+            "with_protocol": 3
+          },
+          "RSTR": {
+            "total": 1,
+            "with_protocol": 1
+          },
+          "SF": {
+            "total": 13,
+            "with_protocol": 13
+          }
+        },
+        "http": {
+          "SF": {
+            "total": 26,
+            "with_protocol": 26
+          }
+        }
+      },
+      "missing_examples": []
+    },
+    "zeek-dmz": {
+      "source_sha256": {
+        "ssl.json": "e29e1f9161a651b24e9191d29f9603b3026160cd51c01bd59e255fc96f63b8c8",
+        "http.json": "ab08d7a91fe784d3b6300039001727c919674e7f4253b3b439115fa1ab8cd54d",
+        "conn.json": "0817d916ed171602c76143c2f899c4c1ddce2ca2629f9f8e54c4223e0df7fdf7"
+      },
+      "state_distribution": {
+        "ssl": {
+          "OTH": {
+            "total": 7,
+            "with_protocol": 0,
+            "without_protocol": 7,
+            "missing_with_bidirectional_payload_no_gap": 7
+          },
+          "RSTO": {
+            "total": 55,
+            "with_protocol": 55
+          },
+          "RSTR": {
+            "total": 46,
+            "with_protocol": 46
+          },
+          "S1": {
+            "total": 7,
+            "with_protocol": 7
+          },
+          "S2": {
+            "total": 3,
+            "with_protocol": 3
+          },
+          "S3": {
+            "total": 3,
+            "with_protocol": 3
+          },
+          "SF": {
+            "total": 2976,
+            "with_protocol": 2976
+          }
+        },
+        "http": {
+          "OTH": {
+            "total": 3,
+            "with_protocol": 0,
+            "without_protocol": 3,
+            "missing_with_bidirectional_payload_no_gap": 3
+          },
+          "RSTO": {
+            "total": 9,
+            "with_protocol": 9
+          },
+          "RSTR": {
+            "total": 6,
+            "with_protocol": 6
+          },
+          "S2": {
+            "total": 3,
+            "with_protocol": 3
+          },
+          "SF": {
+            "total": 2666,
+            "with_protocol": 2648,
+            "without_protocol": 18,
+            "missing_with_bidirectional_payload_no_gap": 15
+          }
+        }
+      },
+      "missing_examples": []
+    }
+  }
+}

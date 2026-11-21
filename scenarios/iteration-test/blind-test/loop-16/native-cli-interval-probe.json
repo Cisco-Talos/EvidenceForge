@@ -1,0 +1,45 @@
+{
+  "scope": "Positive native Sysmon parent/child GUID joins for repeated SSH/SCP/SFTP invocations under cmd/PowerShell. UtcTime and provider TimeCreated are measured separately. A repeated gap is distribution evidence, not impossible timing; automation and collection transforms remain alternatives.",
+  "hosts": {
+    "DC-01.meridianhcs.local": {
+      "source_sha256": "e384f586097c7741b2e7b695f5e06c9720c38123578443ffc99dc2de158ead89",
+      "repeated_cli_groups": []
+    },
+    "DC-02.meridianhcs.local": {
+      "source_sha256": "105739e124e0988aa73dd9606416be5c45e70fe46be16b52a0fe08fb0bc3cfec",
+      "repeated_cli_groups": []
+    },
+    "FILE-SRV-01.meridianhcs.local": {
+      "source_sha256": "1d310f624892a2bfcbcb545a656e90e22a261ca88f56353899326cd7e9ff4623",
+      "repeated_cli_groups": []
+    },
+    "MAIL-FIN-01.meridianhcs.local": {
+      "source_sha256": "5f235340961390b019143dc6895cfd8267a4694dbd073afb05663b8a544bed35",
+      "repeated_cli_groups": []
+    },
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "source_sha256": "6e276e2bb3fb4816e294b36d24a513dba6a0c43b8d5006616913fb416e2cc923",
+      "repeated_cli_groups": []
+    },
+    "WS-DRAMIREZ-01.meridianhcs.local": {
+      "source_sha256": "8ba75cc1425cba319135e62407b41896691937eeab64c227fe50e1af41fc09e0",
+      "repeated_cli_groups": []
+    },
+    "WS-EBROOKS-01.meridianhcs.local": {
+      "source_sha256": "f887e09200044a3774436b34a3c315e9306fcd8ab52ffc9e795d2464614108d2",
+      "repeated_cli_groups": []
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "source_sha256": "77547d7b8a9ef6a57a7c5cc6921620b8fd7541724aa93bb522401471865475ae",
+      "repeated_cli_groups": []
+    },
+    "WS-PPATEL-01.meridianhcs.local": {
+      "source_sha256": "a1e1e62c36df90e8c2a90b68e902aadc75975a2d26b719b9126977314e71e434",
+      "repeated_cli_groups": []
+    },
+    "WS-SMARTINEZ-01.meridianhcs.local": {
+      "source_sha256": "37fcdd0de66fd1f72e830b075744383c0a3de5ed23959517ebf590ba3794533e",
+      "repeated_cli_groups": []
+    }
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "diagnostic_only": true,
+  "expected_client_ip": "10.10.1.32",
+  "expected_server_ip": "10.10.2.25",
+  "request_time": "2026-11-02 13:42:14.544530+00:00",
+  "transport": {
+    "stable_id": "network-connection-f0c82110-626f-47bf-98da-b20222b553af",
+    "hostname": "mail.meridianhcs.com",
+    "outcome": "success",
+    "phase_times": [
+      [
+        "transport_start",
+        "2026-11-02 13:42:14.910139+00:00"
+      ],
+      [
+        "application_request",
+        "2026-11-02 13:42:14.910139+00:00"
+      ],
+      [
+        "application_response",
+        "2026-11-02 13:43:45.157498+00:00"
+      ],
+      [
+        "transport_close",
+        "2026-11-02 13:44:15.239951+00:00"
+      ]
+    ],
+    "started_at": "2026-11-02 13:42:14.910139+00:00",
+    "closed_at": "2026-11-02 13:44:15.239951+00:00",
+    "src_ip": "10.10.1.32",
+    "src_port": 52248,
+    "dst_ip": "203.14.220.11",
+    "dst_port": 993,
+    "protocol": "tcp",
+    "service": "ssl",
+    "zeek_uid": "CyrvRTkxeqOBTax9RPr",
+    "conn_id": "conn-4185",
+    "duration": 120.32981184302427,
+    "conn_state": "SF",
+    "history": "ShADadfF",
+    "traffic": {
+      "orig": {
+        "payload_bytes": 2805,
+        "packets": 40,
+        "ip_bytes": 4897
+      },
+      "resp": {
+        "payload_bytes": 116686,
+        "packets": 85,
+        "ip_bytes": 121118
+      },
+      "missed_orig_bytes": 0,
+      "missed_resp_bytes": 0
+    },
+    "initiating_pid": -1,
+    "responding_pid": 2289790,
+    "local_orig": true,
+    "local_resp": true,
+    "ip_proto": 6,
+    "link_local": false,
+    "application_layer_only": false
+  },
+  "checks": {
+    "src_ip": true,
+    "dst_ip": false,
+    "port": true,
+    "proto": true,
+    "remote_port": true,
+    "outcome": true,
+    "has_close": true,
+    "positive_span": true
+  }
+}

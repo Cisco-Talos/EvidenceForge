@@ -127,10 +127,13 @@ from evidenceforge.generation.activity.network_transport import (
     _icmp_echo_duration,
     _icmp_echo_payload_size,
     _preserve_explicit_tcp_payload_overrides,
+    _tcp_application_exchange_eligible,
     _tcp_history_consistent_with_payload,
+    _tcp_history_with_application_payload,
     _tcp_ip_byte_count,
     _tcp_packet_counts_from_payload_and_history,
     _tcp_payload_bytes_consistent_with_history,
+    _tcp_state_supports_application_payload,
     _tcp_success_history,
     connection_state_distribution,
     native_connection_history,
@@ -1455,6 +1458,47 @@ class NetworkTransactionPlanner:
             )
         return duration + self._tls_completed_extension_seconds(request)
 
+    def _tls_detection_time(
+        self,
+        request: NetworkConnectionRequest,
+        event: _NetworkOccurrenceDraft,
+        canonical_start: datetime,
+        canonical_close: datetime | None,
+    ) -> datetime | None:
+        """Own one physical TLS detection phase before sensor clocks and source delay."""
+        if not any((event.ssl, event.x509, event.x509_chain)):
+            return None
+        if event.network.application_layer_only:
+            parent = self._executor.state_manager.get_connection(event.network.conn_id)
+            captured = parent.http_capture_transaction if parent is not None else None
+            return dict(captured.phase_times).get("tls_detected") if captured is not None else None
+        from evidenceforge.generation.activity.network_params import tls_detection_phase_config
+
+        profile = tls_detection_phase_config()
+        if profile is None:
+            return None
+        upper = canonical_close
+        if event.http is not None and event.http.canonical_request_time is not None:
+            http_upper = event.http.canonical_request_time
+            upper = min(upper, http_upper) if upper is not None else http_upper
+        maximum_us = round(profile.maximum_ms * 1000)
+        if upper is not None:
+            maximum_us = min(
+                maximum_us, round((upper - canonical_start).total_seconds() * 1_000_000) - 1
+            )
+        if maximum_us <= 0:
+            return canonical_start
+        minimum_us = min(profile.minimum_ms * 1000, maximum_us / 4)
+        median_us = min(profile.median_ms * 1000, (minimum_us + maximum_us) / 2)
+        return canonical_start + self._timing_runtime.sampler.sample_timedelta(
+            TruncatedLognormalDistribution(
+                median=median_us, sigma=profile.sigma, minimum=minimum_us, maximum=maximum_us
+            ),
+            relationship_key="network.tls.first_detection_after_transport",
+            scope=self._timing_scope(request),
+            sample_key="tls_first_detection",
+        )
+
     def _http_request_phase_delay(self, request: NetworkConnectionRequest) -> timedelta:
         """Sample one canonical first-request delay without millisecond quantization."""
         from evidenceforge.generation.activity.network_params import http_request_phase_config
@@ -1940,7 +1984,10 @@ class NetworkTransactionPlanner:
             "RSTR",
             "OTH",
         }
-        if network.conn_state != "SF" and not dns_payload_state:
+        application_payload_state = (
+            event.http is not None or event.ssl is not None
+        ) and _tcp_state_supports_application_payload(network.conn_state)
+        if network.conn_state != "SF" and not dns_payload_state and not application_payload_state:
             return False
 
         orig_floor = 0
@@ -1987,7 +2034,15 @@ class NetworkTransactionPlanner:
         previous = (network.orig_bytes or 0, network.resp_bytes or 0)
         network.orig_bytes = max(previous[0], orig_floor)
         network.resp_bytes = max(previous[1], resp_floor)
-        if (network.orig_bytes, network.resp_bytes) == previous:
+        previous_history = network.history
+        if application_payload_state:
+            network.history = _tcp_history_with_application_payload(
+                network.history, network.orig_bytes, network.resp_bytes
+            )
+        if (
+            network.orig_bytes,
+            network.resp_bytes,
+        ) == previous and network.history == previous_history:
             return False
 
         accounting_rng = random.Random(
@@ -4316,7 +4371,9 @@ class NetworkTransactionPlanner:
             and not facts.http_application_layer_only
             and protocol_evidence.proto == "tcp"
             and dst_port == 443
-            and conn_state == "SF"
+            and _tcp_application_exchange_eligible(
+                protocol_evidence.proto, conn_state, orig_bytes, resp_bytes
+            )
         ):
             # A completed TLS session with ssl.log/SNI evidence must include
             # at least a ClientHello and server handshake payload at conn.log
@@ -4406,6 +4463,10 @@ class NetworkTransactionPlanner:
                     history = _tcp_success_history(rng)
 
         if protocol_evidence.proto == "tcp":
+            if request.resp_bytes is not None and _tcp_state_supports_application_payload(
+                conn_state
+            ):
+                history = _tcp_history_with_application_payload(history, orig_bytes, resp_bytes)
             orig_bytes, resp_bytes = _tcp_payload_bytes_consistent_with_history(
                 orig_bytes,
                 resp_bytes,
@@ -5550,14 +5611,14 @@ class NetworkTransactionPlanner:
         rng: random.Random,
     ) -> None:
         """Reconcile body, packet and duration facts before source visibility fixes the interval."""
-        # Enforce conn_state/HTTP consistency: if HTTP context exists,
-        # the connection must have completed successfully (SF). A connection
-        # with a handshake-only, reset, or half-close state cannot have served
-        # a Zeek HTTP transaction with request/response body accounting.
+        # HTTP progress and TCP teardown are independent. Preserve resets,
+        # one-sided closes and explicit midstream observations that can contain
+        # a transaction. Only incompatible pre-establishment states need the
+        # existing compatibility conversion for caller-supplied HTTP intent.
         if (
             event.http is not None
             and event.network.protocol == "tcp"
-            and event.network.conn_state != "SF"
+            and not _tcp_state_supports_application_payload(event.network.conn_state)
         ):
             event.network.conn_state = "SF"
             event.network.history = _tcp_success_history(rng)
@@ -5567,7 +5628,7 @@ class NetworkTransactionPlanner:
         if (
             event.http is not None
             and event.network.protocol == "tcp"
-            and event.network.conn_state == "SF"
+            and _tcp_state_supports_application_payload(event.network.conn_state)
             and not event.network.application_layer_only
         ):
             event.network.duration = self._completed_http_duration_seconds(
@@ -5575,7 +5636,13 @@ class NetworkTransactionPlanner:
                 event.network.duration,
             )
 
-        if event.network.protocol == "tcp" and event.network.conn_state == "SF":
+        if event.network.protocol == "tcp" and (
+            event.network.conn_state == "SF"
+            or (
+                _tcp_state_supports_application_payload(event.network.conn_state)
+                and (event.http is not None or (event.ssl is not None and event.ssl.established))
+            )
+        ):
             if event.http is not None:
                 method = (event.http.method or "GET").upper()
                 if event.network.service == "http" and method != "CONNECT":
@@ -5761,7 +5828,12 @@ class NetworkTransactionPlanner:
             and not facts.local_only
             and protocol_evidence.service == "ssl"
             and protocol_evidence.proto == "tcp"
-            and protocol_evidence.conn_state == "SF"
+            and _tcp_application_exchange_eligible(
+                event.network.protocol,
+                event.network.conn_state,
+                event.network.orig_bytes,
+                event.network.resp_bytes,
+            )
         ):
             executor._attach_ssl_context(
                 event,
@@ -5769,7 +5841,9 @@ class NetworkTransactionPlanner:
                 dns=protocol_evidence.dns,
                 dst_ip=endpoints.dst_ip,
                 rng=rng,
-                allow_failure=not facts.caller_provided_conn_state,
+                allow_failure=(
+                    not facts.caller_provided_conn_state and event.network.conn_state == "SF"
+                ),
                 timing_stable_id=facts.stable_id,
                 network_preparation=network_preparation,
                 timing_runtime=self._timing_runtime,
@@ -5789,7 +5863,12 @@ class NetworkTransactionPlanner:
             and not facts.suppress_application_side_effects
             and protocol_evidence.service == "http"
             and protocol_evidence.proto == "tcp"
-            and protocol_evidence.conn_state == "SF"
+            and _tcp_application_exchange_eligible(
+                event.network.protocol,
+                event.network.conn_state,
+                event.network.orig_bytes,
+                event.network.resp_bytes,
+            )
             and event.http is None  # Skip auto-generation if caller provided HttpContext
         ):
             self._prepare_automatic_http_evidence(
@@ -5846,7 +5925,12 @@ class NetworkTransactionPlanner:
             and not facts.http_application_layer_only
             and not facts.local_only
             and event.network.service == "ssl"
-            and event.network.conn_state == "SF"
+            and _tcp_application_exchange_eligible(
+                event.network.protocol,
+                event.network.conn_state,
+                event.network.orig_bytes,
+                event.network.resp_bytes,
+            )
             and event.ssl is None
         ):
             executor._attach_ssl_context(
@@ -6060,6 +6144,10 @@ class NetworkTransactionPlanner:
             else:
                 application_request_time = canonical_start
 
+        tls_detected_at = self._tls_detection_time(request, event, canonical_start, canonical_close)
+        if tls_detected_at is not None and event.http is None and event.smtp is None:
+            application_request_time = tls_detected_at
+
         if event.http is not None and event.network.application_layer_only:
             parent = executor.state_manager.get_connection(event.network.conn_id)
             if parent is None:
@@ -6105,8 +6193,11 @@ class NetworkTransactionPlanner:
             if application_request_time is not None:
                 response_time = max(response_time, application_request_time)
             phase_times.append(("application_response", response_time))
+        if tls_detected_at is not None:
+            phase_times.append(("tls_detected", tls_detected_at))
         if canonical_close is not None:
             phase_times.append(("transport_close", canonical_close))
+        phase_times.sort(key=lambda item: item[1])
         if event.firewall is not None and event.firewall.action == "deny":
             transaction_outcome = "denied"
         elif event.network.conn_state in {"SF", "S1", "S2", "S3", "OTH"}:

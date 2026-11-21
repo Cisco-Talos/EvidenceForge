@@ -1,0 +1,12 @@
+{
+  "prototype_only": true,
+  "URL_checks": {
+    "curl -x http://proxy:8080 https://origin.example/tools/a?x=1": "https://origin.example/tools/a?x=1",
+    "curl --proxy=http://proxy:8080 --url https://origin.example/tools/a": "https://origin.example/tools/a",
+    "wget -e http_proxy=http://proxy:8080 https://origin.example/tools/a": "https://origin.example/tools/a",
+    "curl -H \"Referer: https://other.example/\" https://origin.example/tools/a": "https://origin.example/tools/a",
+    "curl -e https://other.example/ https://origin.example/tools/a": "https://origin.example/tools/a",
+    "curl http://[::1 && curl https://origin.example/tools/a": "https://origin.example/tools/a"
+  },
+  "method_checks_passed": 5
+}

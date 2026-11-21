@@ -1,0 +1,354 @@
+{
+  "scope": "Data-only unambiguous1:1samephysicalTLS pairing by same tuple,nearbyconnstart(<1s),TLSversion/cipher/SNI/resumption/history. RelativeSSL-to-conn gap removesfixedclockoffset; differentphysicalproxy/NATlegsareexcludedbytuple. Equalaggregatecountersdonotproveidenticalcapture; collector/config/normalizationdifferencesremainalternatives. Decimalinputtimestampspreservesourcemicroseconds.",
+  "source_sha256": {
+    "zeek-core": {
+      "conn.json": "023457fbb61cea2ffca748e8e76e33f2c9f4131205e3f71486d812765dcf48e7",
+      "ssl.json": "9c87f7b42a73c836c8c04273933530bebfff64e545309ce976c79d9742d1a88e"
+    },
+    "zeek-db": {
+      "conn.json": "549ca65b250444d0134d212fc2b124c6ca7f492b8963759ea9420df3788f62ca",
+      "ssl.json": "400de07b2cb472cb2f96b8794e86d066dd649761863bf7b74b1d0748abb9c0a1"
+    },
+    "zeek-dmz": {
+      "conn.json": "5c1c1829c7200b6f64b38a808956ecd0052e6b4af2a82f1b267f925d3f02cca3",
+      "ssl.json": "5007dcb69255f53570b25accb69bae664f3f020ad06b4cb4b21612fe0be24d06"
+    }
+  },
+  "all_pairs": {
+    "pairs": 61,
+    "disagreement_above_50ms": 38,
+    "disagreement_above_100ms": 27,
+    "median_disagreement_seconds": 0.085555,
+    "maximum_disagreement_seconds": 0.588515
+  },
+  "same_counters_state_zero_reported_loss_pairs": {
+    "pairs": 55,
+    "disagreement_above_50ms": 35,
+    "disagreement_above_100ms": 26,
+    "median_disagreement_seconds": 0.098244,
+    "maximum_disagreement_seconds": 0.588515
+  },
+  "ambiguous_or_unmatched_source_rows": 788,
+  "largest_control_witnesses": [
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.36",
+        62266,
+        "10.10.3.10",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "CsRRccCxXfTo8DezUC",
+        "CJc4hFg29sHnWGCKLU"
+      ],
+      "tls": {
+        "version": "TLSv12",
+        "cipher": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+        "server_name": "WEB-EXT-01.meridianhcs.local",
+        "resumed": false,
+        "established": true,
+        "ssl_history": "CsxknGIi"
+      },
+      "relative_tls_gaps_seconds": [
+        0.058352,
+        0.646867
+      ],
+      "relative_phase_disagreement_seconds": 0.588515,
+      "connection_start_difference_seconds": -0.112904,
+      "same_counters_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.41",
+        50836,
+        "10.10.3.10",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "CMzBmWDFWZy1dMvx6Y",
+        "CsP39YgVfG1dRtOvUB"
+      ],
+      "tls": {
+        "version": "TLSv12",
+        "cipher": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+        "server_name": "WEB-EXT-01.meridianhcs.local",
+        "resumed": false,
+        "established": true,
+        "ssl_history": "CsxknGIi"
+      },
+      "relative_tls_gaps_seconds": [
+        0.606129,
+        0.119522
+      ],
+      "relative_phase_disagreement_seconds": 0.486607,
+      "connection_start_difference_seconds": -0.116222,
+      "same_counters_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.21",
+        37187,
+        "10.10.3.10",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "CHVrgQ8odxeJ12xHfF",
+        "CBeWCO7XYbmAOm8wtA"
+      ],
+      "tls": {
+        "version": "TLSv13",
+        "cipher": "TLS_CHACHA20_POLY1305_SHA256",
+        "server_name": "WEB-EXT-01.meridianhcs.local",
+        "resumed": false,
+        "established": true,
+        "ssl_history": "Cs"
+      },
+      "relative_tls_gaps_seconds": [
+        0.154997,
+        0.640821
+      ],
+      "relative_phase_disagreement_seconds": 0.485824,
+      "connection_start_difference_seconds": -0.114189,
+      "same_counters_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.32",
+        56526,
+        "10.10.3.10",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "CWVnvR6I89ofJMsRGY",
+        "CfYNMKXQoD6FSWmeqr"
+      ],
+      "tls": {
+        "version": "TLSv13",
+        "cipher": "TLS_AES_128_GCM_SHA256",
+        "server_name": "WEB-EXT-01.meridianhcs.local",
+        "resumed": false,
+        "established": true,
+        "ssl_history": "Cs"
+      },
+      "relative_tls_gaps_seconds": [
+        0.467341,
+        0.048285
+      ],
+      "relative_phase_disagreement_seconds": 0.419056,
+      "connection_start_difference_seconds": -0.115805,
+      "same_counters_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.3.20",
+        33866,
+        "10.10.2.40",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "CkzcyRurqm8y7OwYsz",
+        "CytbKAD4rvYsuGpQdH"
+      ],
+      "tls": {
+        "version": "TLSv12",
+        "cipher": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+        "server_name": "LOG-MON-01.meridianhcs.local",
+        "resumed": true,
+        "established": true,
+        "ssl_history": "CsiI"
+      },
+      "relative_tls_gaps_seconds": [
+        0.055908,
+        0.441165
+      ],
+      "relative_phase_disagreement_seconds": 0.385257,
+      "connection_start_difference_seconds": -0.113397,
+      "same_counters_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.33",
+        54228,
+        "10.10.3.10",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "CSJS1GsjOnsHJ0JKvMU",
+        "CeP7Owi9Ja4JjOxIY3N"
+      ],
+      "tls": {
+        "version": "TLSv13",
+        "cipher": "TLS_AES_128_GCM_SHA256",
+        "server_name": "WEB-EXT-01.meridianhcs.local",
+        "resumed": true,
+        "established": true,
+        "ssl_history": "Cs"
+      },
+      "relative_tls_gaps_seconds": [
+        0.1617,
+        0.492672
+      ],
+      "relative_phase_disagreement_seconds": 0.330972,
+      "connection_start_difference_seconds": -0.112881,
+      "same_counters_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.3.20",
+        60075,
+        "10.10.2.27",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "CRnHJ1IGfZTlfrChFI",
+        "CAnd2SgH4PIbt55VTL"
+      ],
+      "tls": {
+        "version": "TLSv13",
+        "cipher": "TLS_AES_128_GCM_SHA256",
+        "server_name": "mail-fin.meridianhcs.com",
+        "resumed": false,
+        "established": true,
+        "ssl_history": "Cs"
+      },
+      "relative_tls_gaps_seconds": [
+        0.378005,
+        0.097372
+      ],
+      "relative_phase_disagreement_seconds": 0.280633,
+      "connection_start_difference_seconds": -0.113909,
+      "same_counters_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.3.20",
+        36317,
+        "10.10.2.27",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "CF53ucAmRCG1ckQd2Ck",
+        "CSR6ohhJ4PPtVdrJ5n3"
+      ],
+      "tls": {
+        "version": "TLSv13",
+        "cipher": "TLS_AES_128_GCM_SHA256",
+        "server_name": "mail-fin.meridianhcs.com",
+        "resumed": true,
+        "established": true,
+        "ssl_history": "Cs"
+      },
+      "relative_tls_gaps_seconds": [
+        0.094726,
+        0.319179
+      ],
+      "relative_phase_disagreement_seconds": 0.224453,
+      "connection_start_difference_seconds": -0.111962,
+      "same_counters_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.42",
+        50707,
+        "10.10.3.10",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "CmDFgcHNppuxHg4zDC",
+        "Ck0ntYkMBVb1H4BH3C"
+      ],
+      "tls": {
+        "version": "TLSv13",
+        "cipher": "TLS_AES_128_GCM_SHA256",
+        "server_name": "WEB-EXT-01.meridianhcs.local",
+        "resumed": true,
+        "established": true,
+        "ssl_history": "Cs"
+      },
+      "relative_tls_gaps_seconds": [
+        0.527851,
+        0.304892
+      ],
+      "relative_phase_disagreement_seconds": 0.222959,
+      "connection_start_difference_seconds": -0.115552,
+      "same_counters_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.42",
+        65492,
+        "10.10.3.10",
+        443,
+        "tcp"
+      ],
+      "uids": [
+        "C5oO6uKWicz1r3EKKl",
+        "ChQ0TG7uwway2BhCMI"
+      ],
+      "tls": {
+        "version": "TLSv13",
+        "cipher": "TLS_AES_128_GCM_SHA256",
+        "server_name": "WEB-EXT-01.meridianhcs.local",
+        "resumed": false,
+        "established": true,
+        "ssl_history": "Cs"
+      },
+      "relative_tls_gaps_seconds": [
+        0.295748,
+        0.076638
+      ],
+      "relative_phase_disagreement_seconds": 0.21911,
+      "connection_start_difference_seconds": -0.116261,
+      "same_counters_state_zero_reported_loss": true
+    }
+  ]
+}

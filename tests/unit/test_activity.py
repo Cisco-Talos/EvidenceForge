@@ -1711,6 +1711,7 @@ class TestActivityGenerator:
             in {
                 "logon",
                 "process_create",
+                "process_exec",
             }
         )
         emitters = {"syslog": syslog_emitter, "ecar": ecar_emitter}
@@ -1725,23 +1726,23 @@ class TestActivityGenerator:
         logon_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
         logon_id = "0x12345"
         state_manager.set_current_time(logon_time - timedelta(hours=1))
-        systemd_pid = state_manager.create_process(
-            linux_server.hostname,
-            0,
+        systemd_pid = activity_gen.generate_system_process(
+            linux_server,
+            logon_time - timedelta(hours=1),
             "/usr/lib/systemd/systemd",
             "/usr/lib/systemd/systemd --system",
-            "root",
-            "System",
-            logon_id="0x3e7",
+            parent_pid=0,
+            username="root",
+            emit_linux_syslog=False,
         )
-        agetty_pid = state_manager.create_process(
-            linux_server.hostname,
-            systemd_pid,
+        agetty_pid = activity_gen.generate_system_process(
+            linux_server,
+            logon_time - timedelta(minutes=59),
             "/sbin/agetty",
             "/sbin/agetty --noclear tty1 linux",
-            "root",
-            "System",
-            logon_id="0x3e7",
+            parent_pid=systemd_pid,
+            username="root",
+            emit_linux_syslog=False,
         )
         activity_gen._system_pids = {
             linux_server.hostname: {
@@ -1779,7 +1780,7 @@ class TestActivityGenerator:
         process_events = [
             event
             for event in events
-            if event.event_type == "process_create" and event.process.image == "/bin/login"
+            if event.event_type == "process_exec" and event.process.image == "/bin/login"
         ]
         pam_event = next(
             call.args[0]
@@ -1791,17 +1792,21 @@ class TestActivityGenerator:
         assert shell_pid is not None
         assert len(login_events) == 1
         assert len(process_events) == 1
-        assert pam_event.syslog.pid == process_events[0].process.pid
+        assert not any(
+            event.event_type == "process_create" and event.process.image == "/bin/login"
+            for event in events
+        )
+        assert pam_event.syslog.pid == process_events[0].process.pid == agetty_pid
         assert process_events[0].process.username == "root"
         assert process_events[0].process.logon_id == "0x3e7"
-        assert process_events[0].process.parent_pid == agetty_pid
+        assert process_events[0].process.parent_pid == systemd_pid
         assert pam_event.timestamp - process_events[0].timestamp >= timedelta(milliseconds=2500)
-        source_create_time = activity_gen.process_source_create_time(
-            linux_server.hostname,
+        source_create_bound = activity_gen.process_source_create_bound(
+            linux_server,
             process_events[0].process.pid,
         )
-        assert source_create_time is not None
-        assert pam_event.timestamp >= source_create_time + (
+        assert source_create_bound is not None
+        assert pam_event.timestamp >= source_create_bound + (
             dispatcher.observation_policy.maximum_delay_difference("ecar", "syslog")
         )
         login_process = state_manager.get_process(
@@ -4975,6 +4980,7 @@ class TestActivityGenerator:
         """Machine Kerberos flows should have matching DC 4768/4769 audit records."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
+        activity_gen._remember_visible_account_created("WKS-01$", timestamp - timedelta(minutes=1))
         for emitter in mock_emitters.values():
             emitter.can_handle.return_value = True
         activity_gen._ip_to_system["10.0.1.10"] = System(
@@ -13842,7 +13848,7 @@ class TestActivityGenerator:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         net = event.network
-        assert net.conn_state == "SF"
+        assert net.conn_state == "RSTO"
         assert net.duration is not None and net.duration >= 0.04
 
     def test_default_connection_duration_jitter_diversifies_reviewer_anchors(self):
@@ -13921,10 +13927,11 @@ class TestActivityGenerator:
         assert net.orig_ip_bytes >= net.orig_pkts * 40
         assert net.resp_ip_bytes >= net.resp_pkts * 40
 
-    def test_tcp_one_sided_history_zeroes_unmarked_payload_side(
-        self, activity_gen, state_manager, mock_emitters
+    @pytest.mark.parametrize("response_bytes", [None, 2000])
+    def test_tcp_history_reflects_explicit_response_payload(
+        self, activity_gen, state_manager, mock_emitters, response_bytes
     ):
-        """One-sided TCP history may only claim payload bytes for the marked side."""
+        """Known response payload adds d; unknown payload retains one-sided history."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -13932,19 +13939,21 @@ class TestActivityGenerator:
             "10.0.0.1",
             "93.184.216.34",
             timestamp,
+            dst_port=12345,
+            service="",
             duration=2.5,
             orig_bytes=1000,
-            resp_bytes=2000,
+            resp_bytes=response_bytes,
             conn_state="RSTO",
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         net = event.network
-        assert net.history == "ShADaR"
+        assert net.history == ("ShADaR" if response_bytes is None else "ShADadR")
         assert "D" in net.history
-        assert "d" not in net.history
+        assert ("d" in net.history) is (response_bytes is not None)
         assert net.orig_bytes > 0
-        assert net.resp_bytes == 0
+        assert (net.resp_bytes > 0) is (response_bytes is not None)
 
     def test_generate_connection_without_duration(self, activity_gen, state_manager, mock_emitters):
         """generate_connection without duration should set conn_state to S0."""
@@ -17086,6 +17095,24 @@ class TestActivityGenerator:
         state_manager.set_current_time(timestamp)
         activity_gen._dc_hostnames = ["DC-01"]
         activity_gen._dc_ips = ["10.0.0.10"]
+        dc = System(
+            hostname="DC-01", ip="10.0.0.10", os="Windows Server 2022", type="domain_controller"
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system, dc.ip: dc}
+        activity_gen.identity_directory = IdentityDirectory(
+            windows_domain="corp.example.com",
+            domain_sid_base="S-1-5-21-1-2-3",
+            has_windows_domain=True,
+            windows_accounts={
+                (test_user.username.casefold(), "*"): WindowsAccount(
+                    logical_name=test_user.username,
+                    account_name=test_user.username,
+                    sid="S-1-5-21-1-2-3-1001",
+                    scope="domain",
+                    domain="corp.example.com",
+                ),
+            },
+        )
 
         with patch.object(
             activity_gen,
@@ -17107,7 +17134,11 @@ class TestActivityGenerator:
         events = [
             call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
-        assert any(event.event_type == "ntlm_validation" for event in events)
+        validations = [event for event in events if event.event_type == "ntlm_validation"]
+        assert len(validations) == 1
+        assert validations[0].dst_host.hostname == dc.hostname
+        logon = next(event for event in events if event.event_type == "logon")
+        assert validations[0].timestamp < logon.timestamp
 
     def test_execute_baseline_activity_connection_web(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

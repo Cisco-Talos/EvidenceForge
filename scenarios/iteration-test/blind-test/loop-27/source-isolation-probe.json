@@ -1,0 +1,17 @@
+{
+  "previous_loop": 26,
+  "current_loop": 27,
+  "file_count": 115,
+  "changed_files": 4,
+  "changed_source_counts": {
+    "ecar.json": 2,
+    "macos_endpoint_security.ndjson": 2
+  },
+  "changed_paths": [
+    "MAC-MROSS-01.meridianhcs.local/ecar.json",
+    "MAC-MROSS-01.meridianhcs.local/macos_endpoint_security.ndjson",
+    "MAC-MROSS-02.meridianhcs.local/ecar.json",
+    "MAC-MROSS-02.meridianhcs.local/macos_endpoint_security.ndjson"
+  ],
+  "non_mac_changes": []
+}

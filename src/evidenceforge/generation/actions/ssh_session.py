@@ -130,6 +130,7 @@ from evidenceforge.generation.timing import (
     TimingScope,
     TriangularDistribution,
 )
+from evidenceforge.generation.timing.phase_allocation import partition_phase_interval
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import RunningProcess
@@ -6715,6 +6716,40 @@ class SshSessionActionBundle:
         if ordered and available <= timedelta(0):
             raise StateError("Exact SSH receiver has no structural descendant close interval")
         step = available / max(2, len(ordered) + 1)
+        macos_phases: tuple[datetime, ...] = ()
+        if ordered and isinstance(auth_state, _SshMacAuthState):
+            # Conditional transition shares retain the exact transport/receiver
+            # anchors. The continuation freezes these canonical times before source
+            # publication; native clocks render them without independent jitter.
+            key = "macos.authoritative_process_termination_gap"
+            window = get_timing_window(
+                key, default_min_ms=40, default_max_ms=350, default_position="before"
+            )
+            if window.min_ms <= 0 or window.position != "before":
+                raise StateError("Mac SSH descendant close timing requires positive before support")
+            planner = self._timing_planner()
+            phase_ids = tuple(item.identity.object_id for item in ordered) + (
+                receiver_identity.object_id,
+            )
+            weights = tuple(
+                timedelta(
+                    seconds=planner.triangular_seconds(
+                        relationship_key=key,
+                        stable_id=f"{plan.continuation_id}:{object_id}",
+                        minimum=window.min_ms / 1000,
+                        mode=window.min_ms / 1000,
+                        maximum=window.max_ms / 1000,
+                        host=plan.target_system.hostname,
+                        lifecycle_id=plan.session_lifecycle_group_id,
+                        ordinal=ordinal,
+                        sample_key="ssh-descendant-transition-share",
+                    )
+                )
+                for ordinal, object_id in enumerate(phase_ids)
+            )
+            macos_phases = partition_phase_interval(
+                transport_close_at, receiver_terminate_at, weights
+            )
         prior = transport_close_at
         planned: list[_SshReceiverDescendantTermination] = []
         for ordinal, snapshot in enumerate(ordered, start=1):
@@ -6776,7 +6811,10 @@ class SshSessionActionBundle:
                 ensure_utc(retained_child_close or identity.started_at) + timedelta(microseconds=1),
                 prior,
             )
-            terminate_at = max(transport_close_at + step * ordinal, minimum)
+            terminate_at = max(
+                macos_phases[ordinal] if macos_phases else transport_close_at + step * ordinal,
+                minimum,
+            )
             if terminate_at >= receiver_terminate_at:
                 raise StateError(
                     "Exact SSH descendant cannot terminate before its receiver parent: "

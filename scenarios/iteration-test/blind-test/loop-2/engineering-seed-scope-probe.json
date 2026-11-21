@@ -1,0 +1,9 @@
+{
+  "scope": "Engineering identity-width probe, not generated dataset evidence",
+  "first_identity": "identity-width-probe-56067:p",
+  "second_identity": "identity-width-probe-60510:p",
+  "shared_32_bit_seed": 3154747071,
+  "same_derived_prime": true,
+  "identities_examined": 60511,
+  "fix_required": "Keep full scoped identity width in the prime stream; do not change the global utility seed API."
+}

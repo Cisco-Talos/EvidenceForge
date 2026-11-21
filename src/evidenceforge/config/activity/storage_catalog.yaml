@@ -85,3 +85,100 @@ profiles:
       - {extension: .pdf, mime: application/pdf, weight: 20}
       - {extension: .csv, mime: text/csv, weight: 12}
       - {extension: .pptx, mime: application/vnd.openxmlformats-officedocument.presentationml.presentation, weight: 8}
+
+# Engine-owned automatic metadata sizes; portable profile vocabulary is unchanged.
+# Explicit seed sizes bypass this policy. Older frozen configs without this root
+# key retain their original numeric supports. These are modeled populations, not
+# native file-size limits or empirical capture calibration.
+file_size_policy:
+  default_profile: general
+  preset_profiles:
+    software: package
+    backup: backup
+    dc_policy: policy
+  extension_profiles:
+    .ini: ini
+    .xml: xml
+    .pol: policy
+    .ps1: script
+    .bat: script
+    .sh: script
+    .py: script
+    .txt: text
+    .md: text
+    .csv: general
+    .json: text
+    .yaml: text
+    .yml: text
+    .log: text
+    .bak: backup
+    .vhdx: backup
+    .msi: package
+    .exe: package
+    .cab: package
+    .zip: package
+    .7z: package
+  preset_extension_profiles:
+    backup:
+      .zip: backup
+      .7z: backup
+      .log: backup_log
+  profiles:
+    general:
+      minimum_bytes: 1000
+      maximum_bytes: 12589254
+    text:
+      minimum_bytes: 128
+      maximum_bytes: 131072
+    ini:
+      minimum_bytes: 64
+      maximum_bytes: 16384
+    xml:
+      minimum_bytes: 512
+      maximum_bytes: 262144
+    policy:
+      minimum_bytes: 256
+      maximum_bytes: 524288
+    script:
+      minimum_bytes: 128
+      maximum_bytes: 262144
+    package:
+      minimum_bytes: 199526
+      maximum_bytes: 158489319
+    backup:
+      minimum_bytes: 10000000
+      maximum_bytes: 1584893192
+    backup_log:
+      minimum_bytes: 1024
+      maximum_bytes: 33554432
+
+policy_repository:
+  enabled: true
+  sysvol_root: 'SYSVOL\sysvol'
+  netlogon_root: 'SYSVOL\sysvol\{domain}\scripts'
+  gpo_count_minimum: 6
+  gpo_count_maximum: 14
+  default_gpo_ids:
+    - '{31B2F340-016D-11D2-945F-00C04FB984F9}'
+    - '{6AC1786C-016F-11D2-945F-00C04FB984F9}'
+  # Metadata supports are modeled bounds, not empirical size calibration.
+  sysvol_files:
+    - {path: 'GPT.INI', mime_type: text/plain, minimum_bytes: 24, maximum_bytes: 128, presence_probability: 1.0}
+    - {path: 'Machine\Registry.pol', mime_type: application/octet-stream, minimum_bytes: 128, maximum_bytes: 32768, presence_probability: 0.76}
+    - {path: 'User\Registry.pol', mime_type: application/octet-stream, minimum_bytes: 128, maximum_bytes: 16384, presence_probability: 0.48}
+    - {path: 'Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf', mime_type: text/plain, minimum_bytes: 256, maximum_bytes: 16384, presence_probability: 0.52}
+    - {path: 'Machine\Preferences\Groups\Groups.xml', mime_type: application/xml, minimum_bytes: 256, maximum_bytes: 8192, presence_probability: 0.24}
+    - {path: 'Machine\Preferences\ScheduledTasks\ScheduledTasks.xml', mime_type: application/xml, minimum_bytes: 768, maximum_bytes: 16384, presence_probability: 0.30}
+    - {path: 'User\Preferences\Drives\Drives.xml', mime_type: application/xml, minimum_bytes: 256, maximum_bytes: 8192, presence_probability: 0.35}
+    - {path: 'User\Preferences\Printers\Printers.xml', mime_type: application/xml, minimum_bytes: 256, maximum_bytes: 8192, presence_probability: 0.26}
+    - {path: 'Machine\Scripts\scripts.ini', mime_type: text/plain, minimum_bytes: 64, maximum_bytes: 2048, presence_probability: 0.22}
+    - {path: 'Machine\Scripts\Startup\Set-WorkstationDefaults.ps1', mime_type: text/plain, minimum_bytes: 512, maximum_bytes: 32768, presence_probability: 0.22}
+  netlogon_files:
+    - {path: 'Logon.cmd', mime_type: text/plain, minimum_bytes: 256, maximum_bytes: 4096, presence_probability: 1.0}
+    - {path: 'Logon\Map-DepartmentDrives.ps1', mime_type: text/plain, minimum_bytes: 512, maximum_bytes: 16384, presence_probability: 1.0}
+    - {path: 'Logon\Set-UserEnvironment.ps1', mime_type: text/plain, minimum_bytes: 512, maximum_bytes: 16384, presence_probability: 1.0}
+    - {path: 'Logon\Configure-NetworkPrinters.vbs', mime_type: text/plain, minimum_bytes: 512, maximum_bytes: 12288, presence_probability: 0.65}
+    - {path: 'Workstations\Refresh-ManagementAgent.ps1', mime_type: text/plain, minimum_bytes: 1024, maximum_bytes: 32768, presence_probability: 0.55}
+    - {path: 'Workstations\Configure-TimeService.cmd', mime_type: text/plain, minimum_bytes: 256, maximum_bytes: 8192, presence_probability: 0.55}
+    - {path: 'Maintenance\Collect-LogonDiagnostics.ps1', mime_type: text/plain, minimum_bytes: 1024, maximum_bytes: 32768, presence_probability: 0.55}
+    - {path: 'Logoff\Clear-TemporaryMappings.bat', mime_type: text/plain, minimum_bytes: 256, maximum_bytes: 4096, presence_probability: 0.60}

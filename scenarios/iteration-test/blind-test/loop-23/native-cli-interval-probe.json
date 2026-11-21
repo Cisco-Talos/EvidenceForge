@@ -1,0 +1,175 @@
+{
+  "scope": "Positive native Sysmon parent/child GUID joins for repeated SSH/SCP/SFTP invocations under cmd/PowerShell. UtcTime and provider TimeCreated are measured separately. A repeated gap is distribution evidence, not impossible timing; automation and collection transforms remain alternatives.",
+  "hosts": {
+    "DC-01.meridianhcs.local": {
+      "source_sha256": "9e3e33d3100ce660e409eec9d42e3deb4dc37a791e17adf41a0959fa4d06701c",
+      "repeated_cli_groups": []
+    },
+    "DC-02.meridianhcs.local": {
+      "source_sha256": "4e7b4dbc56e1bce76bebc20e9f5edf3d3a622f4e5827ea95b77cda40d857df6b",
+      "repeated_cli_groups": []
+    },
+    "FILE-SRV-01.meridianhcs.local": {
+      "source_sha256": "2142b290167333c22d968a164e821d9e3e97c76732a6b812fe12627002eaa85a",
+      "repeated_cli_groups": []
+    },
+    "MAIL-FIN-01.meridianhcs.local": {
+      "source_sha256": "3c1a2e6ccda99e55604f528b9b53416d5c6bcf30a0c3a33851146acde0f22c57",
+      "repeated_cli_groups": []
+    },
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "source_sha256": "6ccf16ad4cbe7bc9fcf1c0f9867242401d9ccdc0aaa74acbba9509c6e94b84dc",
+      "repeated_cli_groups": [
+        {
+          "user": "MERIDIANHCS\\aisha.johnson",
+          "command": "ssh.exe aisha.johnson@FILE-LNX-01.meridianhcs.local",
+          "parent_exe": "powershell.exe",
+          "count": 2,
+          "native_gap_min": 3.34,
+          "native_gap_max": 4.769,
+          "native_gap_span": 1.4290000000000003,
+          "provider_gap_span": 1.42789,
+          "witnesses": [
+            {
+              "child_pid": "5324",
+              "parent_pid": "5308",
+              "child_guid": "{fd907e59-93ab-6ae8-d702-0010ba50fbdd}",
+              "parent_guid": "{fd907e59-93a6-6ae8-0d00-00007979028a}",
+              "child_utc": "2026-11-02 13:44:11.648",
+              "parent_utc": "2026-11-02 13:44:06.879",
+              "native_occurrence_gap_seconds": 4.769,
+              "provider_time_gap_seconds": 4.769451
+            },
+            {
+              "child_pid": "5572",
+              "parent_pid": "5564",
+              "child_guid": "{fd907e59-a550-6ae8-7d00-0010bf585cce}",
+              "parent_guid": "{fd907e59-a54c-6ae8-8502-00000b175905}",
+              "child_utc": "2026-11-02 14:59:28.318",
+              "parent_utc": "2026-11-02 14:59:24.978",
+              "native_occurrence_gap_seconds": 3.34,
+              "provider_time_gap_seconds": 3.341561
+            }
+          ]
+        },
+        {
+          "user": "MERIDIANHCS\\aisha.johnson",
+          "command": "ssh.exe aisha.johnson@MAIL-EDGE-01.meridianhcs.local",
+          "parent_exe": "powershell.exe",
+          "count": 2,
+          "native_gap_min": 3.899,
+          "native_gap_max": 3.924,
+          "native_gap_span": 0.02499999999999991,
+          "provider_gap_span": 0.024341000000000168,
+          "witnesses": [
+            {
+              "child_pid": "5872",
+              "parent_pid": "5864",
+              "child_guid": "{fd907e59-a9a8-6ae8-ba00-001068148fc1}",
+              "parent_guid": "{fd907e59-a9a4-6ae8-c100-001099686f07}",
+              "child_utc": "2026-11-02 15:18:00.402",
+              "parent_utc": "2026-11-02 15:17:56.503",
+              "native_occurrence_gap_seconds": 3.899,
+              "provider_time_gap_seconds": 3.896474
+            },
+            {
+              "child_pid": "6604",
+              "parent_pid": "6500",
+              "child_guid": "{fd907e59-ca54-6ae8-4102-0000b5e37a86}",
+              "parent_guid": "{fd907e59-ca51-6ae8-ab00-0000c8fcb1e3}",
+              "child_utc": "2026-11-02 17:37:24.979",
+              "parent_utc": "2026-11-02 17:37:21.055",
+              "native_occurrence_gap_seconds": 3.924,
+              "provider_time_gap_seconds": 3.920815
+            }
+          ]
+        }
+      ]
+    },
+    "WS-DRAMIREZ-01.meridianhcs.local": {
+      "source_sha256": "b2472270c30fd4000917cac6d62fbc19e64c8fcaeaf29d0e2f6db52ecac19183",
+      "repeated_cli_groups": []
+    },
+    "WS-EBROOKS-01.meridianhcs.local": {
+      "source_sha256": "61fe9d3d73487926ddadc4275627a2e6742e509066fa616103d80de51d4aa30c",
+      "repeated_cli_groups": []
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "source_sha256": "896510444f6977c8a27faa3d822c0697c7b0ddc966b85b635a29da5ff0d64b8f",
+      "repeated_cli_groups": [
+        {
+          "user": "MERIDIANHCS\\marcus.chen",
+          "command": "ssh.exe marcus.chen@MAIL-CLIN-01.meridianhcs.local",
+          "parent_exe": "powershell.exe",
+          "count": 2,
+          "native_gap_min": 2.889,
+          "native_gap_max": 3.042,
+          "native_gap_span": 0.15300000000000002,
+          "provider_gap_span": 0.15625599999999995,
+          "witnesses": [
+            {
+              "child_pid": "7980",
+              "parent_pid": "7976",
+              "child_guid": "{7b2a0e3f-a4c6-6ae8-8700-001018abaf8e}",
+              "parent_guid": "{7b2a0e3f-a4c3-6ae8-e500-00103f1f2859}",
+              "child_utc": "2026-11-02 14:57:10.676",
+              "parent_utc": "2026-11-02 14:57:07.787",
+              "native_occurrence_gap_seconds": 2.889,
+              "provider_time_gap_seconds": 2.888874
+            },
+            {
+              "child_pid": "9196",
+              "parent_pid": "9188",
+              "child_guid": "{7b2a0e3f-d932-6ae8-7300-0010e988a950}",
+              "parent_guid": "{7b2a0e3f-d92f-6ae8-d100-0010cf87b59e}",
+              "child_utc": "2026-11-02 18:40:50.753",
+              "parent_utc": "2026-11-02 18:40:47.711",
+              "native_occurrence_gap_seconds": 3.042,
+              "provider_time_gap_seconds": 3.04513
+            }
+          ]
+        },
+        {
+          "user": "MERIDIANHCS\\marcus.chen",
+          "command": "ssh.exe marcus.chen@MAIL-EDGE-01.meridianhcs.local",
+          "parent_exe": "cmd.exe",
+          "count": 2,
+          "native_gap_min": 3.202,
+          "native_gap_max": 3.432,
+          "native_gap_span": 0.22999999999999998,
+          "provider_gap_span": 0.2310620000000001,
+          "witnesses": [
+            {
+              "child_pid": "8828",
+              "parent_pid": "8812",
+              "child_guid": "{7b2a0e3f-bf97-6ae8-bb02-0000d0f7fec3}",
+              "parent_guid": "{7b2a0e3f-bf94-6ae8-f902-001015b984b5}",
+              "child_utc": "2026-11-02 16:51:35.950",
+              "parent_utc": "2026-11-02 16:51:32.518",
+              "native_occurrence_gap_seconds": 3.432,
+              "provider_time_gap_seconds": 3.43326
+            },
+            {
+              "child_pid": "9180",
+              "parent_pid": "9172",
+              "child_guid": "{7b2a0e3f-d505-6ae8-f000-0010c6aee1dd}",
+              "parent_guid": "{7b2a0e3f-d502-6ae8-f500-0010c4c0a505}",
+              "child_utc": "2026-11-02 18:23:01.966",
+              "parent_utc": "2026-11-02 18:22:58.764",
+              "native_occurrence_gap_seconds": 3.202,
+              "provider_time_gap_seconds": 3.202198
+            }
+          ]
+        }
+      ]
+    },
+    "WS-PPATEL-01.meridianhcs.local": {
+      "source_sha256": "f576484351d3abde5bb1de22c572809120a7f69141469c08b759712db1e46f8f",
+      "repeated_cli_groups": []
+    },
+    "WS-SMARTINEZ-01.meridianhcs.local": {
+      "source_sha256": "4d98a1903327fdd3c6c8d678c27ab888aa4843292a0f5ace012897e9fdad7bb9",
+      "repeated_cli_groups": []
+    }
+  }
+}

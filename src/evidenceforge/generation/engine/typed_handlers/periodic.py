@@ -8,7 +8,6 @@ from __future__ import annotations
 import itertools
 import random
 from dataclasses import replace
-from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.generation.activity.http_content import (
@@ -907,7 +906,6 @@ def handle_dns_tunnel(
         _choose_dns_tunnel_response_template,
         _choose_dns_tunnel_response_ttl,
         _dns_periodic_exclusive_start_fence,
-        _dns_tunnel_background_txt_record,
         _dns_tunnel_extra_labels,
         _iter_dns_tunnel_ticks,
         _render_dns_tunnel_response_template,
@@ -964,9 +962,8 @@ def handle_dns_tunnel(
         rng,
         exclusive_end_time=dns_start_fence,
     )
-    # Freeze one real cadence tick before any background publication. This
-    # intentionally moves cadence RNG ahead of payload/background RNG so the
-    # owner cannot emit cover traffic for a campaign with no admitted query.
+    # Admit one real cadence tick before constructing campaign payloads. A
+    # campaign outside the collection window owns no transport or DNS evidence.
     first_tick = next(tunnel_ticks, None)
     if first_tick is None:
         malicious_event["base_domain"] = spec.base_domain
@@ -1037,76 +1034,6 @@ def handle_dns_tunnel(
     query_count = 0
     chunk_idx = 0
     tunnel_salt = rng.randbytes(4)
-
-    scenario = getattr(self, "scenario", None)
-    environment = getattr(scenario, "environment", None)
-    background_systems = [
-        candidate
-        for candidate in getattr(environment, "systems", [])
-        if getattr(candidate, "ip", "") and getattr(candidate, "ip", "") != query_src_ip
-    ]
-    background_window_sec = (
-        duration_sec
-        if duration_sec is not None
-        else interval_sec * float(count if count is not None else 120)
-    )
-    background_earliest = start - timedelta(seconds=240.0)
-    background_latest = start + timedelta(seconds=background_window_sec + 240.0)
-    if scenario_start_time is not None:
-        background_earliest = max(
-            ensure_utc(background_earliest),
-            ensure_utc(scenario_start_time),
-        )
-    if dns_start_fence is not None:
-        # Sample once from the valid intersection instead of retrying
-        # post-fence candidates and drifting the owner RNG.
-        background_latest = min(
-            ensure_utc(background_latest),
-            dns_start_fence - timedelta(microseconds=1),
-        )
-    background_span_sec = max(
-        0.0,
-        (ensure_utc(background_latest) - ensure_utc(background_earliest)).total_seconds(),
-    )
-    if (
-        background_systems
-        and background_window_sec > 0
-        and ensure_utc(background_earliest) <= ensure_utc(background_latest)
-    ):
-        background_count = min(36, max(12, len(background_systems) * 2 + rng.randint(3, 9)))
-        for _ in range(background_count):
-            bg_system = rng.choice(background_systems)
-            bg_query, bg_answer, bg_ttl = _dns_tunnel_background_txt_record(rng)
-            bg_rtt = rng.uniform(min_rtt, max_rtt)
-            bg_dns = DnsContext(
-                query=bg_query,
-                query_type="TXT",
-                qtype=16,
-                rcode="NOERROR",
-                rcode_num=0,
-                answers=[bg_answer],
-                TTLs=[float(bg_ttl)],
-                trans_id=rng.randint(1, 65535),
-                AA=False,
-                RD=True,
-                RA=True,
-                rejected=False,
-                rtt=bg_rtt,
-            )
-            bg_time = background_earliest + timedelta(seconds=rng.uniform(0.0, background_span_sec))
-            self.activity_generator.generate_connection(
-                src_ip=bg_system.ip,
-                dst_ip=rng.choice(dns_server_ips),
-                time=bg_time,
-                dst_port=53,
-                proto="udp",
-                service="dns",
-                dns=bg_dns,
-                emit_dns=False,
-                resp_bytes=max(90, len(bg_query) + len(bg_answer) + rng.randint(35, 120)),
-                duration=bg_rtt,
-                source_system=bg_system,
-            )
 
     for tick_time in itertools.chain((first_tick,), tunnel_ticks):
         self.state_manager.set_current_time(tick_time)

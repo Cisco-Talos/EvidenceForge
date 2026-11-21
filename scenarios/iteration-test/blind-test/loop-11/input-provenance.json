@@ -1,0 +1,35 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 11,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 544,
+  "behavior_surface_sha256": "00945ea53ddee81a994f8e8d270f1c8641abb18966fe2acce15f2865ff0e21a4",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "DNS tunnel campaign source ownership; remove attack-owned fleet camouflage"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "before_repair": "3 TXT/CNAME/NULL ownership regressions failed on behavior543",
+    "primary": "224 passed,55 deselected,26.61s",
+    "test_contract_updates": "2 old background-publication expectations updated; window, close and transport accounting invariants retained",
+    "checkpoint_smoke": "2 passed,15 deselected,106.27s",
+    "ids_slow": "1 passed,1 deselected,6.17s; do not count initial default selection0 as a pass",
+    "global_rng_policy": "3 slow passed,7.37s; inventory only shrank",
+    "behavior_manifest": "27 passed,2.86s",
+    "ruff_check": "PASS",
+    "ruff_format": "PASS1649files",
+    "routine_suite": "No full routine/release pass claimed"
+  }
+}

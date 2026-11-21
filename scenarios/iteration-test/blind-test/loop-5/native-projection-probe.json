@@ -1,0 +1,61 @@
+{
+  "directory": "/private/tmp/tcp-teardown-native-5jtjdf1m",
+  "results": [
+    {
+      "service": "ssl",
+      "state": "RSTO",
+      "duration": 1.055089,
+      "protocol_rows": 1,
+      "inside_transport": true
+    },
+    {
+      "service": "ssl",
+      "state": "RSTR",
+      "duration": 0.998005,
+      "protocol_rows": 1,
+      "inside_transport": true
+    },
+    {
+      "service": "ssl",
+      "state": "S2",
+      "duration": 0.907341,
+      "protocol_rows": 1,
+      "inside_transport": true
+    },
+    {
+      "service": "ssl",
+      "state": "S3",
+      "duration": 0.99675,
+      "protocol_rows": 1,
+      "inside_transport": true
+    },
+    {
+      "service": "http",
+      "state": "RSTO",
+      "duration": 0.58057,
+      "protocol_rows": 1,
+      "inside_transport": true
+    },
+    {
+      "service": "http",
+      "state": "RSTR",
+      "duration": 0.52816,
+      "protocol_rows": 1,
+      "inside_transport": true
+    },
+    {
+      "service": "http",
+      "state": "S2",
+      "duration": 0.524471,
+      "protocol_rows": 1,
+      "inside_transport": true
+    },
+    {
+      "service": "http",
+      "state": "S3",
+      "duration": 0.468072,
+      "protocol_rows": 1,
+      "inside_transport": true
+    }
+  ]
+}

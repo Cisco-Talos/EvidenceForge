@@ -8874,6 +8874,7 @@ class EventDispatcher:
             SessionIdentity,
         )
         from evidenceforge.events.lifecycle import ActionLifecycleContext, LifecycleEntityRef
+        from evidenceforge.generation.actions.linux_console import console_session_root_matches
         from evidenceforge.generation.state_manager import (
             ActionCohortSessionMetadataPatch,
             ActionCohortSessionMetadataState,
@@ -8938,6 +8939,13 @@ class EventDispatcher:
             session_identity = identity_plan.session
             termination = plan.process_terminations[0]
             session_patch = plan.session_activity_patches[0]
+            session = self.state_manager.get_session(session_identity.logon_id)
+            owns_console_root = (
+                session is not None
+                and self.state_manager.get_session_identity(session_identity.logon_id)
+                == session_identity
+                and console_session_root_matches(identity, session)
+            )
             if (
                 process_object_id != identity.object_id
                 or termination.identity != identity
@@ -8946,6 +8954,7 @@ class EventDispatcher:
                 or session_patch.activity_time != event.timestamp
                 or session_identity.hostname != identity.hostname
                 or session_identity.logon_id != identity.logon_id
+                and not owns_console_root
                 or session_identity.session_kind != "interactive"
                 or not authority.is_strict(
                     LifecycleEntityRef("session", session_identity.object_id),

@@ -1,0 +1,278 @@
+[
+  {
+    "seed": 42,
+    "request_count": 3,
+    "groups": {
+      "CRNtp3FaBNfBMohNk": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.679967+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:01.294059+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:01.629882+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 43,
+    "request_count": 3,
+    "groups": {
+      "Cv7WrFllfjm626YDGH": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.200995+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.237937+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:01.379312+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 44,
+    "request_count": 3,
+    "groups": {
+      "CrHXRNjGwqSnkvpWVR": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.641121+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.641122+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:01.150771+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 45,
+    "request_count": 3,
+    "groups": {
+      "CPSBeHy71o3EQ3J9va": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.376171+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:01.076830+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:01.411912+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 46,
+    "request_count": 3,
+    "groups": {
+      "Ck1Ofk6BETz0I5g85F": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.222422+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.677852+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:01.047386+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 47,
+    "request_count": 3,
+    "groups": {
+      "CijPXmxo7A6xsAyTa": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.521394+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.725333+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:01.542668+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 48,
+    "request_count": 3,
+    "groups": {
+      "CsS6LvK72GoNf0JNED": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.400693+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.685923+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:01.046578+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 49,
+    "request_count": 3,
+    "groups": {
+      "C5UiyqvRcChN3RXBtF": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.377401+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.377402+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:00.940693+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 50,
+    "request_count": 3,
+    "groups": {
+      "CW3qvUhNi5VGVNE193a": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.621900+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.621901+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:00.621902+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 51,
+    "request_count": 3,
+    "groups": {
+      "CiP9zP1hcrgVoXRrAHh": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.559582+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.559583+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:00.559584+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 52,
+    "request_count": 3,
+    "groups": {
+      "Csd6Z4J9ZLVnCYAEK": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.592114+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.726583+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:01.159638+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  },
+  {
+    "seed": 53,
+    "request_count": 3,
+    "groups": {
+      "Cs6gtt1CK9uQuKWbOI": [
+        {
+          "depth": 1,
+          "time": "2026-08-01T12:00:00.673037+00:00",
+          "uri": "/"
+        },
+        {
+          "depth": 2,
+          "time": "2026-08-01T12:00:00.706423+00:00",
+          "uri": "/asset.css"
+        },
+        {
+          "depth": 3,
+          "time": "2026-08-01T12:00:01.482456+00:00",
+          "uri": "/asset.js"
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,150 @@
+{
+  "scope": "Native Dovecot logout field coherence. Positive header/body data must have a positive associated mail count. Zero-byte counted fetches are allowed; no reverse biconditional or count<=bytes rule. Application out bytes need not equal TLS transport stream bytes.",
+  "logout_summaries": 19,
+  "violations": [
+    {
+      "source": "MAIL-CLIN-01.meridianhcs.local/syslog.log",
+      "line": 100,
+      "errors": [
+        "body positive data with zero count"
+      ],
+      "fields": {
+        "in": 3525,
+        "out": 55605,
+        "deleted": 0,
+        "expunged": 0,
+        "trashed": 0,
+        "hdr_count": 2,
+        "hdr_bytes": 4186,
+        "body_count": 0,
+        "body_bytes": 43873
+      }
+    },
+    {
+      "source": "MAIL-CLIN-01.meridianhcs.local/syslog.log",
+      "line": 117,
+      "errors": [
+        "body positive data with zero count"
+      ],
+      "fields": {
+        "in": 8201,
+        "out": 441996,
+        "deleted": 0,
+        "expunged": 0,
+        "trashed": 0,
+        "hdr_count": 3,
+        "hdr_bytes": 5217,
+        "body_count": 0,
+        "body_bytes": 429658
+      }
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 96,
+      "errors": [
+        "body positive data with zero count"
+      ],
+      "fields": {
+        "in": 6350,
+        "out": 113087,
+        "deleted": 0,
+        "expunged": 0,
+        "trashed": 0,
+        "hdr_count": 2,
+        "hdr_bytes": 2156,
+        "body_count": 0,
+        "body_bytes": 103699
+      }
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 97,
+      "errors": [
+        "body positive data with zero count"
+      ],
+      "fields": {
+        "in": 2550,
+        "out": 97780,
+        "deleted": 0,
+        "expunged": 0,
+        "trashed": 0,
+        "hdr_count": 6,
+        "hdr_bytes": 6180,
+        "body_count": 0,
+        "body_bytes": 87365
+      }
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 129,
+      "errors": [
+        "body positive data with zero count"
+      ],
+      "fields": {
+        "in": 5694,
+        "out": 188096,
+        "deleted": 0,
+        "expunged": 0,
+        "trashed": 0,
+        "hdr_count": 5,
+        "hdr_bytes": 10140,
+        "body_count": 0,
+        "body_bytes": 171004
+      }
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 291,
+      "errors": [
+        "body positive data with zero count"
+      ],
+      "fields": {
+        "in": 3140,
+        "out": 176144,
+        "deleted": 0,
+        "expunged": 0,
+        "trashed": 0,
+        "hdr_count": 3,
+        "hdr_bytes": 3726,
+        "body_count": 0,
+        "body_bytes": 168239
+      }
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 372,
+      "errors": [
+        "body positive data with zero count"
+      ],
+      "fields": {
+        "in": 2030,
+        "out": 404802,
+        "deleted": 0,
+        "expunged": 0,
+        "trashed": 0,
+        "hdr_count": 4,
+        "hdr_bytes": 2856,
+        "body_count": 0,
+        "body_bytes": 395211
+      }
+    },
+    {
+      "source": "MAIL-EDGE-01.meridianhcs.local/syslog.log",
+      "line": 422,
+      "errors": [
+        "body positive data with zero count"
+      ],
+      "fields": {
+        "in": 6799,
+        "out": 398327,
+        "deleted": 0,
+        "expunged": 0,
+        "trashed": 0,
+        "hdr_count": 2,
+        "hdr_bytes": 3858,
+        "body_count": 0,
+        "body_bytes": 387638
+      }
+    }
+  ]
+}

@@ -38,7 +38,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `web_session_profiles.yaml` | `web_session_profiles.py` | Inbound web server visitor classes, request profiles, and User-Agent pools. Human visitors use `site_maps.yaml`; top-level `web` traffic rates fan out into page assets. |
 | `process_network_map.yaml` | `process_network.py` | Process-to-network service mappings for PID attribution and process-network correlation. |
 | `executable_provenance.yaml` | `executable_provenance.py` | Path prefixes whose executables predate the window; other storyline images receive one implied, parent-attributed creation. |
-| `process_lifetimes.yaml` | `process_lifetimes.py` | Ordered foreground command lifetimes shared by Linux and macOS, plus the long-running and interactive-shell lists. |
+| `process_lifetimes.yaml` | `process_lifetimes.py` | Ordered POSIX foreground lifetimes, platform-qualified finite report schedules, and long-running/interactive-shell lists. |
 | `process_output_profiles.yaml` | `process_output_profiles.py` | Deterministic logical-size ranges for command-owned archive outputs. |
 | `runtime_executable_profiles.yaml` | `runtime_executable_profiles.py` | Deterministic positive fallback sizes for unresolved runtime executable artifacts. |
 | `process_access_patterns.yaml` | `process_access_patterns.py` | Sysmon Event 10 baseline source/target pairs and weighted GrantedAccess masks. |
@@ -52,3 +52,18 @@ caches data after first load. Two files (`network_params.yaml`,
 2. Create a loader in `evidenceforge/generation/activity/{name}.py` (or load inline if simple).
 3. Use `from evidenceforge.config import get_activity_directory` for path resolution.
 4. Follow the cached-loader pattern: module-level `_CACHED_DATA`, load-on-first-call, return cached.
+
+`system_processes.yaml` optionally selects the bounded ordinary Linux console
+adapter through `linux_console`. Its virtual-terminal inventory is unique `tty1`
+through `tty63`; packaged defaults expose six, following systemd's usual automatic
+VT availability. The qualified getty/login paths are `/sbin/agetty` and `/bin/login`.
+A free getty executes login in the same lifetime. Occupied terminals remain owned
+by their existing session; activation of a free terminal uses the configured
+`linux.console.getty_before_login` relationship in `timing_profiles.yaml`.
+Missing policy in frozen older configurations retains the legacy creation adapter.
+This does not model every idle getty supervisor or GDM/SSH session lifecycle.
+
+The CUPS source-local discovery profile uses `printer_endpoint`, whose default
+IPP URI refers to the selected hostname-style `printer_name`. Supply an explicit
+endpoint pool when using friendly printer labels or a different URI scheme/path.
+Legacy frozen message templates retain their original positional parameters.

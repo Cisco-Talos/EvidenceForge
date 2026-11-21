@@ -1,0 +1,275 @@
+{
+  "scope": "Data-only console login census. Pre-window/filtered process starts may lack visible matches; these are descriptive counts, not universal completeness requirements.",
+  "login_records": 10,
+  "kinds": {
+    "separate_agetty_child": 10
+  },
+  "hosts": {
+    "APP-INT-01": 2,
+    "DB-PROD-01": 2,
+    "FILE-LNX-01": 1,
+    "MAIL-CLIN-01": 1,
+    "MAIL-EDGE-01": 3,
+    "PROXY-01": 1
+  },
+  "pam_opens": 18,
+  "pam_opens_with_visible_same_lifetime_getty_exec": 0,
+  "rows": [
+    {
+      "host": "APP-INT-01",
+      "time_ms": 1793624540742,
+      "kind": "separate_agetty_child",
+      "pid": 3374484,
+      "id": "6d1d20cd-86e6-4bef-bf37-a4844ebc26f4",
+      "parent_pid": "36047",
+      "previous_image": null,
+      "command_line": "login -- lina.nguyen",
+      "previous_command_line": null
+    },
+    {
+      "host": "APP-INT-01",
+      "time_ms": 1793624955034,
+      "kind": "separate_agetty_child",
+      "pid": 3376990,
+      "id": "ae862d32-f5aa-4d41-9ca5-9e36ca0b9ea4",
+      "parent_pid": "36047",
+      "previous_image": null,
+      "command_line": "login -- aisha.johnson",
+      "previous_command_line": null
+    },
+    {
+      "host": "DB-PROD-01",
+      "time_ms": 1793624478028,
+      "kind": "separate_agetty_child",
+      "pid": 1366445,
+      "id": "a7498641-7000-4fd5-a55b-d5f471f366f3",
+      "parent_pid": "29350",
+      "previous_image": null,
+      "command_line": "login -- maya.ross",
+      "previous_command_line": null
+    },
+    {
+      "host": "DB-PROD-01",
+      "time_ms": 1793627812880,
+      "kind": "separate_agetty_child",
+      "pid": 1373719,
+      "id": "6774254f-3bbb-45ab-88a7-b2440fc7bda9",
+      "parent_pid": "29350",
+      "previous_image": null,
+      "command_line": "login -- marcus.chen",
+      "previous_command_line": null
+    },
+    {
+      "host": "FILE-LNX-01",
+      "time_ms": 1793626466441,
+      "kind": "separate_agetty_child",
+      "pid": 2782176,
+      "id": "99cc9781-e2d0-4ade-a941-c716c5d55e48",
+      "parent_pid": "13744",
+      "previous_image": null,
+      "command_line": "login -- priya.patel",
+      "previous_command_line": null
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "time_ms": 1793627987235,
+      "kind": "separate_agetty_child",
+      "pid": 701511,
+      "id": "559258fd-9b09-438c-a83e-b045127b9b18",
+      "parent_pid": "15500",
+      "previous_image": null,
+      "command_line": "login -- marcus.chen",
+      "previous_command_line": null
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time_ms": 1793625602196,
+      "kind": "separate_agetty_child",
+      "pid": 2287036,
+      "id": "31ec5db6-c9fc-4a4c-b57a-fc8c0ba0201a",
+      "parent_pid": "19802",
+      "previous_image": null,
+      "command_line": "login -- aisha.johnson",
+      "previous_command_line": null
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time_ms": 1793627789545,
+      "kind": "separate_agetty_child",
+      "pid": 2292236,
+      "id": "18709824-565b-4060-9dfa-58215c3d085c",
+      "parent_pid": "19804",
+      "previous_image": null,
+      "command_line": "login -- marcus.chen",
+      "previous_command_line": null
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time_ms": 1793636544227,
+      "kind": "separate_agetty_child",
+      "pid": 2315644,
+      "id": "f189cb48-c408-4e78-86d3-c091c5132b1d",
+      "parent_pid": "19802",
+      "previous_image": null,
+      "command_line": "login -- lina.nguyen",
+      "previous_command_line": null
+    },
+    {
+      "host": "PROXY-01",
+      "time_ms": 1793628385385,
+      "kind": "separate_agetty_child",
+      "pid": 2630409,
+      "id": "bec6adbc-5c6f-4494-9416-91f0b0698f4a",
+      "parent_pid": "18640",
+      "previous_image": null,
+      "command_line": "login -- marcus.chen",
+      "previous_command_line": null
+    }
+  ],
+  "pam_rows": [
+    {
+      "host": "APP-INT-01",
+      "time": "2026-11-02T13:01:06.824917Z",
+      "pid": 3373989,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "APP-INT-01",
+      "time": "2026-11-02T13:02:22.800594Z",
+      "pid": 3374484,
+      "user": "lina.nguyen",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "APP-INT-01",
+      "time": "2026-11-02T13:09:16.845613Z",
+      "pid": 3376990,
+      "user": "aisha.johnson",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "DB-PROD-01",
+      "time": "2026-11-02T13:01:20.849002Z",
+      "pid": 1366445,
+      "user": "maya.ross",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "DB-PROD-01",
+      "time": "2026-11-02T13:56:55.903876Z",
+      "pid": 1373719,
+      "user": "marcus.chen",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "FILE-LNX-01",
+      "time": "2026-11-02T13:34:27.717786Z",
+      "pid": 2782176,
+      "user": "priya.patel",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "FILE-LNX-01",
+      "time": "2026-11-02T14:00:40.592314Z",
+      "pid": 2793212,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "FILE-LNX-01",
+      "time": "2026-11-02T17:00:30.158968Z",
+      "pid": 2818382,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "LOG-MON-01",
+      "time": "2026-11-02T16:00:43.877118Z",
+      "pid": 775579,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "LT-MRIVERA-02",
+      "time": "2026-11-02T13:14:39.322920Z",
+      "pid": 3413927,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "LT-MRIVERA-02",
+      "time": "2026-11-02T14:04:11.529718Z",
+      "pid": 3425107,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "LT-MRIVERA-02",
+      "time": "2026-11-02T16:01:58.878015Z",
+      "pid": 3441652,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "time": "2026-11-02T13:59:51.537236Z",
+      "pid": 701511,
+      "user": "marcus.chen",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time": "2026-11-02T13:20:06.484677Z",
+      "pid": 2287036,
+      "user": "aisha.johnson",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time": "2026-11-02T13:56:32.451774Z",
+      "pid": 2292236,
+      "user": "marcus.chen",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time": "2026-11-02T16:02:22.639612Z",
+      "pid": 2311141,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time": "2026-11-02T16:22:27.796127Z",
+      "pid": 2315644,
+      "user": "lina.nguyen",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "PROXY-01",
+      "time": "2026-11-02T14:06:29.544909Z",
+      "pid": 2630409,
+      "user": "marcus.chen",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 0
+    }
+  ]
+}

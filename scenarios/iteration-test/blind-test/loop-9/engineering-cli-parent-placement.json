@@ -1,0 +1,22 @@
+{
+  "scope": "Actual canonical parent creation, same actor/session/command repeated at seven independent intent anchors. Prototype only.",
+  "before_seconds": [
+    3.172,
+    3.172,
+    3.172,
+    3.172,
+    3.172,
+    3.172,
+    3.172
+  ],
+  "candidate_seconds": [
+    5.603386,
+    3.83321,
+    3.184289,
+    1.376876,
+    1.29334,
+    2.867232,
+    2.44771
+  ],
+  "replay_identical": true
+}

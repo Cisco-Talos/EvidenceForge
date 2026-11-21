@@ -248,7 +248,7 @@ class MacosESIngress:
         # emitter and is exported only after all finalization stages succeed.
         self.spool.close()
         audit_identities = dispatcher.state_manager._macos_audit_identity_intents
-        audit_identities.seal()
+        dispatcher.state_manager.seal_macos_audit_identities()
         registry = ESCollectorRegistry()
         output = dispatcher.emitters.get("macos_endpoint_security")
         count = 0

@@ -1,0 +1,222 @@
+[
+  {
+    "image": "ipconfig.exe",
+    "pid": 4536,
+    "start": "2024-01-15T09:10:00+00:00",
+    "last_activity": "2024-01-15T09:10:00.012000+00:00",
+    "planned_close": "2024-01-15T09:10:01.729205+00:00",
+    "planned_lifetime_s": 1.729205,
+    "events": [
+      {
+        "type": "process_create",
+        "timestamp": "2024-01-15T09:10:00+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.002000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.005000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.007000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.009000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.012000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "process_terminate",
+        "timestamp": "2024-01-15T09:10:01.729205+00:00",
+        "pid": 4536
+      }
+    ]
+  },
+  {
+    "image": "whoami.exe",
+    "pid": 4536,
+    "start": "2024-01-15T09:10:00+00:00",
+    "last_activity": "2024-01-15T09:10:00.026000+00:00",
+    "planned_close": "2024-01-15T09:10:02.789000+00:00",
+    "planned_lifetime_s": 2.789,
+    "events": [
+      {
+        "type": "process_create",
+        "timestamp": "2024-01-15T09:10:00+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.002000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.005000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.007000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.009000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.012000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.016000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.020000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.026000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "process_terminate",
+        "timestamp": "2024-01-15T09:10:02.789000+00:00",
+        "pid": 4536
+      }
+    ]
+  },
+  {
+    "image": "cmd.exe",
+    "pid": 4524,
+    "start": "2024-01-15T09:10:00+00:00",
+    "last_activity": "2024-01-15T09:10:04.002000+00:00",
+    "planned_close": "2024-01-15T09:10:06.739738+00:00",
+    "planned_lifetime_s": 6.739738,
+    "events": [
+      {
+        "type": "process_create",
+        "timestamp": "2024-01-15T09:10:00+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.002000+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.008000+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.014000+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.019000+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.024000+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.030000+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.035000+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.041000+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:04.002000+00:00",
+        "pid": 4524
+      },
+      {
+        "type": "process_terminate",
+        "timestamp": "2024-01-15T09:10:06.739738+00:00",
+        "pid": 4524
+      }
+    ]
+  },
+  {
+    "image": "gpresult.exe",
+    "pid": 4536,
+    "start": "2024-01-15T09:10:00+00:00",
+    "last_activity": "2024-01-15T09:10:00.016000+00:00",
+    "planned_close": "2024-01-15T09:10:01.210519+00:00",
+    "planned_lifetime_s": 1.210519,
+    "events": [
+      {
+        "type": "process_create",
+        "timestamp": "2024-01-15T09:10:00+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.002000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.005000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.007000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.009000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.011000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.016000+00:00",
+        "pid": 4536
+      },
+      {
+        "type": "process_terminate",
+        "timestamp": "2024-01-15T09:10:01.210519+00:00",
+        "pid": 4536
+      }
+    ]
+  }
+]

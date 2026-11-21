@@ -1,0 +1,110 @@
+[
+  {
+    "profile": "complete",
+    "entry": "user",
+    "requested_elapsed_s": 0.5,
+    "last_activity_elapsed_s": 0.024,
+    "headroom_s": 0.95,
+    "actual_elapsed_s": 1.169411,
+    "source_times": {
+      "process_create": {
+        "ecar.process.create.WIN-CLOCK": "2026-11-02 13:10:00.415858+00:00",
+        "ecar.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.415858+00:00",
+        "sysmon.process.create.native.WIN-CLOCK": "2026-11-02 13:10:00.006376+00:00",
+        "sysmon.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.006376+00:00",
+        "windows_security.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.270469+00:00"
+      },
+      "process_terminate": {
+        "ecar.process.create.WIN-CLOCK": "2026-11-02 13:10:00.415858+00:00",
+        "ecar.process.terminate.WIN-CLOCK": "2026-11-02 13:10:01.585494+00:00",
+        "ecar.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:01.585494+00:00",
+        "sysmon.process.create.native.WIN-CLOCK": "2026-11-02 13:10:00.006376+00:00",
+        "sysmon.process.terminate.native.WIN-CLOCK": "2026-11-02 13:10:01.314548+00:00",
+        "sysmon.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:01.314548+00:00",
+        "windows_security.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.270469+00:00",
+        "windows_security.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:01.441786+00:00"
+      }
+    }
+  },
+  {
+    "profile": "complete",
+    "entry": "system",
+    "requested_elapsed_s": 0.5,
+    "last_activity_elapsed_s": 0.0,
+    "headroom_s": 0.95,
+    "actual_elapsed_s": 1.128095,
+    "source_times": {
+      "system_process_create": {
+        "ecar.process.create.WIN-CLOCK": "2026-11-02 13:10:00.415623+00:00",
+        "ecar.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.415623+00:00",
+        "sysmon.process.create.native.WIN-CLOCK": "2026-11-02 13:10:00.005899+00:00",
+        "sysmon.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.005899+00:00",
+        "windows_security.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.206228+00:00"
+      },
+      "process_terminate": {
+        "ecar.process.create.WIN-CLOCK": "2026-11-02 13:10:00.415623+00:00",
+        "ecar.process.terminate.WIN-CLOCK": "2026-11-02 13:10:01.544288+00:00",
+        "ecar.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:01.544288+00:00",
+        "sysmon.process.create.native.WIN-CLOCK": "2026-11-02 13:10:00.005899+00:00",
+        "sysmon.process.terminate.native.WIN-CLOCK": "2026-11-02 13:10:01.272593+00:00",
+        "sysmon.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:01.272593+00:00",
+        "windows_security.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.206228+00:00",
+        "windows_security.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:01.335589+00:00"
+      }
+    }
+  },
+  {
+    "profile": "enterprise_standard",
+    "entry": "user",
+    "requested_elapsed_s": 0.5,
+    "last_activity_elapsed_s": 0.024,
+    "headroom_s": 2.8124,
+    "actual_elapsed_s": 2.975902,
+    "source_times": {
+      "process_create": {
+        "ecar.process.create.WIN-CLOCK": "2026-11-02 13:10:00.588223+00:00",
+        "ecar.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.588223+00:00",
+        "sysmon.process.create.native.WIN-CLOCK": "2026-11-02 13:10:00.178741+00:00",
+        "sysmon.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.178741+00:00",
+        "windows_security.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.442834+00:00"
+      },
+      "process_terminate": {
+        "ecar.process.create.WIN-CLOCK": "2026-11-02 13:10:00.588223+00:00",
+        "ecar.process.terminate.WIN-CLOCK": "2026-11-02 13:10:03.564350+00:00",
+        "ecar.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:03.564350+00:00",
+        "sysmon.process.create.native.WIN-CLOCK": "2026-11-02 13:10:00.178741+00:00",
+        "sysmon.process.terminate.native.WIN-CLOCK": "2026-11-02 13:10:03.292973+00:00",
+        "sysmon.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:03.292973+00:00",
+        "windows_security.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.442834+00:00",
+        "windows_security.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:03.420642+00:00"
+      }
+    }
+  },
+  {
+    "profile": "enterprise_standard",
+    "entry": "system",
+    "requested_elapsed_s": 0.5,
+    "last_activity_elapsed_s": 0.0,
+    "headroom_s": 2.8124,
+    "actual_elapsed_s": 2.899328,
+    "source_times": {
+      "system_process_create": {
+        "ecar.process.create.WIN-CLOCK": "2026-11-02 13:10:00.587988+00:00",
+        "ecar.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.587988+00:00",
+        "sysmon.process.create.native.WIN-CLOCK": "2026-11-02 13:10:00.178264+00:00",
+        "sysmon.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.178264+00:00",
+        "windows_security.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.378593+00:00"
+      },
+      "process_terminate": {
+        "ecar.process.create.WIN-CLOCK": "2026-11-02 13:10:00.587988+00:00",
+        "ecar.process.terminate.WIN-CLOCK": "2026-11-02 13:10:03.487886+00:00",
+        "ecar.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:03.487886+00:00",
+        "sysmon.process.create.native.WIN-CLOCK": "2026-11-02 13:10:00.178264+00:00",
+        "sysmon.process.terminate.native.WIN-CLOCK": "2026-11-02 13:10:03.215769+00:00",
+        "sysmon.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:03.215769+00:00",
+        "windows_security.event.process_create.native.WIN-CLOCK": "2026-11-02 13:10:00.378593+00:00",
+        "windows_security.event.process_terminate.native.WIN-CLOCK": "2026-11-02 13:10:03.279187+00:00"
+      }
+    }
+  }
+]

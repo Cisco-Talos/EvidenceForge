@@ -1,0 +1,15 @@
+{
+  "selected_family": [
+    "Installed machine OS file chronology consumes existing canonical host boot facts"
+  ],
+  "code_change_for_loop": true,
+  "fix_classification": "family_level",
+  "focused_validation": {
+    "before": "Native25 census214unique host/process-start/image observations, one later-birth launchd instance. Corrected public engine beforecontrol FAILS actual file-birth/process-start inequality with valid40day age support and canonical30day boot. First fixture used wrong get_processes_for_system API; corrected get_processes_on_system, original fixture-error log preserved.",
+    "scope": "Optional typed data-driven preboot_product_ids selects machine apple-macos installations only. Existing canonical boot uptime preparation moves before first lazy file compile; no second boot seed derivation. Existing age sampler conditions its lower support and preserves finite upper support/release availability. Unknown boot/legacy profiles and other product placement preserve compatibility. Build/content/size stay shared; inode allocation may reorder with canonical birth order. No source jitter, new State/cache/quota/raw RNG or restored-metadata simulation. Legacy release-floor timestamp coincidence remains separate.",
+    "after": "228passed1deselected34.24s: public engine native boot inventory, eight preboot/legacy/third-party/invalid-policy controls, lazy compile/checkpoint, installed filesystem, native preparation, runtime metadata, boot clocks/audit/SSH groups. Before corrected public control failed actual birth/start inequality.",
+    "rng": "3slow RNG policy tests passed7.50s; census not changed.",
+    "config": "105files0errors0warnings.",
+    "ruff": "check passed;1690files format check passed."
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "scope": "Engineering contract probe. Resolved explicit domain classifies domain-account NTLM Type3 logons; it is not given to blind reviewers. Pair matches use normalized account/source workstation anywhere in the supplied slice, plus a separate bounded-time check. Missing exported validation may reflect source filtering/unseen DC scope; generated ownership must be inspected before declaring a defect.",
+  "domain": "meridianhcs.local",
+  "counts": {
+    "domain_ntlm_type3_logons": 121,
+    "nonzero_guid": 108,
+    "unmatched_pair_anywhere": 114,
+    "matched_within_minus1_plus5_seconds": 5,
+    "zero_guid": 13,
+    "matched_pair_anywhere": 7
+  },
+  "validation_totals": {
+    "validation_success": 65,
+    "validation_failure": 3
+  },
+  "by_host": {
+    "DC-02.meridianhcs.local": {
+      "unmatched_pair_anywhere": 34
+    },
+    "DC-01.meridianhcs.local": {
+      "unmatched_pair_anywhere": 28
+    },
+    "WS-DRAMIREZ-01.meridianhcs.local": {
+      "matched_pair_anywhere": 3
+    },
+    "MAIL-FIN-01.meridianhcs.local": {
+      "matched_pair_anywhere": 1
+    },
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "matched_pair_anywhere": 1
+    },
+    "FILE-SRV-01.meridianhcs.local": {
+      "unmatched_pair_anywhere": 52
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "matched_pair_anywhere": 2
+    }
+  },
+  "unmatched_examples": [
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25377533",
+      "time": "2026-11-02T13:04:44.0168727Z",
+      "username": "diego.ramirez",
+      "workstation": "WS-DRAMIREZ-01",
+      "guid": "{dd8b0ab2-795b-4c47-8c42-69c6f44d37d9}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1006"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25377553",
+      "time": "2026-11-02T13:05:20.4879399Z",
+      "username": "lina.nguyen",
+      "workstation": "WS-LNGUYEN-01",
+      "guid": "{ad51eb8c-8ed2-402c-91b5-d1b628c72452}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1001"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25377586",
+      "time": "2026-11-02T13:06:13.1778779Z",
+      "username": "lina.nguyen",
+      "workstation": "WS-LNGUYEN-01",
+      "guid": "{3fa91db1-7055-4ddb-a38b-167b3cb35d1b}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1001"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25378735",
+      "time": "2026-11-02T13:45:45.4290587Z",
+      "username": "diego.ramirez",
+      "workstation": "WS-DRAMIREZ-01",
+      "guid": "{d0822b23-ebba-4f94-b5e9-5d31b619e002}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1006"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25379790",
+      "time": "2026-11-02T14:27:36.6848350Z",
+      "username": "aisha.johnson",
+      "workstation": "WS-AJOHNSON-01",
+      "guid": "{36a9ec4f-e9d5-467b-8dcb-fa25d99e711b}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1007"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25380199",
+      "time": "2026-11-02T14:42:32.1579822Z",
+      "username": "omar.haddad",
+      "workstation": "WS-OHADDAD-01",
+      "guid": "{a6a60ecc-d693-40df-a4a6-c504cd738b7e}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1002"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25380256",
+      "time": "2026-11-02T14:45:20.0928724Z",
+      "username": "marcus.chen",
+      "workstation": "WS-MCHEN-01",
+      "guid": "{00000000-0000-0000-0000-000000000000}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1003"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25380632",
+      "time": "2026-11-02T14:58:17.0692347Z",
+      "username": "aisha.johnson",
+      "workstation": "WS-AJOHNSON-01",
+      "guid": "{3be8c1bf-bbc8-49b6-85c5-027d3456c9d3}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1007"
+    }
+  ]
+}

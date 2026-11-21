@@ -1,0 +1,117 @@
+{
+  "scope": "Engineering contract probe. Resolved explicit domain classifies domain-account NTLM Type3 logons; it is not given to blind reviewers. Pair matches use normalized account/source workstation anywhere in the supplied slice, plus a separate bounded-time check. Missing exported validation may reflect source filtering/unseen DC scope; generated ownership must be inspected before declaring a defect.",
+  "domain": "meridianhcs.local",
+  "counts": {
+    "domain_ntlm_type3_logons": 126,
+    "nonzero_guid": 111,
+    "unmatched_pair_anywhere": 114,
+    "matched_within_minus1_plus5_seconds": 5,
+    "zero_guid": 15,
+    "matched_pair_anywhere": 12
+  },
+  "validation_totals": {
+    "validation_success": 63,
+    "validation_failure": 4
+  },
+  "by_host": {
+    "DC-02.meridianhcs.local": {
+      "unmatched_pair_anywhere": 36
+    },
+    "WS-PPATEL-01.meridianhcs.local": {
+      "matched_pair_anywhere": 3
+    },
+    "DC-01.meridianhcs.local": {
+      "unmatched_pair_anywhere": 29
+    },
+    "WS-DRAMIREZ-01.meridianhcs.local": {
+      "matched_pair_anywhere": 1
+    },
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "matched_pair_anywhere": 2
+    },
+    "FILE-SRV-01.meridianhcs.local": {
+      "unmatched_pair_anywhere": 49,
+      "matched_pair_anywhere": 3
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "matched_pair_anywhere": 2
+    },
+    "WS-SMARTINEZ-01.meridianhcs.local": {
+      "matched_pair_anywhere": 1
+    }
+  },
+  "unmatched_examples": [
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25377539",
+      "time": "2026-11-02T13:04:44.0168723Z",
+      "username": "diego.ramirez",
+      "workstation": "WS-DRAMIREZ-01",
+      "guid": "{dd8b0ab2-795b-4c47-8c42-69c6f44d37d9}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1006"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25377567",
+      "time": "2026-11-02T13:05:20.4890170Z",
+      "username": "lina.nguyen",
+      "workstation": "WS-LNGUYEN-01",
+      "guid": "{ad51eb8c-8ed2-402c-91b5-d1b628c72452}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1001"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25377604",
+      "time": "2026-11-02T13:06:13.1773152Z",
+      "username": "lina.nguyen",
+      "workstation": "WS-LNGUYEN-01",
+      "guid": "{3fa91db1-7055-4ddb-a38b-167b3cb35d1b}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1001"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25378757",
+      "time": "2026-11-02T13:45:45.4290587Z",
+      "username": "diego.ramirez",
+      "workstation": "WS-DRAMIREZ-01",
+      "guid": "{d0822b23-ebba-4f94-b5e9-5d31b619e002}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1006"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25379865",
+      "time": "2026-11-02T14:27:36.6847477Z",
+      "username": "aisha.johnson",
+      "workstation": "WS-AJOHNSON-01",
+      "guid": "{36a9ec4f-e9d5-467b-8dcb-fa25d99e711b}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1007"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25380315",
+      "time": "2026-11-02T14:42:32.1579708Z",
+      "username": "omar.haddad",
+      "workstation": "WS-OHADDAD-01",
+      "guid": "{a6a60ecc-d693-40df-a4a6-c504cd738b7e}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1002"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25380730",
+      "time": "2026-11-02T14:58:17.0693614Z",
+      "username": "aisha.johnson",
+      "workstation": "WS-AJOHNSON-01",
+      "guid": "{3be8c1bf-bbc8-49b6-85c5-027d3456c9d3}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1007"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "record_id": "25380770",
+      "time": "2026-11-02T15:00:39.9687081Z",
+      "username": "aisha.johnson",
+      "workstation": "FILE-SRV-01",
+      "guid": "{c4c03b07-720b-4760-8c23-8d85881da94d}",
+      "sid": "S-1-5-21-1524654518-2022274387-1755902678-1007"
+    }
+  ]
+}

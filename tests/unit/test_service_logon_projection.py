@@ -40,8 +40,9 @@ from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.source_timing import SourceTimingPlanner, SourceTimingPreparation
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime
-from evidenceforge.models import System, User
+from evidenceforge.models import Scenario, System, User
 from evidenceforge.models.exceptions import EventContractError, StateError
+from evidenceforge.utils.files import load_yaml
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
 _TIME = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
@@ -966,6 +967,7 @@ def test_named_type5_real_multisink_retry_is_exact_once(
 def test_named_type5_engine_abort_drains_real_pending_multisink_recovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    scenarios_dir: Path,
 ) -> None:
     """Engine abort drains a twice-failed real batch before closing its exact sinks."""
 
@@ -1008,19 +1010,14 @@ def test_named_type5_engine_abort_drains_real_pending_multisink_recovery(
         pending_windows.completed_participants,
     ) == (2, 1, 0)
 
-    engine = object.__new__(GenerationEngine)
+    scenario = Scenario.model_validate(load_yaml(scenarios_dir / "minimal.yaml"))
+    engine = GenerationEngine(scenario, output_root)
     engine.state_manager = state
     engine.dispatcher = dispatcher
     engine.emitters = {
         "windows_event_security": windows,
         "ecar": ecar,
     }
-    engine._finalization_complete = False
-    engine._finalization_aborted = False
-    engine._linux_sudo_logoffs_finalized = False
-    engine._exact_projection_recovery_dispatcher = None
-    engine._expected_close_emitters = None
-    engine._closed_emitter_names = set()
     finalization_errors: list[BaseException] = []
 
     def finalize_aborted_generation() -> None:

@@ -1,0 +1,55 @@
+{
+  "scope": "Engineering actual compiler sampler after545; not empirical calibration or additional rendered records.",
+  "owner": "_StorageWorldCompiler._file_size",
+  "samples": {
+    "dc_policy:.ini": {
+      "count": 500,
+      "minimum": 64,
+      "median": 879.0,
+      "maximum": 16174,
+      "above_1MiB": 0
+    },
+    "dc_policy:.xml": {
+      "count": 500,
+      "minimum": 512,
+      "median": 9758.5,
+      "maximum": 258372,
+      "above_1MiB": 0
+    },
+    "dc_policy:.pol": {
+      "count": 500,
+      "minimum": 256,
+      "median": 9393.5,
+      "maximum": 515084,
+      "above_1MiB": 0
+    },
+    "software:.ps1": {
+      "count": 500,
+      "minimum": 128,
+      "median": 4696.5,
+      "maximum": 257542,
+      "above_1MiB": 0
+    },
+    "software:.exe": {
+      "count": 500,
+      "minimum": 199889,
+      "median": 4680069.5,
+      "maximum": 156050060,
+      "above_1MiB": 381
+    },
+    "backup:.log": {
+      "count": 500,
+      "minimum": 1026,
+      "median": 139269.0,
+      "maximum": 32753785,
+      "above_1MiB": 147
+    },
+    "backup:.zip": {
+      "count": 500,
+      "minimum": 10013831,
+      "median": 109522071.0,
+      "maximum": 1566353885,
+      "above_1MiB": 500
+    }
+  }
+}

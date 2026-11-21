@@ -1,0 +1,304 @@
+{
+  "scope": "Purpose/type-conditioned SMB metadata size observations and distinct (path,size) versions. Repeated accesses are separated, contents unavailable, explicit large files are not declared impossible.",
+  "sensors": {
+    "zeek-core": {
+      "source_sha256": "094dfccfd0ba0418598f7308aeb0bd8c1f629b0c5883b0db4e27ff6344c9eca2",
+      "size_populations": {
+        "policy_share": {
+          "observations": 51,
+          "unique_paths": 48,
+          "unique_path_size_versions": 48,
+          "observed_above_1MiB": 15,
+          "unique_versions_above_1MiB": 14,
+          "by_extension": {
+            ".bat": {
+              "observations": 6,
+              "unique_path_size_versions": 6,
+              "observed_above_1MiB": 2,
+              "unique_versions_above_1MiB": 2,
+              "median_observed_size": 292137.5,
+              "max_observed_size": 2803606
+            },
+            ".ini": {
+              "observations": 11,
+              "unique_path_size_versions": 11,
+              "observed_above_1MiB": 3,
+              "unique_versions_above_1MiB": 3,
+              "median_observed_size": 589476,
+              "max_observed_size": 8700366
+            },
+            ".pol": {
+              "observations": 7,
+              "unique_path_size_versions": 7,
+              "observed_above_1MiB": 2,
+              "unique_versions_above_1MiB": 2,
+              "median_observed_size": 61006,
+              "max_observed_size": 3817858
+            },
+            ".ps1": {
+              "observations": 16,
+              "unique_path_size_versions": 13,
+              "observed_above_1MiB": 4,
+              "unique_versions_above_1MiB": 3,
+              "median_observed_size": 126931.0,
+              "max_observed_size": 9890978
+            },
+            ".xml": {
+              "observations": 11,
+              "unique_path_size_versions": 11,
+              "observed_above_1MiB": 4,
+              "unique_versions_above_1MiB": 4,
+              "median_observed_size": 50073,
+              "max_observed_size": 7289252
+            }
+          },
+          "largest_witnesses": [
+            {
+              "line": 55,
+              "uid": "CDchjwfIzBWjp9VY9oW",
+              "path": "\\\\DC-02\\SYSVOL",
+              "name": "Preferences\\2026\\policy.ps1",
+              "extension": ".ps1",
+              "size": 9890978
+            },
+            {
+              "line": 15,
+              "uid": "CYH6SzQVXa38LKGakk",
+              "path": "\\\\DC-01\\NETLOGON",
+              "name": "User\\registry.ini",
+              "extension": ".ini",
+              "size": 8700366
+            },
+            {
+              "line": 162,
+              "uid": "CcTCGYfaOdna1N4P5f",
+              "path": "\\\\DC-01\\SYSVOL",
+              "name": "Scripts\\registry-v2.xml",
+              "extension": ".xml",
+              "size": 7289252
+            },
+            {
+              "line": 28,
+              "uid": "CqHEV6lBXyb9AnYLhO0",
+              "path": "\\\\DC-02\\NETLOGON",
+              "name": "Scripts\\gpt-draft.ps1",
+              "extension": ".ps1",
+              "size": 4711681
+            },
+            {
+              "line": 65,
+              "uid": "C9DbMkJzYOwCTcaFWp",
+              "path": "\\\\DC-02\\NETLOGON",
+              "name": "Scripts\\gpt-draft.ps1",
+              "extension": ".ps1",
+              "size": 4711681
+            },
+            {
+              "line": 174,
+              "uid": "C3se4wQAq8hs3uOp8",
+              "path": "\\\\DC-02\\SYSVOL",
+              "name": "Scripts\\logon.xml",
+              "extension": ".xml",
+              "size": 4362077
+            },
+            {
+              "line": 96,
+              "uid": "CpPEB6CawELBVc3sfU",
+              "path": "\\\\DC-02\\NETLOGON",
+              "name": "User\\drives.pol",
+              "extension": ".pol",
+              "size": 3817858
+            },
+            {
+              "line": 154,
+              "uid": "CMLcce6tQnbnle8gh5f",
+              "path": "\\\\DC-01\\NETLOGON",
+              "name": "Machine\\drives.xml",
+              "extension": ".xml",
+              "size": 3086404
+            },
+            {
+              "line": 116,
+              "uid": "CmyHHhPYKiHzR2AXShw",
+              "path": "\\\\DC-02\\NETLOGON",
+              "name": "Scripts\\2026\\startup.bat",
+              "extension": ".bat",
+              "size": 2803606
+            },
+            {
+              "line": 178,
+              "uid": "Cr4SqEvnxfnQNnOvp8",
+              "path": "\\\\DC-02\\NETLOGON",
+              "name": "Preferences\\policy.xml",
+              "extension": ".xml",
+              "size": 2695130
+            }
+          ]
+        },
+        "other_share": {
+          "observations": 62,
+          "unique_paths": 54,
+          "unique_path_size_versions": 56,
+          "observed_above_1MiB": 19,
+          "unique_versions_above_1MiB": 17,
+          "by_extension": {
+            ".csv": {
+              "observations": 2,
+              "unique_path_size_versions": 1,
+              "observed_above_1MiB": 2,
+              "unique_versions_above_1MiB": 1,
+              "median_observed_size": 4587291.0,
+              "max_observed_size": 4587291
+            },
+            ".docx": {
+              "observations": 20,
+              "unique_path_size_versions": 19,
+              "observed_above_1MiB": 5,
+              "unique_versions_above_1MiB": 5,
+              "median_observed_size": 291295.0,
+              "max_observed_size": 11390304
+            },
+            ".gz": {
+              "observations": 2,
+              "unique_path_size_versions": 2,
+              "observed_above_1MiB": 1,
+              "unique_versions_above_1MiB": 1,
+              "median_observed_size": 3165086.5,
+              "max_observed_size": 5542650
+            },
+            ".json": {
+              "observations": 4,
+              "unique_path_size_versions": 3,
+              "observed_above_1MiB": 0,
+              "unique_versions_above_1MiB": 0,
+              "median_observed_size": 70489.0,
+              "max_observed_size": 73841
+            },
+            ".pdf": {
+              "observations": 8,
+              "unique_path_size_versions": 8,
+              "observed_above_1MiB": 3,
+              "unique_versions_above_1MiB": 3,
+              "median_observed_size": 729157.0,
+              "max_observed_size": 6919844
+            },
+            ".pptx": {
+              "observations": 5,
+              "unique_path_size_versions": 5,
+              "observed_above_1MiB": 1,
+              "unique_versions_above_1MiB": 1,
+              "median_observed_size": 368040,
+              "max_observed_size": 1187085
+            },
+            ".txt": {
+              "observations": 5,
+              "unique_path_size_versions": 5,
+              "observed_above_1MiB": 2,
+              "unique_versions_above_1MiB": 2,
+              "median_observed_size": 21508,
+              "max_observed_size": 2936668
+            },
+            ".xlsx": {
+              "observations": 15,
+              "unique_path_size_versions": 12,
+              "observed_above_1MiB": 4,
+              "unique_versions_above_1MiB": 3,
+              "median_observed_size": 721464,
+              "max_observed_size": 7781349
+            },
+            ".zip": {
+              "observations": 1,
+              "unique_path_size_versions": 1,
+              "observed_above_1MiB": 1,
+              "unique_versions_above_1MiB": 1,
+              "median_observed_size": 21412540,
+              "max_observed_size": 21412540
+            }
+          },
+          "largest_witnesses": [
+            {
+              "line": 160,
+              "uid": "C6GpDHGkQDVcwoe3B2M",
+              "path": "\\\\FILE-SRV-01\\Users",
+              "name": "Desktop\\expenses-draft.zip",
+              "extension": ".zip",
+              "size": 21412540
+            },
+            {
+              "line": 242,
+              "uid": "Cic9SF0AR7tShorgR",
+              "path": "\\\\FILE-LNX-01\\Shared",
+              "name": "Reference\\2024\\meeting-notes.docx",
+              "extension": ".docx",
+              "size": 11390304
+            },
+            {
+              "line": 126,
+              "uid": "CRHDkMw57Z7o1K5VmW",
+              "path": "\\\\FILE-LNX-01\\Shared",
+              "name": "Reference\\onboarding.docx",
+              "extension": ".docx",
+              "size": 8336341
+            },
+            {
+              "line": 158,
+              "uid": "CqJtzhIQyrQw5xrFmC",
+              "path": "\\\\FILE-SRV-01\\Users",
+              "name": "Downloads\\2025\\presentation-review.xlsx",
+              "extension": ".xlsx",
+              "size": 7781349
+            },
+            {
+              "line": 207,
+              "uid": "Cz8Mmg3Lqf4GL5kMvIY",
+              "path": "\\\\FILE-SRV-01\\Users",
+              "name": "Downloads\\2025\\presentation-review.xlsx",
+              "extension": ".xlsx",
+              "size": 7781349
+            },
+            {
+              "line": 191,
+              "uid": "CkoTtdmSg5gtuVIF63",
+              "path": "\\\\FILE-SRV-01\\Shared",
+              "name": "Archive\\change-request.pdf",
+              "extension": ".pdf",
+              "size": 6919844
+            },
+            {
+              "line": 236,
+              "uid": "Cky3VirA8Z4MZD3vnmC",
+              "path": "\\\\FILE-LNX-01\\ClinicalResearch",
+              "name": "Team\\project-plan-review.docx",
+              "extension": ".docx",
+              "size": 6447417
+            },
+            {
+              "line": 182,
+              "uid": "CKPCMUFX3fxeC62KJB",
+              "path": "\\\\FILE-LNX-01\\Shared",
+              "name": "Team\\team-roadmap-approved.docx",
+              "extension": ".docx",
+              "size": 5921967
+            },
+            {
+              "line": 228,
+              "uid": "C5vNo0Yy9aeaNAAdo4",
+              "path": "\\\\FILE-LNX-01\\ClinicalResearch",
+              "name": "Integration\\DB-Staging\\rpt_0318.sql.gz",
+              "extension": ".gz",
+              "size": 5542650
+            },
+            {
+              "line": 193,
+              "uid": "CZQDnbDriKwfQpQR7",
+              "path": "\\\\FILE-SRV-01\\Finance",
+              "name": "Q1\\FY24\\Q1-board-pack.pdf",
+              "extension": ".pdf",
+              "size": 4928307
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,195 @@
+{
+  "scope": "Descriptive nearest same LUID/session lock-unlock pairs, not a unique transition join or authenticity verdict",
+  "hosts": {
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "sha256": "b081645497e23c576b118cc8a72cc0d79adcd0d3d7cab1bdb3c024d4dc3c05f2",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T15:30:18.5048163Z",
+          "logon_id": "0x25dbd78",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T15:41:50.4691433Z",
+          "logon_id": "0x25dbd78",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T18:20:13.0468727Z",
+          "logon_id": "0x25dbd78",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T18:34:37.6435483Z",
+          "logon_id": "0x25dbd78",
+          "session_id": "2"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T15:30:18.5048163Z",
+            "logon_id": "0x25dbd78",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T15:41:50.4691433Z",
+            "logon_id": "0x25dbd78",
+            "session_id": "2"
+          },
+          "interval_seconds": 691.964327
+        },
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T18:20:13.0468727Z",
+            "logon_id": "0x25dbd78",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T18:34:37.6435483Z",
+            "logon_id": "0x25dbd78",
+            "session_id": "2"
+          },
+          "interval_seconds": 864.596676
+        }
+      ]
+    },
+    "WS-DRAMIREZ-01.meridianhcs.local": {
+      "sha256": "b0b2ab45eeb2623a80a8ba6c876dbee2220410c3dad8381ffdc6a562495afe4b",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T18:09:13.6951272Z",
+          "logon_id": "0x96cfaea",
+          "session_id": "1"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T18:58:57.7778899Z",
+          "logon_id": "0x96cfaea",
+          "session_id": "1"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T18:09:13.6951272Z",
+            "logon_id": "0x96cfaea",
+            "session_id": "1"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T18:58:57.7778899Z",
+            "logon_id": "0x96cfaea",
+            "session_id": "1"
+          },
+          "interval_seconds": 2984.082762
+        }
+      ]
+    },
+    "WS-EBROOKS-01.meridianhcs.local": {
+      "sha256": "9d1062d6b5a2d5b8868cd9020fdbf049bf298d6858ba3c4f587d0b914a258a91",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T16:14:06.4028950Z",
+          "logon_id": "0xa3ea447",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T16:22:54.2420530Z",
+          "logon_id": "0xa3ea447",
+          "session_id": "2"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T16:14:06.4028950Z",
+            "logon_id": "0xa3ea447",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T16:22:54.2420530Z",
+            "logon_id": "0xa3ea447",
+            "session_id": "2"
+          },
+          "interval_seconds": 527.839158
+        }
+      ]
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "sha256": "dc9e7ee8c6f876166e7821a402cd391b801bc4106a72866883fb50d918f10f6d",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T16:06:49.0009837Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T16:11:32.0473331Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        },
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T18:11:10.9622516Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T18:48:28.7583638Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T16:06:49.0009837Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T16:11:32.0473331Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "interval_seconds": 283.04635
+        },
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T18:11:10.9622516Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T18:48:28.7583638Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "interval_seconds": 2237.796112
+        }
+      ]
+    }
+  }
+}

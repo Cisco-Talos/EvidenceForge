@@ -425,10 +425,12 @@ programs:
       queue_name:
         - ipp_everywhere
         - driverless
+      printer_endpoint:
+        - "ipp://{printer_name}.local:631/ipp/print"
     messages:
       - "Created local queue {printer_name} ({queue_name})"
       - "Printer {printer_name} was not found by DNS-SD, keeping stale queue for now"
-      - "Browse remote printer {printer_name} at {}"
+      - "Browse remote printer {printer_name} at {printer_endpoint}"
 
   - app: avahi-daemon
     system_types: [workstation]

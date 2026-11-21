@@ -1,0 +1,40 @@
+{
+  "scope": "Source-native HTTP/1.1 response entity ordering, using explicit resp_fuids within the same sensor UID. Only complete non-timedout file observations; localized findings remain qualified by source semantics. Sensor copies are not independent physical conversations.",
+  "multi_transaction_conversations": 44,
+  "first_body_reversals": [
+    {
+      "source": "zeek-core/http.json",
+      "uid": "CVZ14Uhc67AVJrYgbO",
+      "tuple": [
+        "10.10.1.34",
+        51815,
+        "10.10.3.10",
+        80
+      ],
+      "prior_depth": 1,
+      "later_depth": 2,
+      "prior_first_body": 1793627680.712795,
+      "later_first_body": 1793627680.631737,
+      "reversal_seconds": 0.08105802536010742,
+      "prior_uri": "/",
+      "later_uri": "/assets/css/main.min.07b8945e.css"
+    },
+    {
+      "source": "zeek-dmz/http.json",
+      "uid": "CUndz3AFi0yhIEnnis",
+      "tuple": [
+        "10.10.1.34",
+        51815,
+        "10.10.3.10",
+        80
+      ],
+      "prior_depth": 1,
+      "later_depth": 2,
+      "prior_first_body": 1793627680.501652,
+      "later_first_body": 1793627680.427936,
+      "reversal_seconds": 0.0737159252166748,
+      "prior_uri": "/",
+      "later_uri": "/assets/css/main.min.07b8945e.css"
+    }
+  ]
+}

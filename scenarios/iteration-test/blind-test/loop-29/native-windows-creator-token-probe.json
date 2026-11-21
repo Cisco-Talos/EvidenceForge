@@ -1,0 +1,131 @@
+{
+  "scope": "Native 4688 Creator/Target Subject census, uniquely matched Sysmon child LUID. Populated target does not prove arbitrary real Windows requesting-thread semantics.",
+  "counts": {
+    "security_process_create": 931,
+    "populated_target_subject": 37,
+    "unique_sysmon_joins": 927,
+    "child_effective_logon_mismatches": 0
+  },
+  "examples": [
+    {
+      "host": "DC-01.meridianhcs.local",
+      "pid": "4916",
+      "image": "C:\\Windows\\System32\\cmd.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "SYSTEM",
+      "target_luid": "0x3e7",
+      "sysmon_child_luid": "0x3e7"
+    },
+    {
+      "host": "DC-01.meridianhcs.local",
+      "pid": "4932",
+      "image": "C:\\Windows\\System32\\cmd.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "SYSTEM",
+      "target_luid": "0x3e7",
+      "sysmon_child_luid": "0x3e7"
+    },
+    {
+      "host": "DC-01.meridianhcs.local",
+      "pid": "4952",
+      "image": "C:\\Windows\\System32\\cmd.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "SYSTEM",
+      "target_luid": "0x3e7",
+      "sysmon_child_luid": "0x3e7"
+    },
+    {
+      "host": "DC-01.meridianhcs.local",
+      "pid": "4964",
+      "image": "C:\\Windows\\System32\\cmd.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "SYSTEM",
+      "target_luid": "0x3e7",
+      "sysmon_child_luid": "0x3e7"
+    },
+    {
+      "host": "DC-01.meridianhcs.local",
+      "pid": "5560",
+      "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "SYSTEM",
+      "target_luid": "0x3e7",
+      "sysmon_child_luid": "0x3e7"
+    },
+    {
+      "host": "DC-01.meridianhcs.local",
+      "pid": "5572",
+      "image": "C:\\Windows\\System32\\cmd.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "SYSTEM",
+      "target_luid": "0x3e7",
+      "sysmon_child_luid": "0x3e7"
+    },
+    {
+      "host": "DC-01.meridianhcs.local",
+      "pid": "5584",
+      "image": "C:\\Windows\\System32\\cmd.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "SYSTEM",
+      "target_luid": "0x3e7",
+      "sysmon_child_luid": "0x3e7"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "pid": "8464",
+      "image": "C:\\Windows\\System32\\cmd.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "marcus.chen",
+      "target_luid": "0xcd657ef",
+      "sysmon_child_luid": "0xcd657ef"
+    },
+    {
+      "host": "DC-02.meridianhcs.local",
+      "pid": "8476",
+      "image": "C:\\Windows\\System32\\cmd.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "marcus.chen",
+      "target_luid": "0xcd657ef",
+      "sysmon_child_luid": "0xcd657ef"
+    },
+    {
+      "host": "FILE-SRV-01.meridianhcs.local",
+      "pid": "4808",
+      "image": "C:\\Windows\\System32\\userinit.exe",
+      "creator": "SYSTEM",
+      "creator_luid": "0x3e7",
+      "target": "priya.patel",
+      "target_luid": "0xf659c9a",
+      "sysmon_child_luid": "0xf659c9a"
+    },
+    {
+      "host": "FILE-SRV-01.meridianhcs.local",
+      "pid": "5692",
+      "image": "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.17763.5329_none_7c91d6e7c9f7f1f5\\TiWorker.exe",
+      "creator": "NETWORK SERVICE",
+      "creator_luid": "0x3e4",
+      "target": "SYSTEM",
+      "target_luid": "0x3e7",
+      "sysmon_child_luid": "0x3e7"
+    },
+    {
+      "host": "MAIL-FIN-01.meridianhcs.local",
+      "pid": "4072",
+      "image": "C:\\Windows\\System32\\userinit.exe",
+      "creator": "SYSTEM",
+      "creator_luid": "0x3e7",
+      "target": "aisha.johnson",
+      "target_luid": "0xd73d4e0",
+      "sysmon_child_luid": "0xd73d4e0"
+    }
+  ]
+}

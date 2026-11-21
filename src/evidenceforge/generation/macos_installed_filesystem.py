@@ -216,7 +216,9 @@ class MacosInstalledFilesystem:
         self._volumes = MappingProxyType(volume_index)
         self._next_inodes = MappingProxyType(next_inodes)
 
-    def directory_volume(self, hostname: str, first_inode: int) -> MacosInstalledVolumeSpec:
+    def directory_volume(
+        self, hostname: str, first_inode: int, *, reserved_inode: int | None = None
+    ) -> MacosInstalledVolumeSpec:
         """Share the exact provisioned volume while reserving a distinct directory range."""
         found = tuple(
             value for (host, _), value in self._volumes.items() if host == hostname.casefold()
@@ -224,6 +226,16 @@ class MacosInstalledFilesystem:
         if len(found) != 1 or type(first_inode) is not int:
             raise StateError("Mac directory provisioning requires one exact host volume")
         volume = found[0]
+        if reserved_inode is not None:
+            if type(reserved_inode) is not int or not 1 <= reserved_inode < 2**64:
+                raise StateError("Reserved directory inode requires an exact positive identity")
+            if any(
+                metadata.inode == reserved_inode
+                and metadata.volume_id == volume.volume_id
+                and metadata.file_object_id.startswith(hostname.casefold() + ":")
+                for _spec, metadata in self._files.values()
+            ):
+                raise StateError("Reserved directory inode overlaps an installed file")
         if first_inode < self._next_inodes[hostname.casefold(), volume.volume_id]:
             raise StateError("Mac directory inode range overlaps installed files")
         return MacosInstalledVolumeSpec.model_validate_json(volume.model_dump_json())

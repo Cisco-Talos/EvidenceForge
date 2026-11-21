@@ -1,0 +1,9 @@
+{
+  "scope": "Read-only PROC_PIDUNIQIDENTIFIERINFO for this probe process only. No process enumeration, commands, UUIDs or other process data retained. Single-host illustration, not a counter/rate calibration.",
+  "platform": "27.2.1",
+  "machine": "arm64",
+  "expected_struct_bytes": 56,
+  "returned_bytes": 56,
+  "self_pidversion": 542463,
+  "errno_if_failed": null
+}

@@ -1,0 +1,19 @@
+{
+  "study_directory": "/private/tmp/authenticity-study-57n1ht2w",
+  "data_directory": "/private/tmp/authenticity-study-57n1ht2w/data",
+  "data_file_count": 118,
+  "data_inventory_sha256": "6df891cee527e8387aca478916892f50dddb4e91e133f9fc710594fb54fb2494",
+  "copy_verified_against_bundle_data": true,
+  "fork_turns": "none",
+  "targeted_review_instructions_added": false,
+  "source_instruction_sha256": {
+    "expert-briefing.md": "0ba7858b79562384792cedf81f2bcfe9102570ac945b8dc06d2553e4c54d3e27",
+    "expert-personas.md": "26ff3c883d57f9e1a6ec6535293f06692339042051586d58342aeda9a3cf7ea4"
+  },
+  "instruction_sha256": {
+    "host-forensics-instructions.md": "8090f2eb3df70922ca353bcf516e79bf7f20dc5bee2f4b27fe9a38e6f111de8d",
+    "network-forensics-instructions.md": "0279ef47abae28038589569cd0b002adc96d24e57602f097cd9dc3966f0cf85a",
+    "threat-hunter-instructions.md": "bab5e58a3f16a1b1552fc5a02f4499ec48fdf2f1d796919ad0fd02534168cac9",
+    "detection-engineer-instructions.md": "939d087fdf88a9c35451ab1f2049a3e6d5741afe7b1b13df00b0d071ba54a2aa"
+  }
+}

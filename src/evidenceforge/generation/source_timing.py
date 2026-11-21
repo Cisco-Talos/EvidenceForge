@@ -24,7 +24,7 @@ from typing import Any, cast
 from weakref import ReferenceType, ref
 
 from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
-from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
 from evidenceforge.generation.activity.timing_profiles import (
     endpoint_clock_timing,
     get_timing_window,
@@ -5073,6 +5073,17 @@ class SourceTimingPlanner:
         if family == "ecar" and event.event_type == "create_remote_thread":
             return "source.ecar_remote_thread"
         if family == "ecar" and event.event_type in {
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop",
+            "process_job_control",
+        }:
+            # Process-state transitions traverse the same collector queue as
+            # their birth, preserving native execution intervals before small
+            # source residuals and typed causal constraints are applied.
+            return "source.ecar_process_create"
+        if family == "ecar" and event.event_type in {
             "file_read",
             "file_create",
             "file_modify",
@@ -5082,11 +5093,6 @@ class SourceTimingPlanner:
             "registry_modify",
             "image_load",
             "process_access",
-            "process_exec",
-            "process_audit_bind",
-            "process_privilege_drop",
-            "process_service_drop",
-            "process_job_control",
         }:
             return "source.ecar_dependent_after_process_create"
         if family == "ecar" and event.event_type in {
@@ -5653,6 +5659,13 @@ class SourceTimingPlanner:
             # when a credential helper is materialized retroactively.  Treating
             # that session-wide maximum as a causal predecessor moves startup
             # modules and other process effects beyond their real lifecycle.
+            return timestamp
+        session = event.identity_plan.session if event.identity_plan is not None else None
+        if isinstance(session, SessionIdentity) and session.lifecycle_group_id == session_group:
+            # Independent observations in one durable auth session do not
+            # causally follow whichever unrelated dependent was admitted last.
+            # Keep the login floor above and retain the maximum frontier for
+            # session closure, without moving earlier occurrence times.
             return timestamp
         previous = self._latest_session_dependent_times.get(key)
         if previous is not None and timestamp <= previous:

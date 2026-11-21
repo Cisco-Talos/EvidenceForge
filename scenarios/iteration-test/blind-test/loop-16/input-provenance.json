@@ -1,0 +1,37 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 16,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 550,
+  "behavior_surface_sha256": "693a4b60227e41c38609c316a462f22b461ca5a9695f50b51a06af5a1f042a12",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "automatic SMB task/file eligibility at shared operation-profile admission"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "central": "94passed2.82s; selection/intersection/skip/legacy/explicit and baseline admission",
+    "profile_config": "3passed2.02s; defaults/oldfrozen/restoration/nestedvalidation",
+    "native": "1passed5.33s then strengthened native/admission8passed5.82s; real auto text+explicit DOCX, exact profile scope reuse and no-eligible planner skip",
+    "profile_siblings": "61passed8.72s; mounted/direct/transfer/native metadata",
+    "persistent_rng_manifest": "38passed27.65s; unchanged temporalRNG ceiling",
+    "channel_validation": "84passed7.62s",
+    "native_server_siblings": "2passed8.25s21deselected; Windows/Samba server ownership",
+    "persistent_native": "18passed45.99s22deselected; loss/publication/terminal recovery",
+    "checkpoint": "2passed105.89s15deselected",
+    "config_validation": "105files0issues",
+    "ruff": "check/formatpass1662files",
+    "scope": "Ordinary automatic task population only; explicit binary and frozen profiles preserved; no full routine/release gate"
+  }
+}

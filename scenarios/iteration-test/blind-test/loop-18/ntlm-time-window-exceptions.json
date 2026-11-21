@@ -1,0 +1,26 @@
+[
+  {
+    "host": "WS-MCHEN-01.meridianhcs.local",
+    "record_id": "949222",
+    "time": "2026-11-02T15:27:46.9192593Z",
+    "username": "marcus.chen",
+    "workstation": "DC-01",
+    "guid": "{00000000-0000-0000-0000-000000000000}",
+    "sid": "S-1-5-21-1524654518-2022274387-1755902678-1003",
+    "nearest_logon_minus_validation_seconds": [
+      -1.2454328536987305
+    ]
+  },
+  {
+    "host": "WS-MCHEN-01.meridianhcs.local",
+    "record_id": "949299",
+    "time": "2026-11-02T15:50:51.7176805Z",
+    "username": "marcus.chen",
+    "workstation": "DB-PROD-01",
+    "guid": "{00000000-0000-0000-0000-000000000000}",
+    "sid": "S-1-5-21-1524654518-2022274387-1755902678-1003",
+    "nearest_logon_minus_validation_seconds": [
+      -1.2758519649505615
+    ]
+  }
+]

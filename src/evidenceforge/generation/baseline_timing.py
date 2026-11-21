@@ -115,6 +115,20 @@ class BaselineTimingPlanner:
         )
         return microseconds / 1_000_000
 
+    @staticmethod
+    def _windows_session_bootstrap_bounds(
+        *, remote: bool
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        if remote:
+            return (0.18, 0.72, 2.4), (0.55, 2.4, 8.5)
+        return (0.08, 0.17, 0.28), (0.18, 0.39, 0.68)
+
+    @classmethod
+    def windows_session_bootstrap_max_seconds(cls, *, remote: bool = False) -> float:
+        """Return the exact work support used by the Windows startup sampler."""
+        user_manager, desktop_shell = cls._windows_session_bootstrap_bounds(remote=remote)
+        return user_manager[2] + desktop_shell[2]
+
     def windows_session_bootstrap_delays(
         self,
         *,
@@ -125,15 +139,11 @@ class BaselineTimingPlanner:
     ) -> tuple[float, float]:
         """Return user-manager and desktop-shell startup delays for one Windows session."""
 
-        if remote:
-            user_manager_bounds = (0.18, 0.72, 2.4)
-            desktop_shell_bounds = (0.55, 2.4, 8.5)
-        else:
-            # Local compatibility paths often schedule the first foreground
-            # action one second after logon. Retain that contract without
-            # reintroducing a fleet-wide fixed cadence.
-            user_manager_bounds = (0.08, 0.17, 0.28)
-            desktop_shell_bounds = (0.18, 0.39, 0.68)
+        # Local compatibility paths retain their existing subsecond support.
+        # Admission and sampling share these bounds instead of duplicating them.
+        user_manager_bounds, desktop_shell_bounds = self._windows_session_bootstrap_bounds(
+            remote=remote
+        )
         user_manager_delay = self.right_skew_seconds(
             relationship_key="windows.session.user_manager_start",
             stable_id=stable_id,

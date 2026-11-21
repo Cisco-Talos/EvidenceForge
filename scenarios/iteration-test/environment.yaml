@@ -310,7 +310,7 @@ environment:
     - system: MAC-MROSS-01
       user_applications:
         - user: maya.ross
-          applications: [macos-terminal, macos-ssh, chrome, slack, mysql, psql]
+          applications: [macos-terminal, macos-ssh, chrome, slack, mysql, psql, vscode]
     - system: MAC-MROSS-02
       user_applications:
         - user: maya.ross

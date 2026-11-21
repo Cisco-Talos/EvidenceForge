@@ -13,6 +13,7 @@ from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 from evidenceforge.config.schemas import (
     WindowsAnonymousSmbBaselineConfig,
+    WindowsNtlmValidationTiming,
     WindowsRemoteAuthTransportConfig,
     WindowsSpecialPrivilegesConfig,
 )
@@ -50,6 +51,14 @@ def reset_windows_auth_realism_cache() -> None:
     _CACHED_DATA = None
     _CACHED_REMOTE_AUTH_TRANSPORT = None
     _CACHED_ANONYMOUS_SMB_BASELINE = None
+
+
+def success_ntlm_validation_config() -> WindowsNtlmValidationTiming:
+    """Validate optional timing while preserving whole-subtree frozen absence."""
+    data = load_windows_auth_realism()
+    if "success_ntlm_validation" not in data:
+        return WindowsNtlmValidationTiming(minimum_ms=8.0, maximum_ms=120.0)
+    return WindowsNtlmValidationTiming.model_validate(data["success_ntlm_validation"])
 
 
 def workstation_lock_config() -> dict[str, Any]:

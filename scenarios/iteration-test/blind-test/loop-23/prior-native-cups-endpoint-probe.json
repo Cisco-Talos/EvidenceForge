@@ -1,0 +1,84 @@
+{
+  "scope": "Descriptive native CUPS location wording census, not a universal CUPS version/collector/schema validity claim.",
+  "location_messages": 11,
+  "endpoint_shapes": {
+    "bare_numeric": 11
+  },
+  "hosts": {
+    "LT-MRIVERA-02.meridianhcs.local": 2,
+    "WS-LNGUYEN-01.meridianhcs.local": 7,
+    "WS-OHADDAD-01.meridianhcs.local": 2
+  },
+  "examples": [
+    {
+      "file": "LT-MRIVERA-02.meridianhcs.local/syslog.log",
+      "line": 51,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "142314",
+      "shape": "bare_numeric"
+    },
+    {
+      "file": "LT-MRIVERA-02.meridianhcs.local/syslog.log",
+      "line": 104,
+      "printer": "FINANCE-MFP",
+      "endpoint": "466603",
+      "shape": "bare_numeric"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 6,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "266642",
+      "shape": "bare_numeric"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 23,
+      "printer": "CORP-PRINT-01",
+      "endpoint": "581102",
+      "shape": "bare_numeric"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 52,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "170338",
+      "shape": "bare_numeric"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 96,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "790897",
+      "shape": "bare_numeric"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 119,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "121460",
+      "shape": "bare_numeric"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 175,
+      "printer": "FINANCE-MFP",
+      "endpoint": "316205",
+      "shape": "bare_numeric"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 254,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "878694",
+      "shape": "bare_numeric"
+    },
+    {
+      "file": "WS-OHADDAD-01.meridianhcs.local/syslog.log",
+      "line": 58,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "437640",
+      "shape": "bare_numeric"
+    }
+  ]
+}

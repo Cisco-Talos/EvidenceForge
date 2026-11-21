@@ -1,0 +1,328 @@
+{
+  "schema_version": 1,
+  "bundle": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/blind-test/loop-2/bundle",
+  "source_sha256": {
+    "DC-01.meridianhcs.local/windows_event_security.xml": "a6143813c6c1fb7ae7efe6a531b875bbc4297dc1d609e0787ffff364b8f5377b",
+    "DC-01.meridianhcs.local/windows_event_sysmon.xml": "d9cf27bc8cb8a4f269c2715482bd5b8a36ac45353c539d9eadffdc6d092f577f",
+    "DC-02.meridianhcs.local/windows_event_security.xml": "d1bf63de9f1c16405c11b943156b4086dc54e1918959e311748e2ba60f9135f9",
+    "DC-02.meridianhcs.local/windows_event_sysmon.xml": "a8913890fc018c3c7de87cddfd96c88a0eac30a20d3002e5132a244a90d96c28",
+    "FILE-SRV-01.meridianhcs.local/windows_event_security.xml": "b1de078daa465ad1815be8b9a4b5816d4687e2e4f3a007a25211cd034edc560e",
+    "FILE-SRV-01.meridianhcs.local/windows_event_sysmon.xml": "6016573bcfe3b408bc5041ab59428f14698a46613507ed7ac48b7ca43154a9a7",
+    "MAIL-FIN-01.meridianhcs.local/windows_event_security.xml": "747a39a627a4c309ec23a64fc153dfb8358c259ab115d6719d923dd86571e9dc",
+    "MAIL-FIN-01.meridianhcs.local/windows_event_sysmon.xml": "eb6893d31fe9c879ba2a74c5ee370a9a4cffa8dc4a59cb793934f430132a8e3d",
+    "WS-AJOHNSON-01.meridianhcs.local/windows_event_security.xml": "803cefaf366f592d9fd8b04c75011554c9c8fdd9d2a5b0c306dbfc2c6ef22b37",
+    "WS-AJOHNSON-01.meridianhcs.local/windows_event_sysmon.xml": "f5a4fadace7d4f2f9eb3903dad0efcd57a6d3d53cd7c42b53c171c0317d5a706",
+    "WS-DRAMIREZ-01.meridianhcs.local/windows_event_security.xml": "c7c62d84f2aee37bb122720709d38bea0f87b084933ddd4966f509e1a46268ea",
+    "WS-DRAMIREZ-01.meridianhcs.local/windows_event_sysmon.xml": "ef0e4c5d34202a8647f27df798b796b6dba8040363fa3cea2f7361d8abee6510",
+    "WS-EBROOKS-01.meridianhcs.local/windows_event_security.xml": "5268cd014b3f79db8805d62f101a23ff71799fd60a81de44639e1f227f20fea7",
+    "WS-EBROOKS-01.meridianhcs.local/windows_event_sysmon.xml": "ba15f20ae8c520df69f4ede6a4fbb9d890d5f0f62721211711af2ea307bb17a5",
+    "WS-MCHEN-01.meridianhcs.local/windows_event_security.xml": "eba82b367f3332b68875ee2eadda9dbcdbe3a960dbf31955ade6b76a33affaa7",
+    "WS-MCHEN-01.meridianhcs.local/windows_event_sysmon.xml": "fd6e71c04ab9f073fd55d479e75693961dd66f3e0e5fd03ca65d9484bd89a3e2",
+    "WS-PPATEL-01.meridianhcs.local/windows_event_security.xml": "29cfd8a6f204dd61f76fdb2e32ca83dd13f727c46ff4d41cd8613acbeb87df21",
+    "WS-PPATEL-01.meridianhcs.local/windows_event_sysmon.xml": "501005b6bb18eb058b614e03671316c39d401ce683921db0be52c82511d7e17e",
+    "WS-SMARTINEZ-01.meridianhcs.local/windows_event_security.xml": "b75df0ad0c7a04b2876e11d75a4528d019fcee99410babcc956f2526915339a4",
+    "WS-SMARTINEZ-01.meridianhcs.local/windows_event_sysmon.xml": "d710286adb6de3b13c53ec284fd5252ae1a37a9a2b09ae48223cec6789b94946"
+  },
+  "kerberos_event_counts": {
+    "4769": 1998,
+    "4768": 41
+  },
+  "machine_tgt_groups": [
+    {
+      "principal": "app-int-01$",
+      "source_ip": "10.10.2.30",
+      "count": 1,
+      "median_gap_seconds": null,
+      "min_gap_seconds": null
+    },
+    {
+      "principal": "db-prod-01$",
+      "source_ip": "10.10.4.10",
+      "count": 2,
+      "median_gap_seconds": 5066.374269,
+      "min_gap_seconds": 5066.374269
+    },
+    {
+      "principal": "dc-01$",
+      "source_ip": "10.10.2.10",
+      "count": 1,
+      "median_gap_seconds": null,
+      "min_gap_seconds": null
+    },
+    {
+      "principal": "dc-02$",
+      "source_ip": "10.10.2.11",
+      "count": 2,
+      "median_gap_seconds": 6071.574902,
+      "min_gap_seconds": 6071.574902
+    },
+    {
+      "principal": "file-lnx-01$",
+      "source_ip": "10.10.2.21",
+      "count": 1,
+      "median_gap_seconds": null,
+      "min_gap_seconds": null
+    },
+    {
+      "principal": "file-srv-01$",
+      "source_ip": "10.10.2.20",
+      "count": 1,
+      "median_gap_seconds": null,
+      "min_gap_seconds": null
+    },
+    {
+      "principal": "log-mon-01$",
+      "source_ip": "10.10.2.40",
+      "count": 2,
+      "median_gap_seconds": 16990.614626,
+      "min_gap_seconds": 16990.614626
+    },
+    {
+      "principal": "mac-mross-01$",
+      "source_ip": "10.10.1.41",
+      "count": 2,
+      "median_gap_seconds": 4064.488675,
+      "min_gap_seconds": 4064.488675
+    },
+    {
+      "principal": "mac-mross-02$",
+      "source_ip": "10.10.1.42",
+      "count": 1,
+      "median_gap_seconds": null,
+      "min_gap_seconds": null
+    },
+    {
+      "principal": "mail-clin-01$",
+      "source_ip": "10.10.2.26",
+      "count": 3,
+      "median_gap_seconds": 4381.3789560000005,
+      "min_gap_seconds": 1143.883248
+    },
+    {
+      "principal": "mail-edge-01$",
+      "source_ip": "10.10.2.25",
+      "count": 3,
+      "median_gap_seconds": 6264.1600865,
+      "min_gap_seconds": 4567.567757
+    },
+    {
+      "principal": "mail-fin-01$",
+      "source_ip": "10.10.2.27",
+      "count": 3,
+      "median_gap_seconds": 9222.7552335,
+      "min_gap_seconds": 7400.115483
+    },
+    {
+      "principal": "ws-ajohnson-01$",
+      "source_ip": "10.10.1.35",
+      "count": 1,
+      "median_gap_seconds": null,
+      "min_gap_seconds": null
+    },
+    {
+      "principal": "ws-dramirez-01$",
+      "source_ip": "10.10.1.34",
+      "count": 2,
+      "median_gap_seconds": 11148.844325,
+      "min_gap_seconds": 11148.844325
+    },
+    {
+      "principal": "ws-ebrooks-01$",
+      "source_ip": "10.10.1.33",
+      "count": 2,
+      "median_gap_seconds": 6577.92946,
+      "min_gap_seconds": 6577.92946
+    },
+    {
+      "principal": "ws-lnguyen-01$",
+      "source_ip": "10.10.1.21",
+      "count": 1,
+      "median_gap_seconds": null,
+      "min_gap_seconds": null
+    },
+    {
+      "principal": "ws-mchen-01$",
+      "source_ip": "10.10.1.31",
+      "count": 2,
+      "median_gap_seconds": 7853.914397,
+      "min_gap_seconds": 7853.914397
+    },
+    {
+      "principal": "ws-ohaddad-01$",
+      "source_ip": "10.10.1.22",
+      "count": 1,
+      "median_gap_seconds": null,
+      "min_gap_seconds": null
+    },
+    {
+      "principal": "ws-smartinez-01$",
+      "source_ip": "10.10.1.36",
+      "count": 1,
+      "median_gap_seconds": null,
+      "min_gap_seconds": null
+    }
+  ],
+  "windows_cli_parent_leads": [
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@MAIL-EDGE-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 14:25:19.458",
+      "parent_lead_seconds": 3.016
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@DB-PROD-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\cmd.exe",
+      "timestamp": "2026-11-02 15:01:32.964",
+      "parent_lead_seconds": 2.982
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@APP-INT-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\cmd.exe",
+      "timestamp": "2026-11-02 15:46:53.229",
+      "parent_lead_seconds": 5.145
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@MAIL-CLIN-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\cmd.exe",
+      "timestamp": "2026-11-02 15:49:32.606",
+      "parent_lead_seconds": 4.744
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@FILE-LNX-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 15:53:18.083",
+      "parent_lead_seconds": 4.123
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@FILE-LNX-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 16:00:14.216",
+      "parent_lead_seconds": 4.123
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@WEB-EXT-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\cmd.exe",
+      "timestamp": "2026-11-02 16:51:32.933",
+      "parent_lead_seconds": 3.944
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@FILE-LNX-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 17:18:15.463",
+      "parent_lead_seconds": 4.123
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@MAIL-EDGE-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 17:35:39.244",
+      "parent_lead_seconds": 3.016
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe aisha.johnson@WEB-EXT-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\cmd.exe",
+      "timestamp": "2026-11-02 18:19:52.531",
+      "parent_lead_seconds": 5.897
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe marcus.chen@PROXY-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 13:12:15.513",
+      "parent_lead_seconds": 3.499
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe marcus.chen@PROXY-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 14:01:35.475",
+      "parent_lead_seconds": 3.499
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe marcus.chen@LOG-MON-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\cmd.exe",
+      "timestamp": "2026-11-02 14:04:22.464",
+      "parent_lead_seconds": 4.56
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe marcus.chen@PROXY-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 15:35:42.270",
+      "parent_lead_seconds": 3.488
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe marcus.chen@DB-PROD-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 16:11:59.982",
+      "parent_lead_seconds": 3.418
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe marcus.chen@FILE-LNX-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 16:50:25.248",
+      "parent_lead_seconds": 5.505
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe marcus.chen@MAIL-CLIN-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 17:01:52.802",
+      "parent_lead_seconds": 4.334
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe marcus.chen@PROXY-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 17:37:21.571",
+      "parent_lead_seconds": 3.489
+    },
+    {
+      "host": "WS-MCHEN-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe marcus.chen@MAIL-CLIN-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 18:31:06.197",
+      "parent_lead_seconds": 4.334
+    },
+    {
+      "host": "WS-PPATEL-01.meridianhcs.local",
+      "image": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+      "command_line": "ssh.exe priya.patel@LOG-MON-01.meridianhcs.local",
+      "parent_image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "timestamp": "2026-11-02 18:58:07.054",
+      "parent_lead_seconds": 5.429
+    }
+  ],
+  "interpretation": "Descriptive rendered-output probes; no authenticity verdict is inferred automatically."
+}

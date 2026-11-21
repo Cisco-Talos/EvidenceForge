@@ -1,0 +1,170 @@
+{
+  "scope": "Rendered eCAR CREATE to first visible exec; no native-time equality or required hidden coverage assumption",
+  "hosts": {
+    "MAC-MROSS-01.meridianhcs.local": {
+      "source_sha256": "29920da603e26e32e254c2155f1cc2cf22e88f71745a497de4b653e4d187bf0d",
+      "pair_count": 45,
+      "count_at_or_below_5_ms": 45,
+      "median_gap_ms": 1,
+      "range_ms": [
+        1,
+        5
+      ],
+      "histogram": {
+        "1": 24,
+        "2": 9,
+        "3": 7,
+        "4": 4,
+        "5": 1
+      },
+      "examples": [
+        {
+          "pid": 42154,
+          "process_object_id": "02ad9bc4-f252-4560-b44d-9bedb73b4de9",
+          "create_ms": 1793624853990,
+          "exec_ms": 1793624853992,
+          "observed_gap_ms": 2,
+          "image": "/usr/libexec/xpcproxy"
+        },
+        {
+          "pid": 42155,
+          "process_object_id": "71f382b1-270f-4417-bcf6-5cd2f6a4efc9",
+          "create_ms": 1793624854027,
+          "exec_ms": 1793624854032,
+          "observed_gap_ms": 5,
+          "image": "/usr/bin/login"
+        },
+        {
+          "pid": 42156,
+          "process_object_id": "2ecdc46a-810e-4cdb-a4fc-c93c10349017",
+          "create_ms": 1793624854054,
+          "exec_ms": 1793624854058,
+          "observed_gap_ms": 4,
+          "image": "/bin/zsh"
+        },
+        {
+          "pid": 42161,
+          "process_object_id": "02c3e0d8-1f16-48a0-8791-bc8eb5bc0b25",
+          "create_ms": 1793624859000,
+          "exec_ms": 1793624859001,
+          "observed_gap_ms": 1,
+          "image": "/usr/bin/id"
+        },
+        {
+          "pid": 42168,
+          "process_object_id": "73307f55-c44b-46f0-bd46-afc388854a5b",
+          "create_ms": 1793624862808,
+          "exec_ms": 1793624862811,
+          "observed_gap_ms": 3,
+          "image": "/usr/bin/sw_vers"
+        },
+        {
+          "pid": 42169,
+          "process_object_id": "446cdc91-c584-46bc-b84f-fa56343aa089",
+          "create_ms": 1793624863429,
+          "exec_ms": 1793624863430,
+          "observed_gap_ms": 1,
+          "image": "/usr/bin/uname"
+        },
+        {
+          "pid": 42887,
+          "process_object_id": "7f8bd9a7-3813-4fef-9f18-052403691c16",
+          "create_ms": 1793625258714,
+          "exec_ms": 1793625258715,
+          "observed_gap_ms": 1,
+          "image": "/usr/libexec/xpcproxy"
+        },
+        {
+          "pid": 42890,
+          "process_object_id": "e75b9f30-beb3-4e70-8b04-082604a6d3e9",
+          "create_ms": 1793625260280,
+          "exec_ms": 1793625260281,
+          "observed_gap_ms": 1,
+          "image": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)"
+        }
+      ]
+    },
+    "MAC-MROSS-02.meridianhcs.local": {
+      "source_sha256": "f12aa161f0a5b925dc59acc73a633b571cce75b72e245812fe1a869689109399",
+      "pair_count": 53,
+      "count_at_or_below_5_ms": 53,
+      "median_gap_ms": 1,
+      "range_ms": [
+        1,
+        4
+      ],
+      "histogram": {
+        "1": 31,
+        "2": 13,
+        "3": 6,
+        "4": 3
+      },
+      "examples": [
+        {
+          "pid": 18998,
+          "process_object_id": "ec80045f-21b9-4cf2-b702-f5309e3f8354",
+          "create_ms": 1793625128170,
+          "exec_ms": 1793625128171,
+          "observed_gap_ms": 1,
+          "image": "/usr/libexec/xpcproxy"
+        },
+        {
+          "pid": 18999,
+          "process_object_id": "ef20f5d0-62ec-4f0d-b725-5707ce210339",
+          "create_ms": 1793625128213,
+          "exec_ms": 1793625128217,
+          "observed_gap_ms": 4,
+          "image": "/Users/maya.ross/Library/Application Support/iTerm2/iTermServer-3.7.6"
+        },
+        {
+          "pid": 19000,
+          "process_object_id": "2bdd59ef-aef3-4959-a36c-cdd1402dcd34",
+          "create_ms": 1793625128246,
+          "exec_ms": 1793625128249,
+          "observed_gap_ms": 3,
+          "image": "/usr/bin/login"
+        },
+        {
+          "pid": 19001,
+          "process_object_id": "e8e57a04-6792-4222-a5e7-bd2f953a5763",
+          "create_ms": 1793625128255,
+          "exec_ms": 1793625128258,
+          "observed_gap_ms": 3,
+          "image": "/Applications/iTerm.app/Contents/MacOS/ShellLauncher"
+        },
+        {
+          "pid": 19008,
+          "process_object_id": "562706af-d398-40e5-bf92-9233de518476",
+          "create_ms": 1793625133686,
+          "exec_ms": 1793625133687,
+          "observed_gap_ms": 1,
+          "image": "/usr/bin/sw_vers"
+        },
+        {
+          "pid": 19009,
+          "process_object_id": "31aab4e5-beb3-40a5-85a2-9808faaf8a59",
+          "create_ms": 1793625134183,
+          "exec_ms": 1793625134186,
+          "observed_gap_ms": 3,
+          "image": "/usr/bin/uname"
+        },
+        {
+          "pid": 19010,
+          "process_object_id": "b60733d2-1be7-468e-9ffd-cd6aedd293fc",
+          "create_ms": 1793625134341,
+          "exec_ms": 1793625134342,
+          "observed_gap_ms": 1,
+          "image": "/bin/pwd"
+        },
+        {
+          "pid": 19725,
+          "process_object_id": "f7aa773e-2d90-4267-8815-5b53dac40984",
+          "create_ms": 1793625591486,
+          "exec_ms": 1793625591488,
+          "observed_gap_ms": 2,
+          "image": "/bin/sh"
+        }
+      ]
+    }
+  }
+}

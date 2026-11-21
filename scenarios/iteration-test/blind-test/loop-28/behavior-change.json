@@ -1,0 +1,13 @@
+{
+  "revision": 566,
+  "id": "installed-macos-os-files-consume-canonical-boot-facts",
+  "impact": "localized",
+  "domains": [
+    "macos-installed-provisioning",
+    "host-boot-chronology"
+  ],
+  "formats": [
+    "macos_endpoint_security"
+  ],
+  "summary": "Condition selected machine OS file installation ages on existing canonical host boot facts before lazy provisioning. Keep finite age/release support, shared binary facts, unknown/legacy compatibility and third-party placement."
+}

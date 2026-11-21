@@ -1,0 +1,27 @@
+{
+  "repeated_semantic_builder_cost": [
+    {
+      "bits": 2048,
+      "cold_seconds": 0.7932011659977434,
+      "mean_repeated_binding_build_seconds": 8.077100028458517e-06
+    },
+    {
+      "bits": 3072,
+      "cold_seconds": 1.3752309170013177,
+      "mean_repeated_binding_build_seconds": 7.837500015739352e-06
+    },
+    {
+      "bits": 4096,
+      "cold_seconds": 4.241415332999168,
+      "mean_repeated_binding_build_seconds": 8.45414997456828e-06
+    }
+  ],
+  "previous_colliding_identities_now_distinct": true,
+  "memo": {
+    "hits": 60,
+    "misses": 3,
+    "maxsize": 512,
+    "currsize": 3
+  },
+  "scope": "Engineering diagnostics, not blind authenticity scores"
+}

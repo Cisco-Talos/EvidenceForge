@@ -1,0 +1,507 @@
+{
+  "scope": "Descriptive state-conditioned protocol presence for positively service-classified sensor observations; absence alone is not a contradiction",
+  "sensors": {
+    "zeek-core": {
+      "source_sha256": {
+        "ssl.json": "9803e46bb5857c73c8232889a3558fb4a351b62edfc84593092fd878541e7954",
+        "http.json": "835484613bff43d78c02cca184a233ee8976c266ea7eb9c15f58f89406f9e829",
+        "conn.json": "cd2d2ca2402b659594e1638fff6551c2eb5899255eeb871ef5a05de7f86eea91"
+      },
+      "state_distribution": {
+        "ssl": {
+          "OTH": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "RSTO": {
+            "total": 21,
+            "with_protocol": 0,
+            "without_protocol": 21,
+            "missing_with_bidirectional_payload_no_gap": 9
+          },
+          "RSTR": {
+            "total": 21,
+            "with_protocol": 0,
+            "without_protocol": 21,
+            "missing_with_bidirectional_payload_no_gap": 19
+          },
+          "S1": {
+            "total": 4,
+            "with_protocol": 4
+          },
+          "S2": {
+            "total": 6,
+            "with_protocol": 0,
+            "without_protocol": 6,
+            "missing_with_bidirectional_payload_no_gap": 6
+          },
+          "S3": {
+            "total": 6,
+            "with_protocol": 0,
+            "without_protocol": 6,
+            "missing_with_bidirectional_payload_no_gap": 5
+          },
+          "SF": {
+            "total": 363,
+            "with_protocol": 363
+          }
+        },
+        "http": {
+          "SF": {
+            "total": 2600,
+            "with_protocol": 2581,
+            "without_protocol": 19,
+            "missing_with_bidirectional_payload_no_gap": 19
+          }
+        }
+      },
+      "missing_examples": [
+        {
+          "source_line": 217,
+          "uid": "C93ALntp8x2MqF6UEFz",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.474562,
+          "orig_bytes": 1050,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 241,
+          "uid": "Cf7dvvhbH588lydzHV",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.036879,
+          "orig_bytes": 3333,
+          "resp_bytes": 11288,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 696,
+          "uid": "CdTtzFcFHihqhuXekH6",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.415966,
+          "orig_bytes": 4977,
+          "resp_bytes": 2356,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 739,
+          "uid": "CKQEFCXPlUEui5VXNF",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.392927,
+          "orig_bytes": 664,
+          "resp_bytes": 3021,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 748,
+          "uid": "CBs93VfIsUTRRPpE94",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.052907,
+          "orig_bytes": 6839,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 825,
+          "uid": "CkVNAz9F1EbdqllsmnE",
+          "service": "ssl",
+          "state": "S3",
+          "duration": 1.28916,
+          "orig_bytes": 3500,
+          "resp_bytes": 30732,
+          "history": "ShADadf",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1550,
+          "uid": "CzH6hhjAW3XCjhE7QZ",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.900453,
+          "orig_bytes": 1807,
+          "resp_bytes": 18773,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1770,
+          "uid": "CPdlrNJJOanA0BCjj1",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.260182,
+          "orig_bytes": 2316,
+          "resp_bytes": 14773,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 2353,
+          "uid": "Ct4ML1VWExXrQz5f6E",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.126002,
+          "orig_bytes": 2076,
+          "resp_bytes": 986,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 2405,
+          "uid": "CWFDSADNPW5WeXlUhd",
+          "service": "ssl",
+          "state": "S3",
+          "duration": 1.219047,
+          "orig_bytes": 2922,
+          "resp_bytes": 27944,
+          "history": "ShADadf",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 2466,
+          "uid": "CoxEXqOuGyoQPEHdg",
+          "service": "ssl",
+          "state": "S2",
+          "duration": 0.342999,
+          "orig_bytes": 4881,
+          "resp_bytes": 20641,
+          "history": "ShADadF",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 2472,
+          "uid": "CI20TmNAuBs8yzC65a",
+          "service": "ssl",
+          "state": "S3",
+          "duration": 3.051531,
+          "orig_bytes": 5958,
+          "resp_bytes": 19561,
+          "history": "ShADadf",
+          "missed_bytes": 0
+        }
+      ]
+    },
+    "zeek-db": {
+      "source_sha256": {
+        "ssl.json": "499e1b85bf35bc2d9c2624cc2f3e1018b2d65a582043f07b883acf643c210f4c",
+        "http.json": "45576ae674f82e93040c50ed9621a0da1bf1d8712e5c90ab674afd9747c7db26",
+        "conn.json": "b920fa6e841231bb5ce62e9fc511813fa3cc15237369f06693436e7448bf0822"
+      },
+      "state_distribution": {
+        "ssl": {
+          "RSTO": {
+            "total": 2,
+            "with_protocol": 0,
+            "without_protocol": 2,
+            "missing_with_bidirectional_payload_no_gap": 2
+          },
+          "RSTR": {
+            "total": 2,
+            "with_protocol": 0,
+            "without_protocol": 2,
+            "missing_with_bidirectional_payload_no_gap": 2
+          },
+          "S3": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "SF": {
+            "total": 29,
+            "with_protocol": 29
+          }
+        },
+        "http": {
+          "SF": {
+            "total": 29,
+            "with_protocol": 29
+          }
+        }
+      },
+      "missing_examples": [
+        {
+          "source_line": 35,
+          "uid": "Cq2Slfq8DGMyb5F3PYd",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.416737,
+          "orig_bytes": 4977,
+          "resp_bytes": 2356,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 40,
+          "uid": "C6c7Y7ju8u9kRdvI1Yy",
+          "service": "ssl",
+          "state": "S3",
+          "duration": 1.289348,
+          "orig_bytes": 3500,
+          "resp_bytes": 30732,
+          "history": "ShADadf",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 169,
+          "uid": "CtTmhQbKXdbYqsQsp0",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 1.62569,
+          "orig_bytes": 2436,
+          "resp_bytes": 20416,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 295,
+          "uid": "C322IAwIfrfd46S4RW",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.229721,
+          "orig_bytes": 1878,
+          "resp_bytes": 2581,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 365,
+          "uid": "Cf3PXP19IaAvfYEypV",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.821351,
+          "orig_bytes": 1033,
+          "resp_bytes": 9830,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        }
+      ]
+    },
+    "zeek-dmz": {
+      "source_sha256": {
+        "ssl.json": "844f4d065f0c8994a1849632662503db84c8b62c1c12f0c5226a1c10c79a2645",
+        "http.json": "533023c044428081dfc1ca2668818771b4d0320e17041ee616e134293d739332",
+        "conn.json": "f486ef120854031b2b408b01dc8a6ed690f941120306be1c061e96b66d2594b6"
+      },
+      "state_distribution": {
+        "ssl": {
+          "OTH": {
+            "total": 7,
+            "with_protocol": 0,
+            "without_protocol": 7,
+            "missing_with_bidirectional_payload_no_gap": 7
+          },
+          "RSTO": {
+            "total": 60,
+            "with_protocol": 0,
+            "without_protocol": 60,
+            "missing_with_bidirectional_payload_no_gap": 10
+          },
+          "RSTR": {
+            "total": 40,
+            "with_protocol": 0,
+            "without_protocol": 40,
+            "missing_with_bidirectional_payload_no_gap": 40
+          },
+          "S1": {
+            "total": 9,
+            "with_protocol": 9
+          },
+          "S2": {
+            "total": 6,
+            "with_protocol": 0,
+            "without_protocol": 6,
+            "missing_with_bidirectional_payload_no_gap": 6
+          },
+          "S3": {
+            "total": 4,
+            "with_protocol": 0,
+            "without_protocol": 4,
+            "missing_with_bidirectional_payload_no_gap": 4
+          },
+          "SF": {
+            "total": 3139,
+            "with_protocol": 3139
+          }
+        },
+        "http": {
+          "RSTO": {
+            "total": 11,
+            "with_protocol": 0,
+            "without_protocol": 11,
+            "missing_with_bidirectional_payload_no_gap": 4
+          },
+          "RSTR": {
+            "total": 4,
+            "with_protocol": 0,
+            "without_protocol": 4,
+            "missing_with_bidirectional_payload_no_gap": 4
+          },
+          "S2": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "S3": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "SF": {
+            "total": 2882,
+            "with_protocol": 2870,
+            "without_protocol": 12,
+            "missing_with_bidirectional_payload_no_gap": 12
+          }
+        }
+      },
+      "missing_examples": [
+        {
+          "source_line": 135,
+          "uid": "CxCxy9b7fjroyxzcP1v",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.475166,
+          "orig_bytes": 1050,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 157,
+          "uid": "C8VAowjBBBpyd7fKgb",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.03688,
+          "orig_bytes": 3333,
+          "resp_bytes": 11288,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 168,
+          "uid": "CDKoGttp22BZxyD5YF",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.22495,
+          "orig_bytes": 398,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 344,
+          "uid": "CRa09ebkIG7IPLok9F",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.303066,
+          "orig_bytes": 2850,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 445,
+          "uid": "CSw0Di7Hp2mKKUeyVI",
+          "service": "ssl",
+          "state": "S2",
+          "duration": 1.454068,
+          "orig_bytes": 3501,
+          "resp_bytes": 28296,
+          "history": "ShADadF",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 526,
+          "uid": "Cux5W1F6LhCfStz2CcU",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 1.214992,
+          "orig_bytes": 292,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 567,
+          "uid": "C0R48UaS0pUnSDhMdd",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 1.618406,
+          "orig_bytes": 6373,
+          "resp_bytes": 6635,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 607,
+          "uid": "CH2ZqJvcqCRolEOIGyF",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.031095,
+          "orig_bytes": 416,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 627,
+          "uid": "ChZIwHVv41HaBJVXdnm",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.013364,
+          "orig_bytes": 168,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 645,
+          "uid": "C49F6AEzQ7OQPoCClY",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.103127,
+          "orig_bytes": 793,
+          "resp_bytes": 51,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 646,
+          "uid": "CHibA7H7mrwkhsQjExW",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.124472,
+          "orig_bytes": 778,
+          "resp_bytes": 7,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 655,
+          "uid": "CVHduylDJCuIRF4rvx",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.043812,
+          "orig_bytes": 535,
+          "resp_bytes": 65,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        }
+      ]
+    }
+  }
+}

@@ -267,7 +267,16 @@ def test_omitted_storage_compiles_duration_independent_diverse_defaults(
     assert any(volume.mount == "D:\\" for volume in first.volumes)
     assert any(volume.mount == "C:\\Mounts\\Data\\" for volume in first.volumes)
     assert first.manifest() == second.manifest()
-    assert all("population_resolution" not in share for share in first.manifest()["shares"])
+    for share in first.manifest()["shares"]:
+        resolution = share.get("population_resolution")
+        if resolution is None:
+            continue
+        assert share["preset"] == "dc_policy"
+        assert share["name"] in {"SYSVOL", "NETLOGON"}
+        assert resolution["capped"] is True
+        assert resolution["effective_file_count"] == share["file_count"]
+        assert share["file_count"] == resolution["realizable_file_count"]
+        assert share["file_count"] < resolution["requested_file_count"]
     assert first.share("FS-01.c_admin").files == ()
     assert "DC-01.backup" not in refs
 

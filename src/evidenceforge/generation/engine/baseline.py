@@ -58,6 +58,7 @@ from evidenceforge.generation.actions import (
     ScheduledScanOverlapRequest,
     dhcp_renewal_interval_seconds,
     dns_transport_close_headroom_seconds,
+    http_completed_transport_close_bound_seconds,
     http_response_parent_duration_floor,
     linux_sudo_intrinsic_close_headroom,
     network_transport_open_positive_headroom_seconds,
@@ -121,6 +122,7 @@ from evidenceforge.generation.activity.process_access_patterns import (
     pick_granted_access,
 )
 from evidenceforge.generation.activity.process_helpers import _posix_foreground_lifetime
+from evidenceforge.generation.activity.process_lifetimes import requested_report_lifetime
 from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
@@ -157,7 +159,15 @@ from evidenceforge.generation.world_model import (
     normalize_database_service,
 )
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.models.scenario import EmailMessageEventSpec, Persona, System, User
+from evidenceforge.models.scenario import (
+    EmailMessageEventSpec,
+    Persona,
+    SmbActivityEventSpec,
+    SmbFileSelector,
+    SmbShareLocation,
+    System,
+    User,
+)
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -255,6 +265,7 @@ class _BaselineSmbIntent:
     orig_bytes: int
     resp_bytes: int
     emit_dns: bool
+    selector: SmbFileSelector | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -906,7 +917,9 @@ def _linux_sudo_command_runtime(command: str, rng: random.Random) -> timedelta:
         tokens = command.split()
     exe = tokens[0].rsplit("/", 1)[-1].lower() if tokens else ""
 
-    if exe in {"vmstat", "iostat"}:
+    report_bounds = requested_report_lifetime(exe, command, os_category="linux")
+
+    if report_bounds is not None or exe in {"vmstat", "iostat"}:
         numeric_args: list[float] = []
         for token in tokens[1:]:
             try:
@@ -916,7 +929,9 @@ def _linux_sudo_command_runtime(command: str, rng: random.Random) -> timedelta:
         if len(numeric_args) >= 2:
             delay = max(0.25, numeric_args[-2])
             count = max(1.0, numeric_args[-1])
-            return timedelta(seconds=delay * count + rng.uniform(0.18, 0.95))
+            base = 0.0 if report_bounds is not None else delay * count
+            completion_bounds = report_bounds if report_bounds is not None else (0.18, 0.95)
+            return timedelta(seconds=base + rng.uniform(*completion_bounds))
         if len(numeric_args) == 1:
             return timedelta(seconds=max(0.8, numeric_args[0]) + rng.uniform(0.2, 1.4))
 
@@ -4642,6 +4657,13 @@ class BaselineMixin:
             direct_bound = max(
                 direct_bound,
                 tls_generated_family_close_bound_seconds(
+                    caller_duration_maximum=requested_duration_max
+                ),
+            )
+        elif normalized_service == "http":
+            direct_bound = max(
+                direct_bound,
+                http_completed_transport_close_bound_seconds(
                     caller_duration_maximum=requested_duration_max
                 ),
             )
@@ -9637,6 +9659,39 @@ class BaselineMixin:
             targets.extend([fs.ip] * weight)
         return targets, fs_targets
 
+    def _eligible_baseline_smb_tasks(
+        self,
+        *,
+        shares: list[Any],
+        actor: User,
+        system: System,
+        time: datetime,
+        operation_profile: str,
+    ) -> list[tuple[Any, SmbActivityEventSpec]]:
+        """Filter task/share candidates before the producer chooses its target."""
+
+        eligible: list[tuple[Any, SmbActivityEventSpec]] = []
+        for share in shares:
+            profile = (
+                "read"
+                if share.preset == "dc_policy" and operation_profile == "write"
+                else operation_profile
+            )
+            operation = {"read": "read", "write": "update", "metadata": "browse"}[profile]
+            spec = SmbActivityEventSpec(
+                type="smb_activity",
+                operation=operation,
+                purpose="interactive",
+                target=SmbShareLocation(type="share", share=share.ref),
+            )
+            refined = self.activity_generator.automatic_smb_task_spec(
+                spec=spec, actor=actor, parent_system=system, time=time
+            )
+            if refined is not None:
+                eligible.append((share, refined))
+        dc_tasks = [item for item in eligible if item[0].preset == "dc_policy"]
+        return dc_tasks or eligible
+
     def _plan_baseline_smb_activity(
         self,
         current_hour: datetime,
@@ -9759,17 +9814,21 @@ class BaselineMixin:
                     ]
                     if not server_shares:
                         continue
+                selector = None
                 if actor is not None and server_shares:
-                    dc_shares = [share for share in server_shares if share.preset == "dc_policy"]
-                    selected_share = rng.choice(dc_shares or server_shares)
-                    if dc_shares and operation_profile == "write":
-                        operation_profile = "read"
+                    tasks = self._eligible_baseline_smb_tasks(
+                        shares=server_shares,
+                        actor=actor,
+                        system=system,
+                        time=timestamp,
+                        operation_profile=operation_profile,
+                    )
+                    if not tasks:
+                        continue
+                    selected_share, spec = rng.choice(tasks)
                     share_ref = selected_share.ref
-                    operation = {
-                        "read": "read",
-                        "write": "update",
-                        "metadata": "browse",
-                    }[operation_profile]
+                    operation = spec.operation
+                    selector = spec.target.selector
 
                 intents.append(
                     _BaselineSmbIntent(
@@ -9786,6 +9845,7 @@ class BaselineMixin:
                         orig_bytes=orig_bytes,
                         resp_bytes=resp_bytes,
                         emit_dns=rng.random() > 0.02,
+                        selector=selector,
                     )
                 )
                 sequence += 1
@@ -9883,7 +9943,9 @@ class BaselineMixin:
                     type="smb_activity",
                     operation=intent.operation,
                     purpose="interactive",
-                    target=SmbShareLocation(type="share", share=intent.share_ref),
+                    target=SmbShareLocation(
+                        type="share", share=intent.share_ref, selector=intent.selector
+                    ),
                 )
                 preparation = self.activity_generator.prepare_smb_activity(
                     spec=spec,
@@ -9960,11 +10022,6 @@ class BaselineMixin:
         dc_ips: list[str],
     ) -> None:
         """Execute Windows-only SMB through the shared occurrence arrival owner."""
-
-        from evidenceforge.models.scenario import (
-            SmbActivityEventSpec,
-            SmbShareLocation,
-        )
 
         smb_targets, _file_servers = self._build_smb_targets(system, dc_ips)
         if not smb_targets:
@@ -10052,21 +10109,16 @@ class BaselineMixin:
             preparation = None
             canonical_duration = duration
             if actor is not None and server_shares:
-                dc_shares = [share for share in server_shares if share.preset == "dc_policy"]
-                share = rng.choice(dc_shares or server_shares)
-                if dc_shares and operation_profile == "write":
-                    operation_profile = "read"
-                operation = {
-                    "read": "read",
-                    "write": "update",
-                    "metadata": "browse",
-                }[operation_profile]
-                spec = SmbActivityEventSpec(
-                    type="smb_activity",
-                    operation=operation,
-                    purpose="interactive",
-                    target=SmbShareLocation(type="share", share=share.ref),
+                tasks = self._eligible_baseline_smb_tasks(
+                    shares=server_shares,
+                    actor=actor,
+                    system=system,
+                    time=timestamp,
+                    operation_profile=operation_profile,
                 )
+                if not tasks:
+                    continue
+                share, spec = rng.choice(tasks)
                 preparation = self.activity_generator.prepare_smb_activity(
                     spec=spec,
                     actor=actor,
@@ -12109,22 +12161,25 @@ class BaselineMixin:
                         self.state_manager.set_current_time(ts)
 
                         username = f"{client.hostname}$"
-                        self.activity_generator.generate_connection(
-                            src_ip=client.ip,
-                            dst_ip=dc_ips[_dc_idx],
-                            time=ts,
-                            dst_port=88,
-                            proto="tcp",
-                            service="kerberos",
-                            duration=rng.uniform(0.001, 0.04),
-                            orig_bytes=rng.randint(180, 900),
-                            resp_bytes=rng.randint(80, 1500),
-                            source_system=client,
-                            pid=krb_pid,
-                            emit_dns=False,
-                            kerberos_audit_mode="tgt",
-                            kerberos_audit_username=username,
-                        )
+                        if self.activity_generator._should_emit_visible_kerberos_tgt(
+                            username, client.ip, dc_hostname, ts, rng
+                        ):
+                            self.activity_generator.generate_connection(
+                                src_ip=client.ip,
+                                dst_ip=dc_ips[_dc_idx],
+                                time=ts,
+                                dst_port=88,
+                                proto="tcp",
+                                service="kerberos",
+                                duration=rng.uniform(0.001, 0.04),
+                                orig_bytes=rng.randint(180, 900),
+                                resp_bytes=rng.randint(80, 1500),
+                                source_system=client,
+                                pid=krb_pid,
+                                emit_dns=False,
+                                kerberos_audit_mode="tgt",
+                                kerberos_audit_username=username,
+                            )
                         if rng.random() < 0.22:
                             num_tgs = 0
                         else:

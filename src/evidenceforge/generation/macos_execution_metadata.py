@@ -144,11 +144,16 @@ class MacosExecutionMetadataProducer:
             if inode_range.max - inode_range.min + 1 < inode_span:
                 raise StateError("Mac directory inode range is too small for modeled directories")
             first_inode = inode_rng.randint(inode_range.min, inode_range.max - inode_span + 1)
-            volume = filesystem.directory_volume(host, first_inode)
+            root_inode = 2 if profile.filesystem_root_identity == "apfs_presented_root" else None
+            if root_inode is not None and inode_range.min <= root_inode <= inode_range.max:
+                raise StateError("Ordinary directory allocation overlaps the reserved root inode")
+            volume = filesystem.directory_volume(host, first_inode, reserved_inode=root_inode)
             if volume.device == profile.terminal.device:
                 raise StateError("Modeled devfs cannot reuse the installed filesystem device")
             for offset, (path, (uid, gid)) in enumerate(sorted(candidates.items())):
-                inode = first_inode + offset
+                inode = (
+                    root_inode if path == "/" and root_inode is not None else first_inode + offset
+                )
                 age_rng = random.Random(
                     _stable_seed(
                         f"macos-execution-directory-age:{host.casefold()}:{path.casefold()}"

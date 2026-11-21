@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
-from evidenceforge.config.schemas import ScheduledTaskEntry, SystemServiceEntry
+from evidenceforge.config.schemas import LinuxConsolePolicy, ScheduledTaskEntry, SystemServiceEntry
 from evidenceforge.events.content_identity import (
     CompiledServiceDeploymentIdentity,
     CompiledTaskDeploymentIdentity,
@@ -29,7 +29,13 @@ _CACHED_DATA: dict[str, Any] | None = None
 
 def _merge_system_processes(default: dict, overlay: dict) -> dict:
     """Merge system processes overlay with package defaults."""
-    return deep_merge_dict(default, overlay)
+    merged = deep_merge_dict(default, overlay)
+    console = overlay.get("linux_console")
+    if isinstance(console, dict) and "terminals" in console:
+        # An inventory is a complete set of slots, rather than an append-only
+        # activity pool. Preserve all established sibling list merge contracts.
+        merged["linux_console"]["terminals"] = console["terminals"]
+    return merged
 
 
 def load_system_processes() -> dict[str, Any]:
@@ -44,6 +50,12 @@ def load_system_processes() -> dict[str, Any]:
         _merge_system_processes,
     )
     return _CACHED_DATA
+
+
+def linux_console_policy() -> LinuxConsolePolicy | None:
+    """Read optional frozen console intent; absent legacy snapshots stay unchanged."""
+    raw = load_system_processes().get("linux_console")
+    return None if raw is None else LinuxConsolePolicy.model_validate(raw)
 
 
 _CACHED_BINARY_EXES: set[str] | None = None

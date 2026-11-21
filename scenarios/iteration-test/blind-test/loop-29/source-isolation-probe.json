@@ -1,0 +1,27 @@
+{
+  "previous_loop": 28,
+  "current_loop": 29,
+  "file_count": 115,
+  "changed_files": 5,
+  "changed_source_counts": {
+    "web_access.log": 1,
+    "cisco_asa.log": 1,
+    "conn.json": 1,
+    "files.json": 1,
+    "http.json": 1
+  },
+  "changed_paths": [
+    "WEB-EXT-01.meridianhcs.local/web_access.log",
+    "fw-perimeter/cisco_asa.log",
+    "zeek-dmz/conn.json",
+    "zeek-dmz/files.json",
+    "zeek-dmz/http.json"
+  ],
+  "non_mac_changes": [
+    "WEB-EXT-01.meridianhcs.local/web_access.log",
+    "fw-perimeter/cisco_asa.log",
+    "zeek-dmz/conn.json",
+    "zeek-dmz/files.json",
+    "zeek-dmz/http.json"
+  ]
+}

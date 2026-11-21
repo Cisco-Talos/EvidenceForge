@@ -1,0 +1,519 @@
+{
+  "scope": "Sixteen representative POSIX host schedules, full week, no production modification. Candidate models minimum allocation churn plus bounded nonuniform host/hour workload counts, preserving lane capacity without censoring low draws into an atom. Rate increase and the retained safety floor are explicit model limitations.",
+  "results": {
+    "before": {
+      "hosts": [
+        {
+          "host": "POSIX-00",
+          "min_minute": 94,
+          "max_minute": 929,
+          "min_10minute": 940,
+          "max_10minute": 5360,
+          "at_capacity_minutes": 5016,
+          "mean_minute": 160.71984126984128,
+          "weekly_total": 1620056,
+          "unique_minute_counts": 527,
+          "prefix_sha256": "d7f86c7096c8420baf772b0cc67fae84b703a6b74b0d1034b32da9f883dddb39"
+        },
+        {
+          "host": "POSIX-01",
+          "min_minute": 94,
+          "max_minute": 1078,
+          "min_10minute": 940,
+          "max_10minute": 5764,
+          "at_capacity_minutes": 4711,
+          "mean_minute": 171.99255952380952,
+          "weekly_total": 1733685,
+          "unique_minute_counts": 584,
+          "prefix_sha256": "cf10bd01dd63eab4fa35c648dcceb230d3168d38eb8537c2209b593a84af3aa6"
+        },
+        {
+          "host": "POSIX-02",
+          "min_minute": 94,
+          "max_minute": 931,
+          "min_10minute": 940,
+          "max_10minute": 4064,
+          "at_capacity_minutes": 5782,
+          "mean_minute": 143.57063492063492,
+          "weekly_total": 1447192,
+          "unique_minute_counts": 481,
+          "prefix_sha256": "f0fe6ff2fa1a4d64349243fb33c602adacea6b1d850895b7808dd0b919a166e6"
+        },
+        {
+          "host": "POSIX-03",
+          "min_minute": 94,
+          "max_minute": 1120,
+          "min_10minute": 940,
+          "max_10minute": 6274,
+          "at_capacity_minutes": 3893,
+          "mean_minute": 199.01180555555555,
+          "weekly_total": 2006039,
+          "unique_minute_counts": 634,
+          "prefix_sha256": "a805c5eef6aac3fdb1ddea11ad5d481cca410db7cdcb40f2529ea44e5af9bf79"
+        },
+        {
+          "host": "POSIX-04",
+          "min_minute": 94,
+          "max_minute": 1106,
+          "min_10minute": 940,
+          "max_10minute": 5536,
+          "at_capacity_minutes": 4307,
+          "mean_minute": 184.0954365079365,
+          "weekly_total": 1855682,
+          "unique_minute_counts": 595,
+          "prefix_sha256": "a44627494c91d73dbde7900ac1ca3c02430bd90ae3a4fca33ab36cb2d5790a04"
+        },
+        {
+          "host": "POSIX-05",
+          "min_minute": 94,
+          "max_minute": 1133,
+          "min_10minute": 940,
+          "max_10minute": 6385,
+          "at_capacity_minutes": 4215,
+          "mean_minute": 186.07757936507937,
+          "weekly_total": 1875662,
+          "unique_minute_counts": 616,
+          "prefix_sha256": "74a36501b9cbee9d44298c0763fb13dfbf629cbdbfad43e62630f099b87676e1"
+        },
+        {
+          "host": "POSIX-06",
+          "min_minute": 94,
+          "max_minute": 1125,
+          "min_10minute": 940,
+          "max_10minute": 5837,
+          "at_capacity_minutes": 4092,
+          "mean_minute": 193.81061507936508,
+          "weekly_total": 1953611,
+          "unique_minute_counts": 630,
+          "prefix_sha256": "df22a67eef7886ce502398bf20a83ec59a037445a571d4f0ee1189a5423dd418"
+        },
+        {
+          "host": "POSIX-07",
+          "min_minute": 94,
+          "max_minute": 1156,
+          "min_10minute": 940,
+          "max_10minute": 6199,
+          "at_capacity_minutes": 3806,
+          "mean_minute": 203.3095238095238,
+          "weekly_total": 2049360,
+          "unique_minute_counts": 648,
+          "prefix_sha256": "2ee17a4b56ca5a9836d561245be24f1daf5b9e3fdcc7628279cce6379c5e8c6e"
+        },
+        {
+          "host": "POSIX-08",
+          "min_minute": 94,
+          "max_minute": 920,
+          "min_10minute": 940,
+          "max_10minute": 5836,
+          "at_capacity_minutes": 4213,
+          "mean_minute": 184.71626984126985,
+          "weekly_total": 1861940,
+          "unique_minute_counts": 614,
+          "prefix_sha256": "41ffe1d22573a5ab06017c1e87a1dd11b50c25483aa9280083356a625ec58285"
+        },
+        {
+          "host": "POSIX-09",
+          "min_minute": 94,
+          "max_minute": 915,
+          "min_10minute": 940,
+          "max_10minute": 5143,
+          "at_capacity_minutes": 5016,
+          "mean_minute": 162.34761904761905,
+          "weekly_total": 1636464,
+          "unique_minute_counts": 537,
+          "prefix_sha256": "ddc74102769031097f24c697ae42438e7ab8e8e22875a2e76a4724a7ecde8c3e"
+        },
+        {
+          "host": "POSIX-10",
+          "min_minute": 94,
+          "max_minute": 1127,
+          "min_10minute": 940,
+          "max_10minute": 5833,
+          "at_capacity_minutes": 3639,
+          "mean_minute": 208.109623015873,
+          "weekly_total": 2097745,
+          "unique_minute_counts": 649,
+          "prefix_sha256": "8b90ecdf8dc7a78b349dd104306a9f5374ad2fd3de534d96ea0b2f1b61acf5e8"
+        },
+        {
+          "host": "POSIX-11",
+          "min_minute": 94,
+          "max_minute": 1127,
+          "min_10minute": 940,
+          "max_10minute": 6282,
+          "at_capacity_minutes": 3619,
+          "mean_minute": 209.13859126984127,
+          "weekly_total": 2108117,
+          "unique_minute_counts": 654,
+          "prefix_sha256": "c152d1e1e54928d74057b992c50e173c406a246ad77d92247865f5b34a04eb36"
+        },
+        {
+          "host": "POSIX-12",
+          "min_minute": 94,
+          "max_minute": 1043,
+          "min_10minute": 940,
+          "max_10minute": 4748,
+          "at_capacity_minutes": 5114,
+          "mean_minute": 160.03303571428572,
+          "weekly_total": 1613133,
+          "unique_minute_counts": 519,
+          "prefix_sha256": "17748fa6a227fd0df1d0e70c6f7884f68d247a96bddbc858fcd741b65a04448a"
+        },
+        {
+          "host": "POSIX-13",
+          "min_minute": 94,
+          "max_minute": 1114,
+          "min_10minute": 940,
+          "max_10minute": 6077,
+          "at_capacity_minutes": 4335,
+          "mean_minute": 184.3954365079365,
+          "weekly_total": 1858706,
+          "unique_minute_counts": 625,
+          "prefix_sha256": "01efdf3fff53712579d316bbccadd2087e76b795d7cde2c0e8a17cb8edb72de7"
+        },
+        {
+          "host": "POSIX-14",
+          "min_minute": 94,
+          "max_minute": 872,
+          "min_10minute": 940,
+          "max_10minute": 4828,
+          "at_capacity_minutes": 5452,
+          "mean_minute": 151.98680555555555,
+          "weekly_total": 1532027,
+          "unique_minute_counts": 501,
+          "prefix_sha256": "69ffd1f850528d5872ae6d8d5bda9b878aa030674a9bb6bb9cc32e9c97b9a951"
+        },
+        {
+          "host": "POSIX-15",
+          "min_minute": 94,
+          "max_minute": 900,
+          "min_10minute": 940,
+          "max_10minute": 5470,
+          "at_capacity_minutes": 5067,
+          "mean_minute": 159.94613095238094,
+          "weekly_total": 1612257,
+          "unique_minute_counts": 511,
+          "prefix_sha256": "4b39a5332560f8a025ab228eb139f797d1d07d6054610ed6b0b4cb229d8e215e"
+        }
+      ],
+      "most_common_10minute_deltas": [
+        [
+          940,
+          3311
+        ],
+        [
+          945,
+          38
+        ],
+        [
+          943,
+          38
+        ],
+        [
+          941,
+          37
+        ],
+        [
+          944,
+          36
+        ],
+        [
+          947,
+          32
+        ],
+        [
+          942,
+          31
+        ],
+        [
+          1002,
+          23
+        ],
+        [
+          951,
+          23
+        ],
+        [
+          1364,
+          23
+        ],
+        [
+          992,
+          22
+        ],
+        [
+          1358,
+          22
+        ]
+      ],
+      "tenminute_minimums": [
+        940
+      ],
+      "at_capacity_minutes": 72277
+    },
+    "candidate": {
+      "hosts": [
+        {
+          "host": "POSIX-00",
+          "min_minute": 102,
+          "max_minute": 975,
+          "min_10minute": 1101,
+          "max_10minute": 5883,
+          "at_capacity_minutes": 0,
+          "mean_minute": 229.96438492063493,
+          "weekly_total": 2318041,
+          "unique_minute_counts": 601,
+          "prefix_sha256": "22d4749b810af52e45c662caa48e848d98aec0a45f732d9f9ff0bac5d78313cc"
+        },
+        {
+          "host": "POSIX-01",
+          "min_minute": 104,
+          "max_minute": 1113,
+          "min_10minute": 1111,
+          "max_10minute": 6259,
+          "at_capacity_minutes": 0,
+          "mean_minute": 244.49543650793652,
+          "weekly_total": 2464514,
+          "unique_minute_counts": 633,
+          "prefix_sha256": "bec09dffe7d06ce26749156b24f22fded27d5f53670bf7f7c02d32e177f0e7a5"
+        },
+        {
+          "host": "POSIX-02",
+          "min_minute": 101,
+          "max_minute": 883,
+          "min_10minute": 1070,
+          "max_10minute": 4991,
+          "at_capacity_minutes": 0,
+          "mean_minute": 208.17003968253968,
+          "weekly_total": 2098354,
+          "unique_minute_counts": 539,
+          "prefix_sha256": "aa2b108fdff1e0da13e6635430ae874cf6bf83faa1177e419d08857176b8fae6"
+        },
+        {
+          "host": "POSIX-03",
+          "min_minute": 106,
+          "max_minute": 1166,
+          "min_10minute": 1149,
+          "max_10minute": 7312,
+          "at_capacity_minutes": 0,
+          "mean_minute": 275.77242063492065,
+          "weekly_total": 2779786,
+          "unique_minute_counts": 704,
+          "prefix_sha256": "bce84bd64bf2e037dabc890459d60169b843c629029330eddd0be7a7bee1b153"
+        },
+        {
+          "host": "POSIX-04",
+          "min_minute": 105,
+          "max_minute": 1072,
+          "min_10minute": 1125,
+          "max_10minute": 6522,
+          "at_capacity_minutes": 0,
+          "mean_minute": 261.64136904761904,
+          "weekly_total": 2637345,
+          "unique_minute_counts": 691,
+          "prefix_sha256": "bf6cc0656766c96ed70474591809b79d7ebaf3f88263bbd57f5f1969ed9cc447"
+        },
+        {
+          "host": "POSIX-05",
+          "min_minute": 105,
+          "max_minute": 1048,
+          "min_10minute": 1131,
+          "max_10minute": 6715,
+          "at_capacity_minutes": 0,
+          "mean_minute": 263.1722222222222,
+          "weekly_total": 2652776,
+          "unique_minute_counts": 665,
+          "prefix_sha256": "5e93fa6ea95e2eb0ccff5c606f61a9cf3e4e06f6c704ce9e29bdad05aa1a9551"
+        },
+        {
+          "host": "POSIX-06",
+          "min_minute": 106,
+          "max_minute": 1126,
+          "min_10minute": 1147,
+          "max_10minute": 6573,
+          "at_capacity_minutes": 0,
+          "mean_minute": 270.49355158730157,
+          "weekly_total": 2726575,
+          "unique_minute_counts": 684,
+          "prefix_sha256": "5238029373fcbaaf53feb0ece8ea9c1e6ae42d82f09acc587c5a6b170aec0366"
+        },
+        {
+          "host": "POSIX-07",
+          "min_minute": 106,
+          "max_minute": 1234,
+          "min_10minute": 1159,
+          "max_10minute": 7369,
+          "at_capacity_minutes": 0,
+          "mean_minute": 282.2363095238095,
+          "weekly_total": 2844942,
+          "unique_minute_counts": 698,
+          "prefix_sha256": "c72aa014229c3f1778b7f7e1f1c577e7f212fe7213f66c14f874ee268663b20f"
+        },
+        {
+          "host": "POSIX-08",
+          "min_minute": 105,
+          "max_minute": 1144,
+          "min_10minute": 1124,
+          "max_10minute": 6750,
+          "at_capacity_minutes": 0,
+          "mean_minute": 259.75198412698415,
+          "weekly_total": 2618300,
+          "unique_minute_counts": 669,
+          "prefix_sha256": "21bfca0e2a110a55c9b7995ec0d84658c7aa666b41238ba9048e78643672b3da"
+        },
+        {
+          "host": "POSIX-09",
+          "min_minute": 102,
+          "max_minute": 1030,
+          "min_10minute": 1101,
+          "max_10minute": 5853,
+          "at_capacity_minutes": 0,
+          "mean_minute": 232.2904761904762,
+          "weekly_total": 2341488,
+          "unique_minute_counts": 596,
+          "prefix_sha256": "b0050c570477d95eebd2e7dec43e9eb2feaf4afcf00bf51f36dce848ea5f6e31"
+        },
+        {
+          "host": "POSIX-10",
+          "min_minute": 106,
+          "max_minute": 1199,
+          "min_10minute": 1179,
+          "max_10minute": 6958,
+          "at_capacity_minutes": 0,
+          "mean_minute": 286.4117063492063,
+          "weekly_total": 2887030,
+          "unique_minute_counts": 712,
+          "prefix_sha256": "732ccda48148c12657494d09febf193e109552f45ad4c7c9a53dc8e5b5332583"
+        },
+        {
+          "host": "POSIX-11",
+          "min_minute": 107,
+          "max_minute": 1176,
+          "min_10minute": 1157,
+          "max_10minute": 7429,
+          "at_capacity_minutes": 0,
+          "mean_minute": 288.5260912698413,
+          "weekly_total": 2908343,
+          "unique_minute_counts": 732,
+          "prefix_sha256": "031ebc9f49856662883cf636dad64dc426613325b044b260a4e77067e68ab515"
+        },
+        {
+          "host": "POSIX-12",
+          "min_minute": 103,
+          "max_minute": 1055,
+          "min_10minute": 1086,
+          "max_10minute": 6284,
+          "at_capacity_minutes": 0,
+          "mean_minute": 228.4579365079365,
+          "weekly_total": 2302856,
+          "unique_minute_counts": 593,
+          "prefix_sha256": "857f9d511fef68b82988696f792751c9128ad1bc16d7530b6b77d39fb4961b59"
+        },
+        {
+          "host": "POSIX-13",
+          "min_minute": 105,
+          "max_minute": 1056,
+          "min_10minute": 1128,
+          "max_10minute": 6661,
+          "at_capacity_minutes": 0,
+          "mean_minute": 259.3340277777778,
+          "weekly_total": 2614087,
+          "unique_minute_counts": 668,
+          "prefix_sha256": "732473be9c5bb52199b3689481c68d827fd2215385d7860a35fc5fd14b424a22"
+        },
+        {
+          "host": "POSIX-14",
+          "min_minute": 102,
+          "max_minute": 955,
+          "min_10minute": 1066,
+          "max_10minute": 5543,
+          "at_capacity_minutes": 0,
+          "mean_minute": 218.84037698412698,
+          "weekly_total": 2205911,
+          "unique_minute_counts": 554,
+          "prefix_sha256": "6ee2e41e58b99043e9639dd0d5b01ab23f26932c34b706b2b722744acf626e62"
+        },
+        {
+          "host": "POSIX-15",
+          "min_minute": 102,
+          "max_minute": 1103,
+          "min_10minute": 1099,
+          "max_10minute": 5736,
+          "at_capacity_minutes": 0,
+          "mean_minute": 229.66517857142858,
+          "weekly_total": 2315025,
+          "unique_minute_counts": 610,
+          "prefix_sha256": "c7cb5d49423b65f75fa6fd1deaa784efb7372737511d63363e45922049083b25"
+        }
+      ],
+      "most_common_10minute_deltas": [
+        [
+          1196,
+          22
+        ],
+        [
+          1200,
+          20
+        ],
+        [
+          1222,
+          18
+        ],
+        [
+          1166,
+          17
+        ],
+        [
+          1177,
+          17
+        ],
+        [
+          1188,
+          17
+        ],
+        [
+          1223,
+          16
+        ],
+        [
+          1175,
+          16
+        ],
+        [
+          1779,
+          16
+        ],
+        [
+          1221,
+          16
+        ],
+        [
+          1366,
+          15
+        ],
+        [
+          1414,
+          15
+        ]
+      ],
+      "tenminute_minimums": [
+        1066,
+        1070,
+        1086,
+        1099,
+        1101,
+        1111,
+        1124,
+        1125,
+        1128,
+        1131,
+        1147,
+        1149,
+        1157,
+        1159,
+        1179
+      ],
+      "at_capacity_minutes": 0
+    }
+  }
+}

@@ -283,6 +283,13 @@ root_environment:
   - "LOGNAME=root"
   - "SHELL=/bin/zsh"
   - "LANG=en_US.UTF-8"
+# Presented root directory identity, qualified by fixed public-path stat on
+# macOS27arm64 and APFS reserved root semantics. Other directory allocation and
+# stat facts remain modeled; this does not select a full APFS simulation.
+filesystem_root_identity: apfs_presented_root
+# Resolve native generations from committed fork/exec facts plus the existing
+# canonical hidden POSIX process-birth history, before source filtering.
+native_generation_history: posix_hidden_births
 directory_inode_range: {min: 1099511627776, max: 2199023255552}
 directory_permissions: 493 # 0755
 directory_size_bytes: 128

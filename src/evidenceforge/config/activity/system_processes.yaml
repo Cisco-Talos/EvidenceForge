@@ -1565,3 +1565,10 @@ system_binaries:
     - exe: "pip3"
       path: "/usr/bin/pip3"
       release_policy: host_build
+
+# systemd-style virtual consoles. This is configured availability, not a claim
+# that all terminals are always observed or have an active login.
+linux_console:
+  terminals: [tty1, tty2, tty3, tty4, tty5, tty6]
+  getty_image: /sbin/agetty
+  login_image: /bin/login

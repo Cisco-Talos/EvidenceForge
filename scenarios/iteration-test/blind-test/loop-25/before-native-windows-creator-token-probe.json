@@ -1,0 +1,10 @@
+{
+  "scope": "Native 4688 Creator/Target Subject census, uniquely matched Sysmon child LUID. Populated target does not prove arbitrary real Windows requesting-thread semantics.",
+  "counts": {
+    "security_process_create": 931,
+    "populated_target_subject": 0,
+    "unique_sysmon_joins": 927,
+    "child_effective_logon_mismatches": 0
+  },
+  "examples": []
+}

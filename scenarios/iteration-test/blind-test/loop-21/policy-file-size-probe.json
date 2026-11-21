@@ -1,0 +1,312 @@
+{
+  "scope": "Purpose/type-conditioned SMB metadata size observations and distinct (path,size) versions. Repeated accesses are separated, contents unavailable, explicit large files are not declared impossible.",
+  "sensors": {
+    "zeek-core": {
+      "source_sha256": "8a9da3a3a2908755183f736f9f488a2f34e2f54664ec0c1eb9d15d918e2666ca",
+      "size_populations": {
+        "policy_share": {
+          "observations": 54,
+          "unique_paths": 33,
+          "unique_path_size_versions": 33,
+          "observed_above_1MiB": 0,
+          "unique_versions_above_1MiB": 0,
+          "by_extension": {
+            ".cmd": {
+              "observations": 9,
+              "unique_path_size_versions": 4,
+              "observed_above_1MiB": 0,
+              "unique_versions_above_1MiB": 0,
+              "median_observed_size": 3327,
+              "max_observed_size": 3752
+            },
+            ".inf": {
+              "observations": 3,
+              "unique_path_size_versions": 2,
+              "observed_above_1MiB": 0,
+              "unique_versions_above_1MiB": 0,
+              "median_observed_size": 9246,
+              "max_observed_size": 9246
+            },
+            ".ini": {
+              "observations": 5,
+              "unique_path_size_versions": 4,
+              "observed_above_1MiB": 0,
+              "unique_versions_above_1MiB": 0,
+              "median_observed_size": 55,
+              "max_observed_size": 1023
+            },
+            ".pol": {
+              "observations": 8,
+              "unique_path_size_versions": 8,
+              "observed_above_1MiB": 0,
+              "unique_versions_above_1MiB": 0,
+              "median_observed_size": 12348.0,
+              "max_observed_size": 32376
+            },
+            ".ps1": {
+              "observations": 22,
+              "unique_path_size_versions": 8,
+              "observed_above_1MiB": 0,
+              "unique_versions_above_1MiB": 0,
+              "median_observed_size": 8894.5,
+              "max_observed_size": 17341
+            },
+            ".xml": {
+              "observations": 7,
+              "unique_path_size_versions": 7,
+              "observed_above_1MiB": 0,
+              "unique_versions_above_1MiB": 0,
+              "median_observed_size": 7822,
+              "max_observed_size": 13083
+            }
+          },
+          "largest_witnesses": [
+            {
+              "line": 257,
+              "uid": "CvFkMJgdlMZAN5RVP",
+              "path": "\\\\DC-01\\SYSVOL",
+              "name": "meridianhcs.local\\Policies\\{50BAB6B8-28FA-4A2E-A5BD-0F85FD5A1959}\\Machine\\Registry.pol",
+              "extension": ".pol",
+              "size": 32376
+            },
+            {
+              "line": 62,
+              "uid": "CDjHFIPMSunrYEPDsQm",
+              "path": "\\\\DC-01\\SYSVOL",
+              "name": "meridianhcs.local\\Policies\\{C936ABE9-81FB-4FAD-B106-EFEFE8B7FA0F}\\Machine\\Registry.pol",
+              "extension": ".pol",
+              "size": 26699
+            },
+            {
+              "line": 15,
+              "uid": "Ck1Z2Wq38dNPQ2o2JVS",
+              "path": "\\\\DC-01\\NETLOGON",
+              "name": "Maintenance\\Collect-LogonDiagnostics.ps1",
+              "extension": ".ps1",
+              "size": 17341
+            },
+            {
+              "line": 82,
+              "uid": "CJge4wCCUVzwBuM4O",
+              "path": "\\\\DC-01\\NETLOGON",
+              "name": "Maintenance\\Collect-LogonDiagnostics.ps1",
+              "extension": ".ps1",
+              "size": 17341
+            },
+            {
+              "line": 92,
+              "uid": "CJlx7oIGhtPi42DrkF",
+              "path": "\\\\DC-02\\NETLOGON",
+              "name": "Maintenance\\Collect-LogonDiagnostics.ps1",
+              "extension": ".ps1",
+              "size": 17341
+            },
+            {
+              "line": 176,
+              "uid": "C91Zaz8SUP79Tsw3h0",
+              "path": "\\\\DC-02\\NETLOGON",
+              "name": "Maintenance\\Collect-LogonDiagnostics.ps1",
+              "extension": ".ps1",
+              "size": 17341
+            },
+            {
+              "line": 1,
+              "uid": "CG3rsn2VGhnN5pCqts",
+              "path": "\\\\DC-02\\SYSVOL",
+              "name": "meridianhcs.local\\Policies\\{6AC1786C-016F-11D2-945F-00C04FB984F9}\\Machine\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
+              "extension": ".xml",
+              "size": 13083
+            },
+            {
+              "line": 192,
+              "uid": "C6cD4xw7uti195mtjQe",
+              "path": "\\\\DC-02\\SYSVOL",
+              "name": "meridianhcs.local\\Policies\\{3F412670-072B-48C9-BA30-7157A0303D88}\\Machine\\Registry.pol",
+              "extension": ".pol",
+              "size": 12729
+            },
+            {
+              "line": 255,
+              "uid": "CrBhm3JANkN9QtaUCA",
+              "path": "\\\\DC-01\\SYSVOL",
+              "name": "meridianhcs.local\\Policies\\{3F412670-072B-48C9-BA30-7157A0303D88}\\Machine\\Registry.pol",
+              "extension": ".pol",
+              "size": 12729
+            },
+            {
+              "line": 38,
+              "uid": "CO311eCzKWPp8mRu4k",
+              "path": "\\\\DC-01\\SYSVOL",
+              "name": "meridianhcs.local\\Policies\\{6AC1786C-016F-11D2-945F-00C04FB984F9}\\Machine\\Registry.pol",
+              "extension": ".pol",
+              "size": 11967
+            }
+          ]
+        },
+        "other_share": {
+          "observations": 66,
+          "unique_paths": 56,
+          "unique_path_size_versions": 59,
+          "observed_above_1MiB": 17,
+          "unique_versions_above_1MiB": 15,
+          "by_extension": {
+            ".csv": {
+              "observations": 2,
+              "unique_path_size_versions": 1,
+              "observed_above_1MiB": 2,
+              "unique_versions_above_1MiB": 1,
+              "median_observed_size": 4587291.0,
+              "max_observed_size": 4587291
+            },
+            ".docx": {
+              "observations": 12,
+              "unique_path_size_versions": 12,
+              "observed_above_1MiB": 3,
+              "unique_versions_above_1MiB": 3,
+              "median_observed_size": 277587.0,
+              "max_observed_size": 8336341
+            },
+            ".gz": {
+              "observations": 2,
+              "unique_path_size_versions": 2,
+              "observed_above_1MiB": 0,
+              "unique_versions_above_1MiB": 0,
+              "median_observed_size": 401954.5,
+              "max_observed_size": 787523
+            },
+            ".json": {
+              "observations": 5,
+              "unique_path_size_versions": 3,
+              "observed_above_1MiB": 0,
+              "unique_versions_above_1MiB": 0,
+              "median_observed_size": 68985,
+              "max_observed_size": 73841
+            },
+            ".pdf": {
+              "observations": 8,
+              "unique_path_size_versions": 8,
+              "observed_above_1MiB": 3,
+              "unique_versions_above_1MiB": 3,
+              "median_observed_size": 167253.5,
+              "max_observed_size": 6919844
+            },
+            ".pptx": {
+              "observations": 5,
+              "unique_path_size_versions": 5,
+              "observed_above_1MiB": 2,
+              "unique_versions_above_1MiB": 2,
+              "median_observed_size": 822611,
+              "max_observed_size": 4066712
+            },
+            ".txt": {
+              "observations": 13,
+              "unique_path_size_versions": 12,
+              "observed_above_1MiB": 1,
+              "unique_versions_above_1MiB": 1,
+              "median_observed_size": 3779,
+              "max_observed_size": 1225701
+            },
+            ".xlsx": {
+              "observations": 18,
+              "unique_path_size_versions": 15,
+              "observed_above_1MiB": 5,
+              "unique_versions_above_1MiB": 4,
+              "median_observed_size": 721222.5,
+              "max_observed_size": 7781349
+            },
+            ".zip": {
+              "observations": 1,
+              "unique_path_size_versions": 1,
+              "observed_above_1MiB": 1,
+              "unique_versions_above_1MiB": 1,
+              "median_observed_size": 21412532,
+              "max_observed_size": 21412532
+            }
+          },
+          "largest_witnesses": [
+            {
+              "line": 166,
+              "uid": "C9iTyX8PwBUoTV6vdJ",
+              "path": "\\\\FILE-SRV-01\\Users",
+              "name": "Desktop\\expenses-draft.zip",
+              "extension": ".zip",
+              "size": 21412532
+            },
+            {
+              "line": 128,
+              "uid": "CssJKbL5FShZjkpMdBJ",
+              "path": "\\\\FILE-LNX-01\\Shared",
+              "name": "Reference\\onboarding.docx",
+              "extension": ".docx",
+              "size": 8336341
+            },
+            {
+              "line": 164,
+              "uid": "CloPHBbSWhGTcQ3sXI",
+              "path": "\\\\FILE-SRV-01\\Users",
+              "name": "Downloads\\2025\\presentation-review.xlsx",
+              "extension": ".xlsx",
+              "size": 7781349
+            },
+            {
+              "line": 213,
+              "uid": "C8EsONaRwqg0mQkfRB",
+              "path": "\\\\FILE-SRV-01\\Users",
+              "name": "Downloads\\2025\\presentation-review.xlsx",
+              "extension": ".xlsx",
+              "size": 7781349
+            },
+            {
+              "line": 196,
+              "uid": "CW0n1Nzvg99hFmNNF6",
+              "path": "\\\\FILE-SRV-01\\Shared",
+              "name": "Archive\\change-request.pdf",
+              "extension": ".pdf",
+              "size": 6919844
+            },
+            {
+              "line": 188,
+              "uid": "Ca0ifdkZOfUIqpOlxTA",
+              "path": "\\\\FILE-LNX-01\\Shared",
+              "name": "Team\\team-roadmap-approved.docx",
+              "extension": ".docx",
+              "size": 5921967
+            },
+            {
+              "line": 201,
+              "uid": "CiudO63D9FneEH3nzwK",
+              "path": "\\\\FILE-SRV-01\\Finance",
+              "name": "Q1\\FY24\\Q1-board-pack.pdf",
+              "extension": ".pdf",
+              "size": 4928307
+            },
+            {
+              "line": 73,
+              "uid": "CqJZk1IBzEs1rXaOA",
+              "path": "\\\\FILE-LNX-01\\ClinicalResearch",
+              "name": "Studies\\2024\\model-validation.csv",
+              "extension": ".csv",
+              "size": 4587291
+            },
+            {
+              "line": 220,
+              "uid": "CIGyPmfD14cSA3RR3",
+              "path": "\\\\FILE-LNX-01\\ClinicalResearch",
+              "name": "Studies\\2024\\model-validation.csv",
+              "extension": ".csv",
+              "size": 4587291
+            },
+            {
+              "line": 66,
+              "uid": "Cg96JMRh5dWmclqz59",
+              "path": "\\\\FILE-SRV-01\\Shared",
+              "name": "Team\\action-items.pptx",
+              "extension": ".pptx",
+              "size": 4066712
+            }
+          ]
+        }
+      }
+    }
+  }
+}

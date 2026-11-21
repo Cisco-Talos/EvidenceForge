@@ -1,0 +1,5 @@
+{
+  "scope": "Native Dovecot logout field coherence. Positive header/body data must have a positive associated mail count. Zero-byte counted fetches are allowed; no reverse biconditional or count<=bytes rule. Application out bytes need not equal TLS transport stream bytes.",
+  "logout_summaries": 20,
+  "violations": []
+}

@@ -31,6 +31,7 @@ from evidenceforge.events.cryptography import (
     DkimKeyPlan,
     OcspCertificateStatus,
 )
+from evidenceforge.generation.rsa_material import deterministic_rsa_public_numbers
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import _stable_seed
 
@@ -1898,10 +1899,7 @@ class CryptographicMaterialRegistry:
 
         seed = f"cryptographic_public_key:{identity}:{normalized_type}:{normalized_size}"
         if normalized_type == "rsa":
-            modulus = bytearray(hashlib.shake_256(seed.encode()).digest(normalized_size // 8))
-            modulus[0] |= 0x80
-            modulus[-1] |= 0x01
-            public_key = rsa.RSAPublicNumbers(65537, int.from_bytes(modulus, "big")).public_key()
+            public_key = deterministic_rsa_public_numbers(seed, normalized_size).public_key()
         else:
             order = _EC_ORDERS[normalized_size]
             scalar_bytes = hashlib.sha512(seed.encode()).digest()

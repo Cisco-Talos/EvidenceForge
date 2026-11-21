@@ -9,7 +9,7 @@ includes:
 - environment.yaml
 - baseline_activity.yaml
 name: iteration-test
-description: 'Canonical EvidenceForge iteration-test scenario for fast generate/evaluate/fix cycles. It
+description: 'Canonical iteration-test scenario with cross-platform diagnostic downloads, Mac engineering work, VS Code and mounted-share saves. It
 
   preserves the expanded environment and attack narrative while including authored,
 
@@ -1932,46 +1932,55 @@ storyline:
   time: +49m
   actor: maya.ross
   system: MAC-MROSS-01
-  activity: Local terminal checks of OS, account, storage and integration-workspace state
+  activity: Retrieve the vendor connector diagnostic script, run it and inspect the downloaded file
+  event_spacing:
+    mode: explicit_offsets
+    offsets:
+    - 0s
+    - 27s
+    - 1m02s
+    - 1m21s
   events:
   - type: process
-    process_name: /bin/pwd
-    command_line: /bin/pwd
+    process_name: /opt/homebrew/opt/curl/bin/curl
+    command_line: /opt/homebrew/opt/curl/bin/curl -fsS -o /Users/maya.ross/Downloads/connector-check.sh https://support.valeworks-health.net/tools/macos/connector-check.sh
+    supplementary: none
+  - type: process
+    process_name: /bin/bash
+    command_line: /bin/bash /Users/maya.ross/Downloads/connector-check.sh --check-config
     supplementary: none
   - type: process
     process_name: /bin/ls
-    command_line: /bin/ls -la /Users/maya.ross/Documents
+    command_line: /bin/ls -l /Users/maya.ross/Downloads/connector-check.sh
     supplementary: none
   - type: process
-    process_name: /usr/bin/du
-    command_line: /usr/bin/du -sh /Users/maya.ross/Documents
+    process_name: /usr/bin/id
+    command_line: /usr/bin/id
     supplementary: none
-  event_spacing:
-    mode: interval
-    interval: 40s
-    jitter: 0.35
 - id: mac-1-terminal-task-3
   time: +1h38m
   actor: maya.ross
   system: MAC-MROSS-01
-  activity: Local terminal checks of OS, account, storage and integration-workspace state
+  activity: Run the downloaded connector network check and inspect local resolver configuration
+  event_spacing:
+    mode: explicit_offsets
+    offsets:
+    - 0s
+    - 38s
+    - 1m07s
   events:
   - type: process
-    process_name: /bin/df
-    command_line: /bin/df -h
+    process_name: /bin/bash
+    command_line: /bin/bash /Users/maya.ross/Downloads/connector-check.sh --check-network
     supplementary: none
   - type: process
-    process_name: /bin/ps
-    command_line: /bin/ps aux
+    process_name: /bin/cat
+    command_line: /bin/cat /etc/resolv.conf
     supplementary: none
   - type: process
-    process_name: /usr/bin/find
-    command_line: /usr/bin/find /Users/maya.ross/Documents -maxdepth 2 -type f -name '*.pdf'
+    process_name: /bin/cat
+    command_line: /bin/cat /etc/hosts
     supplementary: none
-  event_spacing:
-    mode: interval
-    interval: 44s
-    jitter: 0.35
 - id: mac-1-terminal-task-4
   time: +2h23m
   actor: maya.ross
@@ -2104,20 +2113,26 @@ storyline:
   time: +2h31m
   actor: maya.ross
   system: MAC-MROSS-02
-  activity: Check local directory-service records and installed OS version
+  activity: Validate workstation configuration and locate engineering JSON documents for the handoff
+  event_spacing:
+    mode: explicit_offsets
+    offsets:
+    - 0s
+    - 22s
+    - 1m03s
   events:
   - type: process
     process_name: /usr/bin/dscl
-    command_line: /usr/bin/dscl . -list /Users
+    command_line: /usr/bin/dscl . -read /Users/maya.ross UserShell NFSHomeDirectory
     supplementary: none
   - type: process
-    process_name: /usr/bin/sw_vers
-    command_line: /usr/bin/sw_vers -productVersion
+    process_name: /usr/bin/find
+    command_line: /usr/bin/find /Users/maya.ross/Documents -maxdepth 2 -type f -name '*.json'
     supplementary: none
-  event_spacing:
-    mode: interval
-    interval: 44s
-    jitter: 0.35
+  - type: process
+    process_name: /usr/bin/du
+    command_line: /usr/bin/du -sh /Users/maya.ross/Documents
+    supplementary: none
 - id: mac-2-terminal-task-5
   time: +3h46m
   actor: maya.ross
@@ -2495,6 +2510,143 @@ storyline:
   activity: Maya finishes the secondary Mac engineering session
   events:
   - type: logoff
+- id: candidate-win-work-session
+  time: +1h44m
+  actor: marcus.chen
+  system: WS-MCHEN-01
+  activity: Start the local workstation session for connector support work
+  events:
+  - type: logon
+    logon_type: 2
+- id: candidate-linux-work-session
+  time: +2h09m
+  actor: lina.nguyen
+  system: WS-LNGUYEN-01
+  activity: Start the local engineering session for connector diagnostics
+  events:
+  - type: logon
+    logon_type: 2
+- id: candidate-win-diagnostics
+  time: +1h46m
+  actor: marcus.chen
+  system: WS-MCHEN-01
+  activity: Download the Windows connector diagnostic utility, run a configuration check and inspect the
+    host
+  event_spacing:
+    mode: explicit_offsets
+    offsets:
+    - 0s
+    - 43s
+    - 1m19s
+    - 1m42s
+  events:
+  - type: process
+    process_name: C:\Windows\System32\curl.exe
+    command_line: curl.exe -fsS -o C:\Users\marcus.chen\Downloads\connector-check.exe https://support.valeworks-health.net/tools/windows-x64/connector-check.exe
+    supplementary: none
+  - type: process
+    process_name: C:\Users\marcus.chen\Downloads\connector-check.exe
+    command_line: C:\Users\marcus.chen\Downloads\connector-check.exe --check-config
+    supplementary: none
+  - type: process
+    process_name: C:\Windows\System32\whoami.exe
+    command_line: whoami.exe /all
+    supplementary: none
+  - type: process
+    process_name: C:\Windows\System32\ipconfig.exe
+    command_line: ipconfig.exe /all
+    supplementary: none
+- id: candidate-linux-diagnostics
+  time: +2h12m
+  actor: lina.nguyen
+  system: WS-LNGUYEN-01
+  activity: Download the Linux connector diagnostic utility, make it executable, run it and inspect the
+    file
+  event_spacing:
+    mode: explicit_offsets
+    offsets:
+    - 0s
+    - 24s
+    - 41s
+    - 1m18s
+  events:
+  - type: process
+    process_name: /usr/bin/curl
+    command_line: /usr/bin/curl -fsS -o /tmp/connector-check https://support.valeworks-health.net/tools/linux-x64/connector-check
+    supplementary: none
+  - type: process
+    process_name: /usr/bin/chmod
+    command_line: /usr/bin/chmod 700 /tmp/connector-check
+    supplementary: none
+  - type: process
+    process_name: /tmp/connector-check
+    command_line: /tmp/connector-check --check-config
+    supplementary: none
+  - type: process
+    process_name: /usr/bin/ls
+    command_line: /usr/bin/ls -l /tmp/connector-check
+    supplementary: none
+- id: candidate-mac-editor
+  time: +36m
+  actor: maya.ross
+  system: MAC-MROSS-01
+  activity: Open VS Code for engineering notes and connector configuration work
+  events:
+  - type: process
+    process_name: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+    command_line: '''/Applications/Visual Studio Code.app/Contents/MacOS/Code'''
+    supplementary: none
+    launch_method: finder
+    process_ref: candidate-mac-code
+- id: candidate-mac-research-save
+  time: +2h11m
+  actor: maya.ross
+  system: MAC-MROSS-01
+  activity: Review the shared integration manifest and save an engineering update through the research
+    mount
+  event_spacing:
+    mode: explicit_offsets
+    offsets:
+    - 0s
+    - 24s
+    - 2m13s
+  events:
+  - type: smb_activity
+    operation: browse
+    purpose: interactive
+    target:
+      type: share
+      share: FILE-LNX-01.clinical-research
+      file_ref: pipeline_manifest
+    outcome: success
+    path_style: mounted
+    mapping: mac-research
+    client_access: auto
+    auth_protocol: ntlmssp
+  - type: smb_activity
+    operation: read
+    purpose: interactive
+    target:
+      type: share
+      share: FILE-LNX-01.clinical-research
+      file_ref: pipeline_manifest
+    outcome: success
+    path_style: mounted
+    mapping: mac-research
+    client_access: auto
+    auth_protocol: ntlmssp
+  - type: smb_activity
+    operation: update
+    purpose: interactive
+    target:
+      type: share
+      share: FILE-LNX-01.clinical-research
+      file_ref: pipeline_manifest
+    outcome: success
+    path_style: mounted
+    mapping: mac-research
+    client_access: auto
+    auth_protocol: ntlmssp
 output:
   logs:
   - format: windows

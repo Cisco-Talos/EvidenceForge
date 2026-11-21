@@ -7,9 +7,13 @@ import random
 import re
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.config.schemas import UnknownSourceUserAgentProfile
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.models.exceptions import ConfigurationError
 from evidenceforge.utils.rng import _stable_seed
 
 if TYPE_CHECKING:
@@ -51,6 +55,26 @@ def _pool(data: dict[str, Any], *path: str) -> list[str]:
             return []
         value = value.get(key, {})
     return value if isinstance(value, list) else []
+
+
+def _workstation_browser_user_agents(
+    data: dict[str, Any], source_system: "System | None"
+) -> list[str]:
+    """Resolve one known-OS pool or the explicit unknown-source presentation policy."""
+    if source_system is None:
+        if "unknown_source" in data:
+            try:
+                profile = UnknownSourceUserAgentProfile.model_validate(data["unknown_source"])
+            except ValidationError as error:
+                raise ConfigurationError(
+                    "proxy_user_agents.yaml unknown_source must contain valid user_agents"
+                ) from error
+            return list(profile.user_agents)
+        # Frozen catalogs without this optional policy retain their prior output.
+        return _pool(data, "workstation", "windows")
+    os_category = _get_os_category(source_system.os)
+    pool_key = os_category if os_category in {"linux", "macos"} else "windows"
+    return _pool(data, "workstation", pool_key)
 
 
 def _is_server_source(source_system: "System", data: dict[str, Any]) -> bool:
@@ -354,11 +378,9 @@ def browser_user_agent_for_process(
         return ""
 
     data = load_proxy_user_agents()
-    os_category = _get_os_category(source_system.os) if source_system is not None else "windows"
-    pool_key = os_category if os_category in {"linux", "macos"} else "windows"
     candidates = [
         user_agent
-        for user_agent in _pool(data, "workstation", pool_key)
+        for user_agent in _workstation_browser_user_agents(data, source_system)
         if _user_agent_matches_browser_family(user_agent, family)
     ]
     if not candidates:
@@ -448,8 +470,7 @@ def pick_proxy_user_agent(
     data = load_proxy_user_agents()
 
     if source_system is None:
-        windows_pool = _pool(data, "workstation", "windows")
-        return rng.choice(windows_pool)
+        return rng.choice(_workstation_browser_user_agents(data, None))
 
     domain_agent = _pick_domain_override_agent(rng, source_system, hostname, data)
     if domain_agent:
@@ -463,12 +484,4 @@ def pick_proxy_user_agent(
         server_pool = _pool(data, "server", "generic")
         return rng.choice(server_pool)
 
-    if _get_os_category(source_system.os) == "macos":
-        return rng.choice(_pool(data, "workstation", "macos"))
-
-    if _get_os_category(source_system.os) == "linux":
-        linux_pool = _pool(data, "workstation", "linux")
-        return rng.choice(linux_pool)
-
-    windows_pool = _pool(data, "workstation", "windows")
-    return rng.choice(windows_pool)
+    return rng.choice(_workstation_browser_user_agents(data, source_system))

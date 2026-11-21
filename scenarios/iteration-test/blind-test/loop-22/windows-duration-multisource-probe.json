@@ -1,0 +1,638 @@
+[
+  {
+    "image": "ipconfig.exe",
+    "pid": 4536,
+    "start": "2024-01-15T09:10:00+00:00",
+    "last_activity": "2024-01-15T09:10:00.012000+00:00",
+    "planned_close": "2024-01-15T09:10:01.729205+00:00",
+    "planned_lifetime_s": 1.729205,
+    "events": [
+      {
+        "type": "process_create",
+        "timestamp": "2024-01-15T09:10:00+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.process.create.CONSOLE-WIN": "2024-01-15 09:10:00.276827+00:00",
+          "ecar.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.276827+00:00",
+          "ecar.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.276827+00:00",
+          "sysmon.process.create.native.CONSOLE-WIN": "2024-01-15 09:10:00.010114+00:00",
+          "sysmon.process.create.render.CONSOLE-WIN": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.process.parent.render.CONSOLE-WIN": "2024-01-15 09:09:57.820218+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:09:57.808251+00:00": "2024-01-15 09:09:57.820218+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:09:57.820218+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.010114+00:00",
+          "sysmon.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.010427+00:00",
+          "windows_security.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.231041+00:00",
+          "windows_security.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.231041+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.002000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.333911+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.333911+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.075634+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.076079+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.235420+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.235420+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.005000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.347007+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.347007+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.098838+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.099138+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.246500+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.246500+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.007000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.370890+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.370890+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.102219+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.102731+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.251877+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.251877+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.009000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.523836+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.523836+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.110568+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.110889+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.265341+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.265341+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.012000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.554844+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.554844+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.125540+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.127611+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.271569+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.271569+00:00"
+        }
+      },
+      {
+        "type": "process_terminate",
+        "timestamp": "2024-01-15T09:10:01.729205+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.process.create.CONSOLE-WIN": "2024-01-15 09:10:00.276827+00:00",
+          "ecar.process.terminate.CONSOLE-WIN": "2024-01-15 09:10:02.006249+00:00",
+          "ecar.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:02.006249+00:00",
+          "ecar.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:02.006249+00:00",
+          "sysmon.process.create.native.CONSOLE-WIN": "2024-01-15 09:10:00.010114+00:00",
+          "sysmon.process.create.render.CONSOLE-WIN": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.process.terminate.native.CONSOLE-WIN": "2024-01-15 09:10:02.012246+00:00",
+          "sysmon.process.terminate.render.CONSOLE-WIN": "2024-01-15 09:10:02.018139+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010427+00:00",
+          "sysmon.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:02.012246+00:00",
+          "sysmon.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:02.018139+00:00",
+          "windows_security.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.231041+00:00",
+          "windows_security.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.231041+00:00",
+          "windows_security.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:01.961162+00:00",
+          "windows_security.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:01.961162+00:00"
+        }
+      }
+    ]
+  },
+  {
+    "image": "whoami.exe",
+    "pid": 4536,
+    "start": "2024-01-15T09:10:00+00:00",
+    "last_activity": "2024-01-15T09:10:00.026000+00:00",
+    "planned_close": "2024-01-15T09:10:02.789000+00:00",
+    "planned_lifetime_s": 2.789,
+    "events": [
+      {
+        "type": "process_create",
+        "timestamp": "2024-01-15T09:10:00+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.process.create.CONSOLE-WIN": "2024-01-15 09:10:00.276658+00:00",
+          "ecar.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.276658+00:00",
+          "ecar.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.276658+00:00",
+          "sysmon.process.create.native.CONSOLE-WIN": "2024-01-15 09:10:00.010021+00:00",
+          "sysmon.process.create.render.CONSOLE-WIN": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.parent.render.CONSOLE-WIN": "2024-01-15 09:09:58.108329+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:09:58.096887+00:00": "2024-01-15 09:09:58.108329+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:09:58.108329+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.010021+00:00",
+          "sysmon.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.010517+00:00",
+          "windows_security.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.074849+00:00",
+          "windows_security.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.074849+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.002000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.316574+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.316574+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.035052+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.035410+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.082223+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.082223+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.005000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.325089+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.325089+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.039215+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.041502+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.091214+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.091214+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.007000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.335738+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.335738+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.055977+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.057528+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.092977+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.092977+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.009000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.577882+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.577882+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.144207+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.145533+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.097055+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.097055+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.012000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.580200+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.580200+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.185744+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.187350+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.129862+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.129862+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.016000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.596207+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.596207+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.189682+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.190386+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.155326+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.155326+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.020000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.601147+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.601147+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.243042+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.246571+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.171867+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.171867+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.026000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.611282+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.611282+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.259864+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.261525+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.178761+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.178761+00:00"
+        }
+      },
+      {
+        "type": "process_terminate",
+        "timestamp": "2024-01-15T09:10:02.789000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.process.create.CONSOLE-WIN": "2024-01-15 09:10:00.276658+00:00",
+          "ecar.process.terminate.CONSOLE-WIN": "2024-01-15 09:10:03.067647+00:00",
+          "ecar.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:03.067647+00:00",
+          "ecar.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:03.067647+00:00",
+          "sysmon.process.create.native.CONSOLE-WIN": "2024-01-15 09:10:00.010021+00:00",
+          "sysmon.process.create.render.CONSOLE-WIN": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.terminate.native.CONSOLE-WIN": "2024-01-15 09:10:03.073164+00:00",
+          "sysmon.process.terminate.render.CONSOLE-WIN": "2024-01-15 09:10:03.074431+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.010517+00:00",
+          "sysmon.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:03.073164+00:00",
+          "sysmon.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:03.074431+00:00",
+          "windows_security.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.074849+00:00",
+          "windows_security.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.074849+00:00",
+          "windows_security.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:02.865109+00:00",
+          "windows_security.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:02.865109+00:00"
+        }
+      }
+    ]
+  },
+  {
+    "image": "cmd.exe",
+    "pid": 4524,
+    "start": "2024-01-15T09:10:00+00:00",
+    "last_activity": "2024-01-15T09:10:04.002000+00:00",
+    "planned_close": "2024-01-15T09:10:06.739738+00:00",
+    "planned_lifetime_s": 6.739738,
+    "events": [
+      {
+        "type": "process_create",
+        "timestamp": "2024-01-15T09:10:00+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.process.create.CONSOLE-WIN": "2024-01-15 09:10:00.276397+00:00",
+          "ecar.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.276397+00:00",
+          "ecar.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.276397+00:00",
+          "sysmon.process.create.native.CONSOLE-WIN": "2024-01-15 09:10:00.009882+00:00",
+          "sysmon.process.create.render.CONSOLE-WIN": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.parent.render.CONSOLE-WIN": "2024-01-15 09:09:58.392047+00:00",
+          "sysmon.process.identity.render.console-win:4512:2024-01-15T09:09:58.376977+00:00": "2024-01-15 09:09:58.392047+00:00",
+          "sysmon.process.pid.render.console-win:4512": "2024-01-15 09:09:58.392047+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.009882+00:00",
+          "sysmon.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.015947+00:00",
+          "windows_security.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.272851+00:00",
+          "windows_security.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.272851+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.002000+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.297156+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.297156+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.022007+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.022591+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.294198+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.294198+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.008000+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.331814+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.331814+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.023414+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.024661+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.298437+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.298437+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.014000+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.337072+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.337072+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.029087+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.029906+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.322207+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.322207+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.019000+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.355783+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.355783+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.055581+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.056835+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.441848+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.441848+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.024000+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.369908+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.369908+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.065723+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.067670+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.453016+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.453016+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.030000+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.390821+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.390821+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.078964+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.081316+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.463303+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.463303+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.035000+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.399239+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.399239+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.116442+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.116840+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.465404+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.465404+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.041000+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.463215+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.463215+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.265574+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.269343+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.470709+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.470709+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:04.002000+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:04.007206+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:04.007206+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:04.042826+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:04.044346+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:04.017171+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:04.017171+00:00"
+        }
+      },
+      {
+        "type": "process_terminate",
+        "timestamp": "2024-01-15T09:10:06.739738+00:00",
+        "pid": 4524,
+        "source_times": {
+          "ecar.process.create.CONSOLE-WIN": "2024-01-15 09:10:00.276397+00:00",
+          "ecar.process.terminate.CONSOLE-WIN": "2024-01-15 09:10:07.017086+00:00",
+          "ecar.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:07.017086+00:00",
+          "ecar.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:07.017086+00:00",
+          "sysmon.process.create.native.CONSOLE-WIN": "2024-01-15 09:10:00.009882+00:00",
+          "sysmon.process.create.render.CONSOLE-WIN": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.terminate.native.CONSOLE-WIN": "2024-01-15 09:10:07.024522+00:00",
+          "sysmon.process.terminate.render.CONSOLE-WIN": "2024-01-15 09:10:07.026559+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:10:00.015947+00:00",
+          "sysmon.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:07.024522+00:00",
+          "sysmon.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:07.026559+00:00",
+          "windows_security.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.272851+00:00",
+          "windows_security.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.272851+00:00",
+          "windows_security.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:07.013129+00:00",
+          "windows_security.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:07.013129+00:00"
+        }
+      }
+    ]
+  },
+  {
+    "image": "gpresult.exe",
+    "pid": 4536,
+    "start": "2024-01-15T09:10:00+00:00",
+    "last_activity": "2024-01-15T09:10:00.016000+00:00",
+    "planned_close": "2024-01-15T09:10:01.210519+00:00",
+    "planned_lifetime_s": 1.210519,
+    "events": [
+      {
+        "type": "process_create",
+        "timestamp": "2024-01-15T09:10:00+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.process.create.CONSOLE-WIN": "2024-01-15 09:10:00.276137+00:00",
+          "ecar.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.276137+00:00",
+          "ecar.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.276137+00:00",
+          "sysmon.process.create.native.CONSOLE-WIN": "2024-01-15 09:10:00.010017+00:00",
+          "sysmon.process.create.render.CONSOLE-WIN": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.parent.render.CONSOLE-WIN": "2024-01-15 09:09:59.255644+00:00",
+          "sysmon.process.identity.render.console-win:4524:2024-01-15T09:09:59.244474+00:00": "2024-01-15 09:09:59.255644+00:00",
+          "sysmon.process.pid.render.console-win:4524": "2024-01-15 09:09:59.255644+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.010017+00:00",
+          "sysmon.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.011892+00:00",
+          "windows_security.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.199086+00:00",
+          "windows_security.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.199086+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.002000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.292158+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.292158+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.029594+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.030623+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.204637+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.204637+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.005000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.313844+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.313844+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.033085+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.034169+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.244389+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.244389+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.007000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.318844+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.318844+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.036881+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.037166+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.264363+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.264363+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.009000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.329880+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.329880+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.041939+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.043138+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.287645+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.287645+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.011000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.353191+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.353191+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.052595+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.053645+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.296935+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.296935+00:00"
+        }
+      },
+      {
+        "type": "image_load",
+        "timestamp": "2024-01-15T09:10:00.016000+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.357935+00:00",
+          "ecar.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.357935+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.062228+00:00",
+          "sysmon.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.062890+00:00",
+          "windows_security.event.base.native.CONSOLE-WIN": "2024-01-15 09:10:00.324659+00:00",
+          "windows_security.event.base.render.CONSOLE-WIN": "2024-01-15 09:10:00.324659+00:00"
+        }
+      },
+      {
+        "type": "process_terminate",
+        "timestamp": "2024-01-15T09:10:01.210519+00:00",
+        "pid": 4536,
+        "source_times": {
+          "ecar.process.create.CONSOLE-WIN": "2024-01-15 09:10:00.276137+00:00",
+          "ecar.process.terminate.CONSOLE-WIN": "2024-01-15 09:10:01.486999+00:00",
+          "ecar.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:01.486999+00:00",
+          "ecar.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:01.486999+00:00",
+          "sysmon.process.create.native.CONSOLE-WIN": "2024-01-15 09:10:00.010017+00:00",
+          "sysmon.process.create.render.CONSOLE-WIN": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.terminate.native.CONSOLE-WIN": "2024-01-15 09:10:01.494038+00:00",
+          "sysmon.process.terminate.render.CONSOLE-WIN": "2024-01-15 09:10:01.495079+00:00",
+          "sysmon.process.identity.render.console-win:4536:2024-01-15T09:10:00+00:00": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.process.pid.render.console-win:4536": "2024-01-15 09:10:00.011892+00:00",
+          "sysmon.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:01.494038+00:00",
+          "sysmon.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:01.495079+00:00",
+          "windows_security.event.process_create.native.CONSOLE-WIN": "2024-01-15 09:10:00.199086+00:00",
+          "windows_security.event.process_create.render.CONSOLE-WIN": "2024-01-15 09:10:00.199086+00:00",
+          "windows_security.event.process_terminate.native.CONSOLE-WIN": "2024-01-15 09:10:01.409917+00:00",
+          "windows_security.event.process_terminate.render.CONSOLE-WIN": "2024-01-15 09:10:01.409917+00:00"
+        }
+      }
+    ]
+  }
+]

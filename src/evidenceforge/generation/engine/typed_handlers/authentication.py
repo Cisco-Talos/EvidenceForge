@@ -191,12 +191,14 @@ def handle_logoff(
             if (
                 identity is not None
                 and identity.hostname == system.hostname
+                and identity.principal == actor.username
                 and identity.session_kind == "rdp"
                 and self.state_manager.get_session_end_plan(logon_id) == session_end_plan
                 and self.state_manager.get_session_end_time(logon_id)
                 == session_end_plan.canonical_end
             ):
                 context.malicious_event["logon_id"] = logon_id
+                context.malicious_event["outcome"] = "already_completed"
                 return context.malicious_event
         if target_session is None or target_session.system != system.hostname:
             raise StateError(

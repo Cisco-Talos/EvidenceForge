@@ -1,0 +1,191 @@
+{
+  "scope": "Descriptive fractional-timestamp distribution; collector transformations and common scheduling remain alternative explanations",
+  "totals": {
+    "other": 4121,
+    "other_millisecond_aligned": 10,
+    "anacron_start": 10,
+    "anacron_start_millisecond_aligned": 0,
+    "anacron_followup": 40,
+    "anacron_followup_millisecond_aligned": 0
+  },
+  "hosts": {
+    "APP-INT-01.meridianhcs.local": {
+      "sha256": "04f6a1aecd50e43229111d3650c157197d4d3774cff900075f1dc85fa38a39d2",
+      "counts": {
+        "other": 264,
+        "other_millisecond_aligned": 2,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 54,
+          "timestamp": "2026-11-02T13:24:09.188399Z"
+        }
+      ]
+    },
+    "DB-PROD-01.meridianhcs.local": {
+      "sha256": "cbaec4637faf857f7afbe2cd03b34774a21b4d95fb242699dc69a1260c93822c",
+      "counts": {
+        "other": 240,
+        "other_millisecond_aligned": 1
+      },
+      "start_witnesses": []
+    },
+    "FILE-LNX-01.meridianhcs.local": {
+      "sha256": "ed1fc08b18d688632768df5ac4a19f3618b465cf77b89ca908dd221aea946aae",
+      "counts": {
+        "other": 503,
+        "other_millisecond_aligned": 1,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 45,
+          "timestamp": "2026-11-02T13:23:36.070663Z"
+        }
+      ]
+    },
+    "LOG-MON-01.meridianhcs.local": {
+      "sha256": "5712cffacb2b3ef67b4a1a33eac90deb64f22bd324e93463b400383a803de90b",
+      "counts": {
+        "other": 299,
+        "other_millisecond_aligned": 1,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 39,
+          "timestamp": "2026-11-02T13:18:23.158646Z"
+        }
+      ]
+    },
+    "LT-MRIVERA-02.meridianhcs.local": {
+      "sha256": "693872bb17a1604f33aa80d54a596407564ff95ae5b9180c9faf70d2c9592225",
+      "counts": {
+        "other": 167,
+        "other_millisecond_aligned": 0,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 19,
+          "timestamp": "2026-11-02T13:20:38.034882Z"
+        }
+      ]
+    },
+    "MAIL-CLIN-01.meridianhcs.local": {
+      "sha256": "f9352b43119fb3da87120befc0c246a62400cda644044138b1390cdd2075b458",
+      "counts": {
+        "other": 313,
+        "other_millisecond_aligned": 0,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 27,
+          "timestamp": "2026-11-02T13:27:55.038884Z"
+        }
+      ]
+    },
+    "MAIL-EDGE-01.meridianhcs.local": {
+      "sha256": "c81b43d70d9a219ede370de244f9c0e935d9164d421d8681c9dfb19630edb281",
+      "counts": {
+        "other": 487,
+        "other_millisecond_aligned": 1,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 8,
+          "timestamp": "2026-11-02T13:06:26.105657Z"
+        }
+      ]
+    },
+    "PROXY-01.meridianhcs.local": {
+      "sha256": "80dd98a4935f6c2979ffb155fe5978dcaf5f7a1727f455114fb7956007d8c8a1",
+      "counts": {
+        "other": 214,
+        "other_millisecond_aligned": 0,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 4,
+          "timestamp": "2026-11-02T13:03:39.078430Z"
+        }
+      ]
+    },
+    "WEB-EXT-01.meridianhcs.local": {
+      "sha256": "3fc0fb0454bae0dad05da9c89f10e359889a2869023fb86bfbfbfcd5548f3dd8",
+      "counts": {
+        "other": 1199,
+        "other_millisecond_aligned": 4,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 92,
+          "timestamp": "2026-11-02T13:17:32.115088Z"
+        }
+      ]
+    },
+    "WS-LNGUYEN-01.meridianhcs.local": {
+      "sha256": "6dc6008968b7cc1f8a93a9a9279211e0ab5b9e1cd7c045e69b5ff222be2a09ee",
+      "counts": {
+        "other": 257,
+        "other_millisecond_aligned": 0,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 10,
+          "timestamp": "2026-11-02T13:26:03.093327Z"
+        }
+      ]
+    },
+    "WS-OHADDAD-01.meridianhcs.local": {
+      "sha256": "8d5c2853e5bd50b978b32a009326bf5a710e9778016eaeb055450344de93299c",
+      "counts": {
+        "other": 178,
+        "other_millisecond_aligned": 0,
+        "anacron_start": 1,
+        "anacron_start_millisecond_aligned": 0,
+        "anacron_followup": 4,
+        "anacron_followup_millisecond_aligned": 0
+      },
+      "start_witnesses": [
+        {
+          "line": 8,
+          "timestamp": "2026-11-02T13:06:28.093662Z"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,762 @@
+{
+  "scope": "Data-only unambiguous1:1 same-physical HTTP file pairing by sensor-local connection tuple/start(<1s), direction,depth,filename,content digest andseen bytes. Distinct proxy legs never share a tuple. Matching aggregate coverage cannot prove identical packets; analyzer/capture/config differences remain alternatives. Positive durations only.",
+  "source_sha256": {
+    "zeek-core": {
+      "conn.json": "81e69de89756f51b3600c61d09a0712b714530c1ef20ceb71a3e09835548a09e",
+      "files.json": "c44dfc7f657012e52978cd2d91790f53ff9fdbc01ea6bef0596dae340a635a43"
+    },
+    "zeek-db": {
+      "conn.json": "d16ea3604f2a83844a3229cd3ca661497636a79ab3d7699650b9d7455371734d",
+      "files.json": "52318680050a7953b2f4df24b3ba5c76b83b40ef7f04cac4ffc84435f1b98dcb"
+    },
+    "zeek-dmz": {
+      "conn.json": "d471e5e6a353c1ab6b32982c2896a52b5165d87e3172ff4349bcd3df7245312d",
+      "files.json": "814a0afd53f19e89efcd3a99605105811acae5c2baf7ad0ec0b93a95af9f3594"
+    }
+  },
+  "all_pairs": {
+    "pairs": 12,
+    "file_duration_difference_above_10ms": 0,
+    "file_duration_difference_above_100ms": 0,
+    "median_file_duration_difference_seconds": 0.0,
+    "maximum_file_duration_difference_seconds": 1.8e-05,
+    "median_connection_duration_difference_seconds": 0.0002525,
+    "maximum_connection_duration_difference_seconds": 0.001303
+  },
+  "same_packet_payload_state_zero_reported_loss_pairs": {
+    "pairs": 10,
+    "file_duration_difference_above_10ms": 0,
+    "file_duration_difference_above_100ms": 0,
+    "median_file_duration_difference_seconds": 5e-07,
+    "maximum_file_duration_difference_seconds": 1.8e-05,
+    "median_connection_duration_difference_seconds": 0.00041050000000000006,
+    "maximum_connection_duration_difference_seconds": 0.001303
+  },
+  "excluded": {
+    "zero_or_ambiguous_candidates": 16
+  },
+  "largest_control_witnesses": [
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.21",
+        59560,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": "mhs-support-48217.tar.gz",
+      "seen_bytes": 1572864,
+      "is_orig": true,
+      "fuids": [
+        "FixQFRq5DSLFR8ZQlF",
+        "FyTb9NUeNkHsLoSR7z"
+      ],
+      "uids": [
+        "C4SOlCQ5kANxQ0iQSM",
+        "CsL7pW7W2Uq8QkyMpt"
+      ],
+      "file_durations": [
+        6.787414,
+        6.787396
+      ],
+      "connection_durations": [
+        11.692574,
+        11.693877
+      ],
+      "file_duration_difference_seconds": 1.8e-05,
+      "connection_duration_difference_seconds": 0.001303,
+      "relative_file_start_difference_seconds": 0.034785,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.10",
+        65298,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 135050473,
+      "is_orig": false,
+      "fuids": [
+        "FTHd66X2CBsAFQZIpk",
+        "Fyz8hij48CoNy5Fzwr"
+      ],
+      "uids": [
+        "CoYBBPV87JiySNJhU",
+        "CcynS5A3wuDnKOoFi"
+      ],
+      "file_durations": [
+        3.277812,
+        3.277801
+      ],
+      "connection_durations": [
+        7.997536,
+        7.997243
+      ],
+      "file_duration_difference_seconds": 1.1e-05,
+      "connection_duration_difference_seconds": 0.000293,
+      "relative_file_start_difference_seconds": 0.000282,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        62131,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 85674354,
+      "is_orig": false,
+      "fuids": [
+        "FgYAs3RXn4gMN16F8",
+        "FdqVpAS2uQklHHCDN"
+      ],
+      "uids": [
+        "CuPf9eWXQtVY3AkcsB",
+        "CiDS0orPluTToItndo"
+      ],
+      "file_durations": [
+        1.750875,
+        1.750867
+      ],
+      "connection_durations": [
+        5.364171,
+        5.3641
+      ],
+      "file_duration_difference_seconds": 8e-06,
+      "connection_duration_difference_seconds": 7.1e-05,
+      "relative_file_start_difference_seconds": 6.4e-05,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        51085,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 127862722,
+      "is_orig": false,
+      "fuids": [
+        "FxRh2WNGqH14t8wdea",
+        "F5Fj7ukKZoCg5fjoFN"
+      ],
+      "uids": [
+        "CeEA7ks0CyHmFNS1kA",
+        "CInAuk02NjbUNPhgxG"
+      ],
+      "file_durations": [
+        2.516039,
+        2.516041
+      ],
+      "connection_durations": [
+        7.625624,
+        7.626152
+      ],
+      "file_duration_difference_seconds": 2e-06,
+      "connection_duration_difference_seconds": 0.000528,
+      "relative_file_start_difference_seconds": 0.000526,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.10",
+        64428,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 42043269,
+      "is_orig": false,
+      "fuids": [
+        "FZgJFHyswbOYkR2PBek",
+        "FUTc4ioUBbajKWqCOJF"
+      ],
+      "uids": [
+        "CvcQt7JqniVYi1t3CG",
+        "CKU21mwt593s5Uu427"
+      ],
+      "file_durations": [
+        1.555343,
+        1.555344
+      ],
+      "connection_durations": [
+        5.673758,
+        5.673795
+      ],
+      "file_duration_difference_seconds": 1e-06,
+      "connection_duration_difference_seconds": 3.7e-05,
+      "relative_file_start_difference_seconds": 3.5e-05,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.35",
+        58317,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 538,
+      "is_orig": false,
+      "fuids": [
+        "FtMBHmVi3Bp5muwaQ0",
+        "Fa4RI9oF8XLLCMMdgB"
+      ],
+      "uids": [
+        "ClI4IVihuJqAU3fNC",
+        "Cq5NywK7iHbLhmwDM"
+      ],
+      "file_durations": [
+        0.004495,
+        0.004495
+      ],
+      "connection_durations": [
+        1.729773,
+        1.729591
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000182,
+      "relative_file_start_difference_seconds": 0.004248,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        51348,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 271,
+      "is_orig": true,
+      "fuids": [
+        "FrgBXx7GXgiJhGCFU",
+        "FNbkErSh73PBQBVTc"
+      ],
+      "uids": [
+        "CmsR9TrYxv9yXWWbS0B",
+        "CaB0bh799WIX8E8swOx"
+      ],
+      "file_durations": [
+        0.00657,
+        0.00657
+      ],
+      "connection_durations": [
+        2.73761,
+        2.736967
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000643,
+      "relative_file_start_difference_seconds": 0.101746,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        57293,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 28451,
+      "is_orig": false,
+      "fuids": [
+        "Fn28938SgUUobazhn3",
+        "FTlRdgfZzRgLu7RA7g"
+      ],
+      "uids": [
+        "CXSMLWjSouAuwi8UlX",
+        "CSCZxImAugu0p99uoI"
+      ],
+      "file_durations": [
+        0.00429,
+        0.00429
+      ],
+      "connection_durations": [
+        1.564943,
+        1.564767
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000176,
+      "relative_file_start_difference_seconds": 0.103149,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.10",
+        51824,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 11501,
+      "is_orig": false,
+      "fuids": [
+        "Fa2mHgiDqI0LH4XBo3",
+        "F7I5OqGvKUZhyV3oY0"
+      ],
+      "uids": [
+        "CO64pFkiBmfbpgv7maY",
+        "CwisxLhWU93oaUGCTEf"
+      ],
+      "file_durations": [
+        0.009198,
+        0.009198
+      ],
+      "connection_durations": [
+        0.709839,
+        0.709121
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000718,
+      "relative_file_start_difference_seconds": 0.01423,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        51269,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 847,
+      "is_orig": true,
+      "fuids": [
+        "FP0nr0N1Y7YndOTGC",
+        "FShW3si3uPlqxCNEG"
+      ],
+      "uids": [
+        "CTUjLt3SflJ1S2WlAeI",
+        "CSEjz2JNdh3bekZmwrK"
+      ],
+      "file_durations": [
+        0.001047,
+        0.001047
+      ],
+      "connection_durations": [
+        0.487239,
+        0.48818
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000941,
+      "relative_file_start_difference_seconds": 0.063448,
+      "same_packet_payload_state_zero_reported_loss": true
+    }
+  ],
+  "control_pairs": [
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.35",
+        58317,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 538,
+      "is_orig": false,
+      "fuids": [
+        "FtMBHmVi3Bp5muwaQ0",
+        "Fa4RI9oF8XLLCMMdgB"
+      ],
+      "uids": [
+        "ClI4IVihuJqAU3fNC",
+        "Cq5NywK7iHbLhmwDM"
+      ],
+      "file_durations": [
+        0.004495,
+        0.004495
+      ],
+      "connection_durations": [
+        1.729773,
+        1.729591
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000182,
+      "relative_file_start_difference_seconds": 0.004248,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        51348,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 271,
+      "is_orig": true,
+      "fuids": [
+        "FrgBXx7GXgiJhGCFU",
+        "FNbkErSh73PBQBVTc"
+      ],
+      "uids": [
+        "CmsR9TrYxv9yXWWbS0B",
+        "CaB0bh799WIX8E8swOx"
+      ],
+      "file_durations": [
+        0.00657,
+        0.00657
+      ],
+      "connection_durations": [
+        2.73761,
+        2.736967
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000643,
+      "relative_file_start_difference_seconds": 0.101746,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        62131,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 85674354,
+      "is_orig": false,
+      "fuids": [
+        "FgYAs3RXn4gMN16F8",
+        "FdqVpAS2uQklHHCDN"
+      ],
+      "uids": [
+        "CuPf9eWXQtVY3AkcsB",
+        "CiDS0orPluTToItndo"
+      ],
+      "file_durations": [
+        1.750875,
+        1.750867
+      ],
+      "connection_durations": [
+        5.364171,
+        5.3641
+      ],
+      "file_duration_difference_seconds": 8e-06,
+      "connection_duration_difference_seconds": 7.1e-05,
+      "relative_file_start_difference_seconds": 6.4e-05,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        57293,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 28451,
+      "is_orig": false,
+      "fuids": [
+        "Fn28938SgUUobazhn3",
+        "FTlRdgfZzRgLu7RA7g"
+      ],
+      "uids": [
+        "CXSMLWjSouAuwi8UlX",
+        "CSCZxImAugu0p99uoI"
+      ],
+      "file_durations": [
+        0.00429,
+        0.00429
+      ],
+      "connection_durations": [
+        1.564943,
+        1.564767
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000176,
+      "relative_file_start_difference_seconds": 0.103149,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.10",
+        51824,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 11501,
+      "is_orig": false,
+      "fuids": [
+        "Fa2mHgiDqI0LH4XBo3",
+        "F7I5OqGvKUZhyV3oY0"
+      ],
+      "uids": [
+        "CO64pFkiBmfbpgv7maY",
+        "CwisxLhWU93oaUGCTEf"
+      ],
+      "file_durations": [
+        0.009198,
+        0.009198
+      ],
+      "connection_durations": [
+        0.709839,
+        0.709121
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000718,
+      "relative_file_start_difference_seconds": 0.01423,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.10",
+        65298,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 135050473,
+      "is_orig": false,
+      "fuids": [
+        "FTHd66X2CBsAFQZIpk",
+        "Fyz8hij48CoNy5Fzwr"
+      ],
+      "uids": [
+        "CoYBBPV87JiySNJhU",
+        "CcynS5A3wuDnKOoFi"
+      ],
+      "file_durations": [
+        3.277812,
+        3.277801
+      ],
+      "connection_durations": [
+        7.997536,
+        7.997243
+      ],
+      "file_duration_difference_seconds": 1.1e-05,
+      "connection_duration_difference_seconds": 0.000293,
+      "relative_file_start_difference_seconds": 0.000282,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        51085,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 127862722,
+      "is_orig": false,
+      "fuids": [
+        "FxRh2WNGqH14t8wdea",
+        "F5Fj7ukKZoCg5fjoFN"
+      ],
+      "uids": [
+        "CeEA7ks0CyHmFNS1kA",
+        "CInAuk02NjbUNPhgxG"
+      ],
+      "file_durations": [
+        2.516039,
+        2.516041
+      ],
+      "connection_durations": [
+        7.625624,
+        7.626152
+      ],
+      "file_duration_difference_seconds": 2e-06,
+      "connection_duration_difference_seconds": 0.000528,
+      "relative_file_start_difference_seconds": 0.000526,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.1.21",
+        59560,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": "mhs-support-48217.tar.gz",
+      "seen_bytes": 1572864,
+      "is_orig": true,
+      "fuids": [
+        "FixQFRq5DSLFR8ZQlF",
+        "FyTb9NUeNkHsLoSR7z"
+      ],
+      "uids": [
+        "C4SOlCQ5kANxQ0iQSM",
+        "CsL7pW7W2Uq8QkyMpt"
+      ],
+      "file_durations": [
+        6.787414,
+        6.787396
+      ],
+      "connection_durations": [
+        11.692574,
+        11.693877
+      ],
+      "file_duration_difference_seconds": 1.8e-05,
+      "connection_duration_difference_seconds": 0.001303,
+      "relative_file_start_difference_seconds": 0.034785,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.10",
+        64428,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 42043269,
+      "is_orig": false,
+      "fuids": [
+        "FZgJFHyswbOYkR2PBek",
+        "FUTc4ioUBbajKWqCOJF"
+      ],
+      "uids": [
+        "CvcQt7JqniVYi1t3CG",
+        "CKU21mwt593s5Uu427"
+      ],
+      "file_durations": [
+        1.555343,
+        1.555344
+      ],
+      "connection_durations": [
+        5.673758,
+        5.673795
+      ],
+      "file_duration_difference_seconds": 1e-06,
+      "connection_duration_difference_seconds": 3.7e-05,
+      "relative_file_start_difference_seconds": 3.5e-05,
+      "same_packet_payload_state_zero_reported_loss": true
+    },
+    {
+      "sensors": [
+        "zeek-core",
+        "zeek-dmz"
+      ],
+      "tuple": [
+        "10.10.2.11",
+        51269,
+        "10.10.3.20",
+        8080,
+        "tcp"
+      ],
+      "filename": null,
+      "seen_bytes": 847,
+      "is_orig": true,
+      "fuids": [
+        "FP0nr0N1Y7YndOTGC",
+        "FShW3si3uPlqxCNEG"
+      ],
+      "uids": [
+        "CTUjLt3SflJ1S2WlAeI",
+        "CSEjz2JNdh3bekZmwrK"
+      ],
+      "file_durations": [
+        0.001047,
+        0.001047
+      ],
+      "connection_durations": [
+        0.487239,
+        0.48818
+      ],
+      "file_duration_difference_seconds": 0.0,
+      "connection_duration_difference_seconds": 0.000941,
+      "relative_file_start_difference_seconds": 0.063448,
+      "same_packet_payload_state_zero_reported_loss": true
+    }
+  ]
+}

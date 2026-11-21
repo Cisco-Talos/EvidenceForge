@@ -1,0 +1,84 @@
+{
+  "scope": "Descriptive native CUPS location wording census, not a universal CUPS version/collector/schema validity claim.",
+  "location_messages": 11,
+  "endpoint_shapes": {
+    "uri": 11
+  },
+  "hosts": {
+    "LT-MRIVERA-02.meridianhcs.local": 2,
+    "WS-LNGUYEN-01.meridianhcs.local": 5,
+    "WS-OHADDAD-01.meridianhcs.local": 4
+  },
+  "examples": [
+    {
+      "file": "LT-MRIVERA-02.meridianhcs.local/syslog.log",
+      "line": 79,
+      "printer": "CORP-PRINT-01",
+      "endpoint": "ipp://CORP-PRINT-01.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "LT-MRIVERA-02.meridianhcs.local/syslog.log",
+      "line": 124,
+      "printer": "CORP-PRINT-01",
+      "endpoint": "ipp://CORP-PRINT-01.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 91,
+      "printer": "FINANCE-MFP",
+      "endpoint": "ipp://FINANCE-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 111,
+      "printer": "FINANCE-MFP",
+      "endpoint": "ipp://FINANCE-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 188,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "ipp://FRONTDESK-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 244,
+      "printer": "CORP-PRINT-01",
+      "endpoint": "ipp://CORP-PRINT-01.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 276,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "ipp://FRONTDESK-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-OHADDAD-01.meridianhcs.local/syslog.log",
+      "line": 60,
+      "printer": "FINANCE-MFP",
+      "endpoint": "ipp://FINANCE-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-OHADDAD-01.meridianhcs.local/syslog.log",
+      "line": 61,
+      "printer": "CORP-PRINT-01",
+      "endpoint": "ipp://CORP-PRINT-01.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-OHADDAD-01.meridianhcs.local/syslog.log",
+      "line": 93,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "ipp://FRONTDESK-MFP.local:631/ipp/print",
+      "shape": "uri"
+    }
+  ]
+}

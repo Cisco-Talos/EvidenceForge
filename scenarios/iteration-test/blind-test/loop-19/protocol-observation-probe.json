@@ -1,0 +1,225 @@
+{
+  "scope": "Descriptive state-conditioned protocol presence for positively service-classified sensor observations; absence alone is not a contradiction",
+  "sensors": {
+    "zeek-core": {
+      "source_sha256": {
+        "ssl.json": "803ff47d1dcb966221dd3cebd927f291eb92be5c1ec629efe02f45d269266d37",
+        "http.json": "64eeb8c26780e7f12815b184801f66865851b496c20ec963df49d1fcc756c761",
+        "conn.json": "358615ff984f6ca033dfbda37d3f2eddbacfbbcbb4ccc4093b6dbb59bc0aa98c"
+      },
+      "state_distribution": {
+        "ssl": {
+          "OTH": {
+            "total": 5,
+            "with_protocol": 0,
+            "without_protocol": 5,
+            "missing_with_bidirectional_payload_no_gap": 5
+          },
+          "RSTO": {
+            "total": 17,
+            "with_protocol": 17
+          },
+          "RSTR": {
+            "total": 25,
+            "with_protocol": 25
+          },
+          "S1": {
+            "total": 7,
+            "with_protocol": 7
+          },
+          "S2": {
+            "total": 2,
+            "with_protocol": 2
+          },
+          "S3": {
+            "total": 3,
+            "with_protocol": 3
+          },
+          "SF": {
+            "total": 296,
+            "with_protocol": 295,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          }
+        },
+        "http": {
+          "RSTO": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "SF": {
+            "total": 2581,
+            "with_protocol": 2558,
+            "without_protocol": 23,
+            "missing_with_bidirectional_payload_no_gap": 22
+          }
+        }
+      },
+      "missing_examples": [
+        {
+          "source_line": 1685,
+          "uid": "C0DHEgDWIbJDcZo89L",
+          "service": "http",
+          "state": "RSTO",
+          "duration": 0.01115,
+          "orig_bytes": 139,
+          "resp_bytes": 43,
+          "history": "ShADadR",
+          "missed_bytes": 0
+        }
+      ]
+    },
+    "zeek-db": {
+      "source_sha256": {
+        "ssl.json": "17b60be5be338a925bd2ce9cfea2cc3c8d63e3fc828a22d790c6d8f4c9ef0d9a",
+        "http.json": "97873ca05b2b547d54551941b5e494633778bc492e19b835ba62cd615928bfd4",
+        "conn.json": "8446778ec5b66fb6f3aa09292152c924355548ec6185d6b6988d56b8851c351a"
+      },
+      "state_distribution": {
+        "ssl": {
+          "OTH": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "RSTO": {
+            "total": 3,
+            "with_protocol": 3
+          },
+          "S1": {
+            "total": 1,
+            "with_protocol": 1
+          },
+          "SF": {
+            "total": 13,
+            "with_protocol": 13
+          }
+        },
+        "http": {
+          "SF": {
+            "total": 12,
+            "with_protocol": 12
+          }
+        }
+      },
+      "missing_examples": []
+    },
+    "zeek-dmz": {
+      "source_sha256": {
+        "ssl.json": "171aeb6c7943be20afdcb4684dddad05a3c8cc85e2439e727b72cec85f8b3613",
+        "http.json": "7324aa0c3a45d982b3389163982b4d0405750d7606d003d1f37713e94ca9e8cc",
+        "conn.json": "d7027539cb5c80185a632379ae8725fc38cf3397b448da1bdd09a92aff3bec0e"
+      },
+      "state_distribution": {
+        "ssl": {
+          "OTH": {
+            "total": 3,
+            "with_protocol": 0,
+            "without_protocol": 3,
+            "missing_with_bidirectional_payload_no_gap": 3
+          },
+          "RSTO": {
+            "total": 51,
+            "with_protocol": 50,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "RSTR": {
+            "total": 36,
+            "with_protocol": 35,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 0
+          },
+          "S1": {
+            "total": 4,
+            "with_protocol": 4
+          },
+          "S2": {
+            "total": 2,
+            "with_protocol": 2
+          },
+          "S3": {
+            "total": 5,
+            "with_protocol": 5
+          },
+          "SF": {
+            "total": 3096,
+            "with_protocol": 3095,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          }
+        },
+        "http": {
+          "OTH": {
+            "total": 2,
+            "with_protocol": 0,
+            "without_protocol": 2,
+            "missing_with_bidirectional_payload_no_gap": 2
+          },
+          "RSTO": {
+            "total": 5,
+            "with_protocol": 4,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "RSTR": {
+            "total": 4,
+            "with_protocol": 4
+          },
+          "S2": {
+            "total": 1,
+            "with_protocol": 1
+          },
+          "S3": {
+            "total": 1,
+            "with_protocol": 1
+          },
+          "SF": {
+            "total": 2829,
+            "with_protocol": 2811,
+            "without_protocol": 18,
+            "missing_with_bidirectional_payload_no_gap": 15
+          }
+        }
+      },
+      "missing_examples": [
+        {
+          "source_line": 775,
+          "uid": "CyKwJ1TR3fDHk6vEWe",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.962757,
+          "orig_bytes": 833,
+          "resp_bytes": 2275,
+          "history": "ShADadR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 805,
+          "uid": "CBnbNd1ykNkEfJetiCu",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.004579,
+          "orig_bytes": 669,
+          "resp_bytes": 0,
+          "history": "ShADar",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1464,
+          "uid": "CBBo38hhrehEk6HRQx",
+          "service": "http",
+          "state": "RSTO",
+          "duration": 0.011108,
+          "orig_bytes": 139,
+          "resp_bytes": 43,
+          "history": "ShADadR",
+          "missed_bytes": 0
+        }
+      ]
+    }
+  }
+}

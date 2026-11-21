@@ -1,0 +1,8 @@
+{
+  "compared_loop": 3,
+  "different_data_files": [
+    "MAC-MROSS-02.meridianhcs.local/ecar.json",
+    "MAC-MROSS-01.meridianhcs.local/ecar.json"
+  ],
+  "native_macos_and_linux_syslog_unchanged": true
+}

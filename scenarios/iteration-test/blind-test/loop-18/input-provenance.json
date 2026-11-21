@@ -1,0 +1,33 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 18,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 553,
+  "behavior_surface_sha256": "786619f9fd442f980e5de71ee12458828beb662b3c982173ab366d25b2ea99a1",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "shared authoritative remote NTLM credential validation and mechanism-owned native session GUID availability"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "native_before": "3 qualified missing-validation failures; initial unsupported public alias excluded",
+    "native_after": "3passed11.09s then9expanded27.98s incl4actualmember/publication lost-return Windows fault cases and2redundantSamba controls",
+    "central": "7scope/timing/frozen/manualfailurepass4.04s;34stampedmanifest/scopepass5.79s3deselected (global RNG policy is slow and was deselected)",
+    "siblings": "70auth/projection1.54s;11persistent26.39s;18nativepersistentrecovery46.02s; counts overlap",
+    "checkpoint": "2passed; first unstampedattempt correctly rejected and retained",
+    "config": "105files0issues",
+    "ruff": "check/format1671pass",
+    "scope": "Known canonical account authority; existing manual unmodeled validation API. No protocol-selection change, globalRNG census/operation/retention ceiling change; source-member structural bound adds exactly one canonical audit fact. No full routine/release gate."
+  }
+}

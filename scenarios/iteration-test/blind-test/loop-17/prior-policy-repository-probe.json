@@ -1,0 +1,46 @@
+{
+  "scope": "Engineering path-shape census for known-domain Windows policy shares; resolved domain classifies paths. Custom/explicit seeds and roots can validly differ. Script extensions and native default-root shape are descriptive, not universal validity requirements. Sensor rows overlap physical activity.",
+  "domain": "meridianhcs.local",
+  "sensors": {
+    "zeek-core": {
+      "counts": {
+        "sysvol_file_rows": 46,
+        "sysvol_domain_gpo_shape_rows": 0,
+        "netlogon_file_rows": 58,
+        "netlogon_script_extension_rows": 29
+      },
+      "examples": {
+        "sysvol": [
+          "Scripts\\groups-approved.xml",
+          "Policies\\logon-review.ini",
+          "Preferences\\policy-v2.pol",
+          "User\\registry-review.xml",
+          "Policies\\2027\\groups-v2.pol",
+          "Preferences\\groups.ini"
+        ],
+        "netlogon": [
+          "Preferences\\2027\\startup.ini",
+          "User\\registry.ini",
+          "User\\groups-v2.ps1",
+          "Scripts\\gpt-draft.ps1",
+          "Policies\\startup-approved.ps1",
+          "Policies\\2026\\policy.pol"
+        ]
+      }
+    }
+  },
+  "windows_share_access": {
+    "DC-02.meridianhcs.local": {
+      "sysvol_access_records": 12,
+      "sysvol_native_default_root_records": 0,
+      "netlogon_access_records": 20,
+      "netlogon_native_default_root_records": 0
+    },
+    "DC-01.meridianhcs.local": {
+      "netlogon_access_records": 11,
+      "netlogon_native_default_root_records": 0,
+      "sysvol_access_records": 13,
+      "sysvol_native_default_root_records": 0
+    }
+  }
+}

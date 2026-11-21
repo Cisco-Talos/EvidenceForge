@@ -7,6 +7,9 @@
 # `lifetime: unbounded` keeps the process running until an authored close or
 # its owning session ends. `lifetime: requested-sleep` bounds a `sleep` by its
 # numeric argument and falls back to `seconds` otherwise.
+# `requested-reports` uses a qualified platform's literal interval/count grammar;
+# its report_schedule owns permitted flags, initial-report semantics and completion
+# overhead. Unsupported syntax keeps the rule's ordinary `seconds` fallback.
 #
 # macOS consults its qualified spawn-profile templates, application bundles and
 # catalogued long-lived applications before this table (see spawn_rules.yaml).
@@ -101,6 +104,16 @@ rules:
     seconds: [0.2, 2.0]
     when:
       - executables: [test]
+  - id: linux-vmstat-finite-reports
+    lifetime: requested-reports
+    seconds: [1.0, 8.0]
+    when:
+      - executables: [vmstat]
+        platforms: [linux]
+    report_schedule:
+      first_report_immediate: true
+      options: [-a, --active, -n, --one-header, -t, --timestamp, -w, --wide]
+      completion_seconds: [0.05, 0.95]
   - id: database-client-password-prompt
     seconds: [8.0, 45.0]
     when:

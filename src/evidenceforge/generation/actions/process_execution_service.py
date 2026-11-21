@@ -73,6 +73,9 @@ from evidenceforge.generation.actions.posix_process import (
 )
 from evidenceforge.generation.actions.posix_process_cleanup import prepare_surviving_child_adoptions
 from evidenceforge.generation.actions.process_execution import ProcessExecutionReuseIntent
+from evidenceforge.generation.actions.windows_process_security import (
+    prepare_windows_process_creation_security,
+)
 from evidenceforge.generation.activity.direct_exec import literal_shell_child_arguments
 from evidenceforge.generation.activity.helpers import (
     _get_os_category,
@@ -105,10 +108,12 @@ from evidenceforge.generation.runtime_content import (
 from evidenceforge.generation.state_manager import (
     StateManager,
 )
+from evidenceforge.generation.timing.phase_allocation import partition_phase_interval
 from evidenceforge.generation.windows_tokens import (
     windows_process_token_profile as _windows_token_profile,
 )
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.scenario import System
 from evidenceforge.models.state import RunningProcess
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -428,6 +433,73 @@ class ProcessExecutionService:
             )
         return candidate.pid
 
+    def execute_existing_posix(
+        self,
+        *,
+        system: System,
+        before: ProcessIdentity,
+        image: str,
+        arguments: tuple[str, ...],
+        at: datetime,
+        source_visible_by: datetime | None = None,
+    ) -> ProcessIdentity:
+        """Replace a known POSIX image through the exact State/source transaction.
+
+        This boundary owns image replacement only. The requesting action retains
+        authentication, terminal allocation and lifetime close ownership.
+        """
+        if _get_os_category(system.os) != "linux" or before.hostname != system.hostname:
+            raise StateError("Ordinary POSIX replacement currently requires a Linux process")
+        if not arguments or arguments[0] != image:
+            raise StateError("POSIX replacement arguments must start with the executable image")
+        builder = self.state_manager.begin_action_cohort_materialization()
+        after = builder.execute_process(
+            before,
+            image=image,
+            command_line=shlex.join(arguments),
+            arguments=arguments,
+            executed_at=at,
+        )
+        state_plan = builder.seal()
+        event = process_exec_occurrence(
+            host=self.identity.host_context(system),
+            before=before,
+            after=after,
+            integrity_level="System" if before.principal == "root" else "Medium",
+        )
+        with self.dispatcher.source_timing_planner.prepared_planning() as timing:
+            carrier = self.dispatcher.prepare_action_cohort_projection(
+                event,
+                source_timing_preparation=timing,
+            )
+        facts = self.dispatcher.action_cohort_projection_facts(carrier)
+        visible = tuple(
+            source.projected_timestamp
+            for source in facts.sources
+            if source.format_name == "ecar"
+            and source.status in {"visible", "delayed"}
+            and source.projected_timestamp is not None
+        )
+        if source_visible_by is not None and visible and max(visible) >= source_visible_by:
+            self.dispatcher.cancel_prepared_action_cohort_projection(carrier)
+            raise StateError("POSIX execution cannot become visible before its dependent evidence")
+        dispatch = self.dispatcher.bind_action_cohort_projection(carrier, state_plan=state_plan)
+        stable_id = f"posix-exec:{after.execution_id}"
+        effects = ExecutionEffectPlan(
+            ActionAnchor("process_execution", stable_id, source="posix_image_replacement"),
+            (),
+        )
+        batch = self.dispatcher.prepare_action_cohort_batch(
+            stable_id,
+            state_plan,
+            (dispatch,),
+            (ExecutionEffectAuditCohortEntry(effects, effects.reconcile(())),),
+            (),
+            (),
+        )
+        self.dispatcher.publish_prepared_action_cohort_batch(batch)
+        return after
+
     def create(self, request: ProcessExecutionRequest) -> int:
         """Execute process admission, planning, preparation, publication and bookkeeping."""
         retained = self.finder_startups.get(request.stable_id)
@@ -569,7 +641,23 @@ class ProcessExecutionService:
             source="finder_launch",
             lifecycle_id=request.lifecycle_group_id or request.stable_id,
         )
-        times = (at, at + gap / 3, at + gap * 2 / 3, at + gap)
+        # Condition separately scoped transition weights on the existing readiness
+        # budget. These are modeled phases, not measured native latency or source jitter.
+        weights = tuple(
+            self.activity_timing.sample_profile_gap(
+                "macos.finder_preimage_before_exec",
+                stable_id=request.stable_id,
+                host=request.system.hostname,
+                source="finder_launch",
+                lifecycle_id=request.lifecycle_group_id or request.stable_id,
+                sample_key=stage,
+            )
+            for stage in ("fork-to-launcher", "launcher-to-credentials", "credentials-to-app")
+        )
+        fork_at, launcher_at, credentials_at, app_at = partition_phase_interval(
+            at, at + gap, weights
+        )
+        times = (fork_at, launcher_at, credentials_at, app_at)
         if request.source_visible_by is not None and times[-1] > ensure_utc(
             request.source_visible_by
         ):
@@ -2013,6 +2101,9 @@ class ProcessExecutionService:
                 parent_group_id=process_identity.parent_lifecycle_group_id or None,
             ),
         )
+        prepare_windows_process_creation_security(
+            event, creator=root.parent_identity, sid_for=self.identity.user_sid
+        )
         if root.executed is not None:
             event = process_exec_occurrence(
                 host=self.identity.host_context(request.system),
@@ -2685,14 +2776,10 @@ class ProcessTerminationService:
                 )
                 process_username = resolved_username
                 process_logon_id = resolved_logon_id or logon_id
-        if authoritative_latest_allowed is None and frozen_generic_close_time is None:
-            time = self.sources._clamp_after_visible_process_create(
-                system,
-                pid,
-                time,
-                "windows.process_exit_after_visible_create",
-            )
-        elif authoritative_latest_allowed is not None:
+        # A source's future create-observation bound is not process runtime.
+        # The shared SourceTimingPlanner contains each native create/end pair
+        # after canonical activity, transport and session constraints above.
+        if authoritative_latest_allowed is not None:
             # Source-native ordering is planned below. It must not move the
             # canonical process lifecycle outside its authoritative session.
             time = min(ensure_utc(time), authoritative_latest_allowed)

@@ -104,6 +104,7 @@ def _file_spec(
     gid: int,
     size: int,
     available_from: date | None,
+    installed_before: datetime | None = None,
 ) -> MacosInstalledFileSpec:
     # Copy/install times belong to placement; a release's content date is shared
     # across the fleet, independent of installation ordering or local filenames.
@@ -112,7 +113,16 @@ def _file_spec(
     )
     with generation_seed_scope(DEFAULT_GENERATION_SEED):
         build_rng = random.Random(_stable_seed(f"macos-installed-build:{binary.content_id}"))
-    age = rng.randint(profile.installation_age_seconds.min, profile.installation_age_seconds.max)
+    minimum_age = profile.installation_age_seconds.min
+    if installed_before is not None:
+        # Condition the existing age support; do not clamp birthtime to boot or
+        # create an installation older than the configured finite support.
+        minimum_age = max(
+            minimum_age, math.ceil((window_start - installed_before).total_seconds()) + 1
+        )
+        if minimum_age > profile.installation_age_seconds.max:
+            raise StateError("Mac preboot installation does not fit configured age support")
+    age = rng.randint(minimum_age, profile.installation_age_seconds.max)
     born = _time(window_start - timedelta(seconds=age), rng)
     modified = _time(
         window_start
@@ -142,6 +152,14 @@ def _file_spec(
         def time_key(value: MacosFileTime) -> tuple[int, int]:
             return value.seconds, value.nanoseconds
 
+        if installed_before is not None:
+            boot_delta = installed_before - datetime(1970, 1, 1, tzinfo=UTC)
+            boot_key = (
+                boot_delta.days * 86400 + boot_delta.seconds,
+                boot_delta.microseconds * 1000,
+            )
+            if time_key(floor) >= boot_key:
+                raise StateError("Mac preboot file release must precede the known host boot")
         born = max(born, floor, key=time_key)
         modified = max(modified, floor, key=time_key)
         accessed = max(accessed, born, key=time_key)
@@ -184,6 +202,7 @@ def compile_macos_installed_provisioning(
     *,
     window_start: datetime,
     window_end: datetime,
+    boot_times: dict[str, datetime] | None = None,
 ) -> MacosInstalledProvisioning | None:
     """Produce one frozen native-stat owner for explicitly modeled arm64 Mac hosts.
 
@@ -205,6 +224,17 @@ def compile_macos_installed_provisioning(
         raise StateError(
             "Mac installed provisioning requires exact owners and an aware finite window"
         )
+    if boot_times is not None and (
+        type(boot_times) is not dict
+        or any(
+            type(host) is not str
+            or not host
+            or type(boot) is not datetime
+            or boot.utcoffset() is None
+            for host, boot in boot_times.items()
+        )
+    ):
+        raise StateError("Mac installed provisioning requires exact aware host boot facts")
     hosts = sorted(
         system.hostname
         for system in scenario.environment.systems
@@ -275,6 +305,13 @@ def compile_macos_installed_provisioning(
                         gid=owner.gid,
                         size=sizes[binary.content_id],
                         available_from=deployments.binary_available_from(binary.content_id),
+                        installed_before=(
+                            boot_times.get(host)
+                            if boot_times is not None
+                            and installation.scope == "machine"
+                            and binary.key.product_id in profile.preboot_product_ids
+                            else None
+                        ),
                     )
                 )
     return MacosInstalledProvisioning(

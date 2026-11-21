@@ -1,0 +1,5 @@
+{
+  "scope": "Descriptive unique host/process-start/image observations. Later file birth is qualified: real metadata restoration is possible. This benchmark models immutable preinstalled OS objects, not restored metadata.",
+  "unique_observations": 214,
+  "later_births": []
+}

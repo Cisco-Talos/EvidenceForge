@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "distinct_dkim_keys": 0,
+  "keys_with_small_factors": 0,
+  "trial_division_bound": 10000,
+  "keys": [],
+  "limitation": "Absence of small factors alone does not establish primality or full RSA validity; native factor-validation tests cover the shared builder."
+}

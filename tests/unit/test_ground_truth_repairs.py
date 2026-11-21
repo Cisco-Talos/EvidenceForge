@@ -163,6 +163,15 @@ def test_ssh_logoff_contract_does_not_require_syslog_without_its_context() -> No
         ("process_fork", "source.ecar_process_create"),
         ("process_create", "source.ecar_process_create"),
         ("process_exec", "source.ecar_dependent_after_process_create"),
+        ("process_exec", "source.ecar_process_create"),
+        ("process_audit_bind", "source.ecar_process_create"),
+        ("process_audit_bind", "source.ecar_dependent_after_process_create"),
+        ("process_privilege_drop", "source.ecar_process_create"),
+        ("process_privilege_drop", "source.ecar_dependent_after_process_create"),
+        ("process_service_drop", "source.ecar_process_create"),
+        ("process_service_drop", "source.ecar_dependent_after_process_create"),
+        ("process_job_control", "source.ecar_process_create"),
+        ("process_job_control", "source.ecar_dependent_after_process_create"),
         ("process_terminate", "source.ecar_process_terminate"),
     ],
 )
@@ -231,6 +240,10 @@ def test_timing_proof_requires_the_real_predecessor_and_bounded_delay(
     altered = exp.model_copy(update={"expected_time": native + timedelta(seconds=1)})
     assert "process_timing_identity_disagreement" in verify_process_timing(row, altered, index, {})
     proof = exp.provenance["timing"]
+    original_policy = proof["policy"]
+    proof["policy"] = "source.ecar_session"
+    assert "process_timing_identity_disagreement" in verify_process_timing(row, exp, index, {})
+    proof["policy"] = original_policy
     assert "unverifiable_timing_dependency" in verify_process_timing(
         row, exp, _RecordIndex({}, _scenario(tmp_path, [])), {}
     )
@@ -435,3 +448,120 @@ def test_source_timing_witness_clone_is_detached() -> None:
     clone = plan._clone()
     clone.validation_receipts["ecar:host"]["anchors"][0]["identity"] = "changed"
     assert plan.validation_receipts["ecar:host"]["anchors"][0]["identity"] == "parent"
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "process_exec",
+        "process_audit_bind",
+        "process_privilege_drop",
+        "process_service_drop",
+        "process_job_control",
+    ],
+)
+def test_actual_process_transition_timing_receipt_passes_independent_verification(
+    tmp_path: Path, phase: str
+) -> None:
+    from dataclasses import replace
+
+    from evidenceforge.evaluation.source_timing_proof import verify_process_timing
+    from evidenceforge.events.base import OccurrenceBuilder
+    from evidenceforge.events.contexts import HostContext
+    from evidenceforge.events.ground_truth_occurrence import (
+        GroundTruthOccurrence,
+        GroundTruthSourceExpectation,
+    )
+    from evidenceforge.events.identity import EventIdentityPlan
+    from evidenceforge.generation.source_timing import (
+        SourceTimingPlanner,
+        endpoint_event_render_key,
+    )
+    from tests.unit.test_source_timing import _context_from_identity, _process_identity
+
+    at = datetime(2026, 10, 20, tzinfo=UTC)
+    host = HostContext(
+        hostname="CLIENT-01",
+        ip="10.0.0.10",
+        os="macOS 27",
+        os_category="macos",
+        system_type="workstation",
+    )
+    before = _process_identity(
+        hostname=host.hostname,
+        pid=420,
+        parent_pid=400,
+        started_at=at,
+        image="/bin/zsh",
+    )
+    changed_at = at + timedelta(milliseconds=55)
+    after = (
+        replace(
+            before,
+            execution_ordinal=1,
+            executed_at=changed_at,
+            lifetime_image=before.image,
+            image="/usr/bin/id",
+        )
+        if phase == "process_exec"
+        else before
+    )
+    birth = OccurrenceBuilder(
+        timestamp=at,
+        event_type="process_fork",
+        src_host=host,
+        process=_context_from_identity(before),
+        identity_plan=EventIdentityPlan(subject=before),
+    )
+    change = OccurrenceBuilder(
+        timestamp=changed_at,
+        event_type=phase,
+        src_host=host,
+        process=_context_from_identity(after),
+        identity_plan=EventIdentityPlan(subject=after, actor=before),
+    )
+    planner = SourceTimingPlanner()
+    planner.plan_event(birth, "ecar")
+    planner.plan_event(change, "ecar")
+    source_instance = "ecar:client-01"
+    receipt = change.source_timing.validation_receipts[source_instance]
+    row = GroundTruthOccurrence(
+        occurrence_id="transition-occurrence",
+        action_id="action",
+        intent_id="intent",
+        storyline_id="story",
+        section="storyline",
+        kind=phase,
+        time=changed_at,
+        facts={
+            "process": {"object_id": after.object_id, "execution_id": after.execution_id},
+            "actor_process": {"object_id": before.object_id},
+        },
+    )
+    expectation = GroundTruthSourceExpectation(
+        expectation_id="transition-expectation",
+        source_instance=source_instance,
+        source_host=host.hostname,
+        family="ecar",
+        format="ecar",
+        role="host",
+        phase=phase,
+        expected="present",
+        expected_time=change.source_timing.finalized_times[
+            endpoint_event_render_key("ecar", host.hostname, "base")
+        ],
+        provenance={"timing": receipt},
+    )
+    birth_record = ParsedRecord(
+        source_format="ecar",
+        raw="",
+        timestamp=birth.source_timing.finalized_times[
+            endpoint_event_render_key("ecar", host.hostname, "process_create")
+        ],
+        source_instance=host.hostname,
+        fields={"objectID": before.object_id, "object": "PROCESS", "action": "CREATE"},
+    )
+    index = _RecordIndex({"ecar": [birth_record]}, _scenario(tmp_path, []))
+
+    assert receipt["policy"] == "source.ecar_process_create"
+    assert verify_process_timing(row, expectation, index, {}) == []

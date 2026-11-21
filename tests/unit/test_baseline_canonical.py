@@ -750,7 +750,8 @@ def test_linux_sudo_command_runtime_respects_interval_arguments():
     vmstat = _linux_sudo_command_runtime("/usr/bin/vmstat 1 5", rng)
     iostat = _linux_sudo_command_runtime("/usr/bin/iostat -xz 1 3", rng)
 
-    assert vmstat >= timedelta(seconds=5)
+    # vmstat emits its first report immediately, then waits for four updates.
+    assert vmstat >= timedelta(seconds=4)
     assert iostat >= timedelta(seconds=3)
 
 

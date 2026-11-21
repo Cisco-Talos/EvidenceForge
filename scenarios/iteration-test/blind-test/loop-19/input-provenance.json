@@ -1,0 +1,34 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 19,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 554,
+  "behavior_surface_sha256": "6970067b7a3b2f707013d5b802a1c323dfb355424dd808d3098e0f460ad2149f",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "qualified APFS presented root directory identity adapter into canonical directory/file ownership"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "before": "1actualproducerfailure huge ordinary rootinode vs reserved2; native publicpath example and Apple primary reference qualified presented scope",
+    "central": "122pass28.03s1deselected; root/home, legacyabsence, alias/config, installedmetadata and provisioning",
+    "stamped": "39pass4.03s3deselected manifest/root/ingress; globalRNG separately3pass7.21s-mslow, unchanged census",
+    "native_filter": "1pass28.53s1deselected; publicnativejob fullvsnative-only bytes",
+    "checkpoint": "1nativeMacworkspacepass137.70s16deselected",
+    "config": "105files0issues",
+    "ruff": "check/format1672pass",
+    "scope": "Bounded root identity, not full APFS layout, filesystem population, directory stat histories or pidversion history. Shared presented st_dev is valid. No full routine/release gate."
+  },
+  "fix_classification": "adapter_to_family_model"
+}

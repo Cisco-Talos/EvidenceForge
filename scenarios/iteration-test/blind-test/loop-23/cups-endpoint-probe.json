@@ -1,0 +1,63 @@
+{
+  "scope": "Descriptive native CUPS location wording census, not a universal CUPS version/collector/schema validity claim.",
+  "location_messages": 7,
+  "endpoint_shapes": {
+    "uri": 7
+  },
+  "hosts": {
+    "LT-MRIVERA-02.meridianhcs.local": 1,
+    "WS-LNGUYEN-01.meridianhcs.local": 3,
+    "WS-OHADDAD-01.meridianhcs.local": 3
+  },
+  "examples": [
+    {
+      "file": "LT-MRIVERA-02.meridianhcs.local/syslog.log",
+      "line": 80,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "ipp://FRONTDESK-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 91,
+      "printer": "FINANCE-MFP",
+      "endpoint": "ipp://FINANCE-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 111,
+      "printer": "FINANCE-MFP",
+      "endpoint": "ipp://FINANCE-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+      "line": 235,
+      "printer": "FINANCE-MFP",
+      "endpoint": "ipp://FINANCE-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-OHADDAD-01.meridianhcs.local/syslog.log",
+      "line": 60,
+      "printer": "FINANCE-MFP",
+      "endpoint": "ipp://FINANCE-MFP.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-OHADDAD-01.meridianhcs.local/syslog.log",
+      "line": 61,
+      "printer": "CORP-PRINT-01",
+      "endpoint": "ipp://CORP-PRINT-01.local:631/ipp/print",
+      "shape": "uri"
+    },
+    {
+      "file": "WS-OHADDAD-01.meridianhcs.local/syslog.log",
+      "line": 172,
+      "printer": "FRONTDESK-MFP",
+      "endpoint": "ipp://FRONTDESK-MFP.local:631/ipp/print",
+      "shape": "uri"
+    }
+  ]
+}

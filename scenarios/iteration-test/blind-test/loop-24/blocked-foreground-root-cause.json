@@ -1,0 +1,61 @@
+[
+  {
+    "kind": "process_create",
+    "time": "2026-11-02T15:39:14.028123Z",
+    "facts": {
+      "actor_process": {
+        "execution_id": "628b7f80-72e4-476e-9c50-7caac1b67c76:exec:0",
+        "hostname": "WS-LNGUYEN-01",
+        "image": "/bin/bash",
+        "object_id": "628b7f80-72e4-476e-9c50-7caac1b67c76",
+        "pid": 3249657,
+        "principal": "lina.nguyen",
+        "start_time": "2026-11-02T15:09:12.460646+00:00"
+      },
+      "auth": {
+        "auth_protocol": "",
+        "auth_session_ref": "",
+        "failure_reason": "",
+        "failure_status": "",
+        "failure_substatus": "",
+        "logon_id": "0x136d01be",
+        "logon_type": 2,
+        "result": "success",
+        "session_id": 175,
+        "session_kind": "",
+        "source_ip": "",
+        "source_port": 0,
+        "username": "lina.nguyen"
+      },
+      "lifecycle": {
+        "canonical_start": "2026-11-02T15:39:14.028123+00:00",
+        "group_id": "process-execution-00000000b706dc32",
+        "parent_group_id": "logon-00000000091a26f7"
+      },
+      "local_only": false,
+      "process": {
+        "command_line": "docker compose logs -f --tail 20",
+        "concurrency_group_id": "bash-history:0000000011613ce9",
+        "execution_id": "5aa0dbbd-1351-4058-8483-39055c7fb1a0:exec:0",
+        "image": "/usr/bin/docker",
+        "logon_id": "0x136d01be",
+        "object_id": "5aa0dbbd-1351-4058-8483-39055c7fb1a0",
+        "parent_pid": 3249657,
+        "pid": 3253534,
+        "start_time": "2026-11-02T15:39:14.028123+00:00",
+        "username": "lina.nguyen"
+      },
+      "src_host": {
+        "fqdn": "WS-LNGUYEN-01.meridianhcs.local",
+        "hostname": "WS-LNGUYEN-01",
+        "ip": "10.10.1.21",
+        "os_category": "linux",
+        "roles": []
+      },
+      "storyline_cluster_id": null,
+      "subject_identity": {
+        "object_id": "5aa0dbbd-1351-4058-8483-39055c7fb1a0"
+      }
+    }
+  }
+]

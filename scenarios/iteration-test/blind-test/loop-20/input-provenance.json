@@ -1,0 +1,36 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 20,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 555,
+  "behavior_surface_sha256": "5ac45fb2c8362a80856894255a62f202b43deef97fea28bdabe5717a51892e0f",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "canonical chronological native generations include existing host-wide POSIX hidden birth history before observation"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "prototype": "6isolatedledger0.15s then9isolatedState/checkpoint/frozen0.28s; canonical files unchanged until19postEXIT0",
+    "central": "43production2.37s then44owner-scope/seed42+1372.37s;10newnon-slowcontract cases",
+    "stamped": "37manifest/history3.11s; same canonical opaquehandles, one native/eCARmap",
+    "native_filter_checkpoint": "2publicnativejob full/native-only+activejobcheckpoint112.37s, seed372/371; 1Macworkspacecheckpoint138.79s16deselected",
+    "ecar_only": "1supportedpartialeCAR-onlyEngineconsumerpass11.35s10deselected; nativegenerationsexceedopaquehandles withoutESingress",
+    "fixture_correction": "Attemptedcomplete-nativefixturewithESsourceexcluded correctlyrejected21. Preservedfailure; unsupportedtestconfigurationexcluded, productioncoverageguardnotweakened, benchmarkunchanged",
+    "global_rng": "3dedicatedslow7.31s unchanged census",
+    "config": "105files0issues",
+    "ruff": "finalcheck/format1673pass",
+    "scope": "Existing modeled hidden births supply lower-bound history; no hidden-exec guesses or calibrated kernel workload claim, no new persistent State fields/caches/retention ceilings. Source-resolution atomic in existing1024rowpages. Config beforeState lock, Engine close/retry restores frozen config+seed scopes. No full routine/release gate."
+  },
+  "fix_classification": "family_level"
+}

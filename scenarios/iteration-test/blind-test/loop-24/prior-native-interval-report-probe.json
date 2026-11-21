@@ -1,0 +1,76 @@
+{
+  "scope": "Descriptive visible Linux vmstat child lifetimes. Normal completion waits are not assertions of successful exit: cancellation, session deadlines and observation offsets may produce shorter visible lifetimes. No universal extra source or exit-status requirement.",
+  "visible_instances": 6,
+  "parents": {
+    "/usr/bin/sudo": 4,
+    "/bin/bash": 2
+  },
+  "rows": [
+    {
+      "host": "APP-INT-01",
+      "pid": 3384114,
+      "object_id": "6c060486-3afe-4169-98ed-4679f0e8036e",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793626187058,
+      "close_ms": 1793626192923,
+      "observed_seconds": 5.865,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "FILE-LNX-01",
+      "pid": 2793973,
+      "object_id": "c1a65d6b-38f7-4715-8567-93758f85dbeb",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793628245429,
+      "close_ms": 1793628251352,
+      "observed_seconds": 5.923,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "LOG-MON-01",
+      "pid": 764704,
+      "object_id": "646e8cad-721e-499d-9e46-669ee73326fd",
+      "command": "vmstat 1 5",
+      "parent_image": "/bin/bash",
+      "start_ms": 1793630103946,
+      "close_ms": 1793630107464,
+      "observed_seconds": 3.518,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "pid": 701744,
+      "object_id": "36c95bcd-17cb-4da3-b7a0-8d9cc387d530",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793628113031,
+      "close_ms": 1793628118737,
+      "observed_seconds": 5.706,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "pid": 2330992,
+      "object_id": "5740e9a6-32e3-41f1-ad24-6a5074de7224",
+      "command": "vmstat 1 5",
+      "parent_image": "/bin/bash",
+      "start_ms": 1793641112293,
+      "close_ms": 1793641115347,
+      "observed_seconds": 3.054,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "WS-OHADDAD-01",
+      "pid": 81882,
+      "object_id": "66a90011-fb66-49a1-8ea8-d47409d6565f",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793632795346,
+      "close_ms": 1793632801470,
+      "observed_seconds": 6.124,
+      "ordinary_uninterrupted_wait_seconds": 4
+    }
+  ]
+}

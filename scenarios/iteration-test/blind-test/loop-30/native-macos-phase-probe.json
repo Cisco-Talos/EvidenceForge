@@ -1,0 +1,123 @@
+{
+  "scope": "Descriptive native canonical phase texture. Integer rounding up to1us; no universal latency calibration or ban on coincidental ratios. Terminal bootstrap is a separate sibling.",
+  "finder_launch_count": 9,
+  "finder_one_to_two_within_one_us": 0,
+  "ssh_exit_chain_count": 2,
+  "ssh_equal_gaps_within_one_us": 0,
+  "launches": [
+    {
+      "host": "MAC-MROSS-01.meridianhcs.local",
+      "pid": 26203,
+      "image": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "terminal_bootstrap": false,
+      "first_gap_us": 3150,
+      "second_gap_us": 7775,
+      "second_minus_twice_first_us": 1475
+    },
+    {
+      "host": "MAC-MROSS-01.meridianhcs.local",
+      "pid": 28425,
+      "image": "/Applications/Visual Studio Code.app/Contents/MacOS/Code",
+      "terminal_bootstrap": false,
+      "first_gap_us": 6429,
+      "second_gap_us": 10989,
+      "second_minus_twice_first_us": -1869
+    },
+    {
+      "host": "MAC-MROSS-01.meridianhcs.local",
+      "pid": 31109,
+      "image": "/Applications/Slack.app/Contents/MacOS/Slack",
+      "terminal_bootstrap": false,
+      "first_gap_us": 3648,
+      "second_gap_us": 8734,
+      "second_minus_twice_first_us": 1438
+    },
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "pid": 88252,
+      "image": "/Applications/iTerm.app/Contents/MacOS/iTerm2",
+      "terminal_bootstrap": true,
+      "first_gap_us": 15960,
+      "second_gap_us": 12134,
+      "second_minus_twice_first_us": -19786
+    },
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "pid": 89680,
+      "image": "/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook",
+      "terminal_bootstrap": false,
+      "first_gap_us": 2368,
+      "second_gap_us": 5933,
+      "second_minus_twice_first_us": 1197
+    },
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "pid": 90197,
+      "image": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "terminal_bootstrap": false,
+      "first_gap_us": 7325,
+      "second_gap_us": 8858,
+      "second_minus_twice_first_us": -5792
+    },
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "pid": 93165,
+      "image": "/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook",
+      "terminal_bootstrap": false,
+      "first_gap_us": 4994,
+      "second_gap_us": 8350,
+      "second_minus_twice_first_us": -1638
+    },
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "pid": 12334,
+      "image": "/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word",
+      "terminal_bootstrap": false,
+      "first_gap_us": 4467,
+      "second_gap_us": 8821,
+      "second_minus_twice_first_us": -113
+    },
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "pid": 26276,
+      "image": "/Applications/DBeaver.app/Contents/MacOS/dbeaver",
+      "terminal_bootstrap": false,
+      "first_gap_us": 3307,
+      "second_gap_us": 4807,
+      "second_minus_twice_first_us": -1807
+    },
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "pid": 26757,
+      "image": "/Applications/zoom.us.app/Contents/MacOS/zoom.us",
+      "terminal_bootstrap": false,
+      "first_gap_us": 3589,
+      "second_gap_us": 11259,
+      "second_minus_twice_first_us": 4081
+    }
+  ],
+  "shutdown_chains": [
+    {
+      "host": "MAC-MROSS-01.meridianhcs.local",
+      "pids": [
+        44187,
+        44186,
+        44182
+      ],
+      "first_gap_us": 216363,
+      "second_gap_us": 260753,
+      "gap_difference_us": 44390
+    },
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "pids": [
+        99712,
+        99711,
+        99697
+      ],
+      "first_gap_us": 132132,
+      "second_gap_us": 105845,
+      "gap_difference_us": -26287
+    }
+  ]
+}

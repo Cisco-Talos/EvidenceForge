@@ -1,0 +1,76 @@
+{
+  "scope": "Descriptive visible Linux vmstat child lifetimes. Normal completion waits are not assertions of successful exit: cancellation, session deadlines and observation offsets may produce shorter visible lifetimes. No universal extra source or exit-status requirement.",
+  "visible_instances": 6,
+  "parents": {
+    "/usr/bin/sudo": 4,
+    "/bin/bash": 2
+  },
+  "rows": [
+    {
+      "host": "APP-INT-01",
+      "pid": 3378993,
+      "object_id": "d0b9f281-8b99-48a9-ae59-47cd5db855cc",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793625274041,
+      "close_ms": 1793625279573,
+      "observed_seconds": 5.532,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "FILE-LNX-01",
+      "pid": 2803999,
+      "object_id": "0fb74364-b428-4297-99e8-f5ee72184a6a",
+      "command": "vmstat 1 5",
+      "parent_image": "/bin/bash",
+      "start_ms": 1793631608329,
+      "close_ms": 1793631613376,
+      "observed_seconds": 5.047,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "LOG-MON-01",
+      "pid": 743112,
+      "object_id": "28f468e0-a3d6-47f0-b276-7d89cd77c4e5",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793624545002,
+      "close_ms": 1793624551033,
+      "observed_seconds": 6.031,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "pid": 2293508,
+      "object_id": "6e08e34a-2831-4fe7-8e47-074d7fd23039",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793628225050,
+      "close_ms": 1793628230526,
+      "observed_seconds": 5.476,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "PROXY-01",
+      "pid": 2623163,
+      "object_id": "4d338e41-4510-4884-b8a3-9faefb030b7d",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793626685553,
+      "close_ms": 1793626691508,
+      "observed_seconds": 5.955,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "WEB-EXT-01",
+      "pid": 3077398,
+      "object_id": "c1aff543-9795-4886-9411-b2f0135b7dac",
+      "command": "vmstat 1 5",
+      "parent_image": "/bin/bash",
+      "start_ms": 1793640162384,
+      "close_ms": 1793640166005,
+      "observed_seconds": 3.621,
+      "ordinary_uninterrupted_wait_seconds": 4
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "scope": "Positive visible CLI output/file/socket ownership; missing flows alone do not imply a contradiction. CLI destination extraction in this diagnostic uses the final visible URL and is not an engine parser.",
+  "downloads": [
+    {
+      "source": "WEB-EXT-01.meridianhcs.local/ecar.json",
+      "sha256": "7bea39a46a474b67be719e01ab85497857a1832b5d84767d8124b5856d5c84cd",
+      "create_line": 3759,
+      "pid": 2745961,
+      "command": "curl -s -o /dev/null -w '%{http_code}' http://localhost",
+      "destination": "http://localhost",
+      "files": [],
+      "same_pid_flows": [],
+      "other_pid_flows_same_destination_nearby": []
+    },
+    {
+      "source": "WS-LNGUYEN-01.meridianhcs.local/ecar.json",
+      "sha256": "8595c6ea51ef47bb047678b66f2f31f5fe9b85b1f09a9bea32bcb7079379c9d8",
+      "create_line": 274,
+      "pid": 2959192,
+      "command": "/usr/bin/curl -fsS -o /tmp/connector-check https://support.valeworks-health.net/tools/linux-x64/connector-check",
+      "destination": "https://support.valeworks-health.net/tools/linux-x64/connector-check",
+      "files": [
+        {
+          "line": 275,
+          "pid": 2959192,
+          "path": "/tmp/connector-check"
+        }
+      ],
+      "same_pid_flows": [],
+      "other_pid_flows_same_destination_nearby": [
+        {
+          "line": 276,
+          "pid": 2959114,
+          "command": "curl --proxy http://PROXY-01.meridianhcs.local:8080 https://support.valeworks-health.net/",
+          "src_port": "48400",
+          "dst_ip": "10.10.3.20",
+          "dst_port": "8080"
+        }
+      ]
+    },
+    {
+      "source": "WS-MCHEN-01.meridianhcs.local/ecar.json",
+      "sha256": "604e7409bab34cff76975d62e8602386cad8203ef4b66dbfa9292ef132a36144",
+      "create_line": 327,
+      "pid": 8064,
+      "command": "curl.exe -fsS -o C:\\Users\\marcus.chen\\Downloads\\connector-check.exe https://support.valeworks-health.net/tools/windows-x64/connector-check.exe",
+      "destination": "https://support.valeworks-health.net/tools/windows-x64/connector-check.exe",
+      "files": [
+        {
+          "line": 335,
+          "pid": 8064,
+          "path": "C:\\Users\\marcus.chen\\Downloads\\connector-check.exe"
+        }
+      ],
+      "same_pid_flows": [],
+      "other_pid_flows_same_destination_nearby": [
+        {
+          "line": 344,
+          "pid": 8076,
+          "command": "curl.exe --proxy http://PROXY-01.meridianhcs.local:8080 \"https://support.valeworks-health.net/\"",
+          "src_port": "50857",
+          "dst_ip": "10.10.3.20",
+          "dst_port": "8080"
+        }
+      ]
+    }
+  ]
+}

@@ -176,6 +176,12 @@ class TestLogonIdSystemScoping:
         )
         engine.world_planner = Mock()
         engine.scenario.environment.service_accounts = []
+        engine.activity_generator.sid_registry.update(
+            {
+                local_user.username: "S-1-5-21-1-2-3-1001",
+                outbound_user.username: "S-1-5-21-1-2-3-1002",
+            }
+        )
         event_time = datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
         caller_logon_id = state_manager.create_session(
             username=local_user.username,
@@ -245,6 +251,15 @@ class TestLogonIdSystemScoping:
             for event in emitted
             if event.event_type == "process_create" and event.process.pid == process_result["pid"]
         )
+        controller_create = next(
+            event
+            for event in emitted
+            if event.event_type == "process_create" and event.process.pid == controller.pid
+        )
+        assert controller_create.auth.username == local_user.username
+        assert controller_create.auth.subject_logon_id == caller_logon_id
+        assert controller_create.process.target_security_context is not None
+        assert controller_create.process.target_security_context.logon_id == type9_id
         assert type9_event.auth.cloned_from_logon_id == caller_logon_id
         assert type9_event.auth.username == local_user.username
         assert type9_event.auth.outbound_username == outbound_user.username

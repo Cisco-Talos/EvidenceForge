@@ -1,0 +1,90 @@
+{
+  "scope": "Positive visible CLI output/file/socket ownership; missing flows alone do not imply a contradiction. CLI destination extraction in this diagnostic uses the final visible URL and is not an engine parser.",
+  "downloads": [
+    {
+      "source": "WEB-EXT-01.meridianhcs.local/ecar.json",
+      "sha256": "958ee9cedde0cb1f7fbf7c8408adfabe951438776a495cfe0406716eb5381278",
+      "create_line": 865,
+      "pid": 2702647,
+      "command": "curl -s -o /dev/null -w '%{http_code}' http://localhost",
+      "destination": "http://localhost",
+      "files": [],
+      "same_pid_flows": [],
+      "other_pid_flows_same_destination_nearby": []
+    },
+    {
+      "source": "WEB-EXT-01.meridianhcs.local/ecar.json",
+      "sha256": "958ee9cedde0cb1f7fbf7c8408adfabe951438776a495cfe0406716eb5381278",
+      "create_line": 3310,
+      "pid": 2731610,
+      "command": "curl -s -o /dev/null -w '%{http_code}' http://localhost",
+      "destination": "http://localhost",
+      "files": [],
+      "same_pid_flows": [],
+      "other_pid_flows_same_destination_nearby": []
+    },
+    {
+      "source": "WS-LNGUYEN-01.meridianhcs.local/ecar.json",
+      "sha256": "cf16d92c95935d3f2bfd9fe34f69176f3571660a8f927f52b65d2345bcc7493b",
+      "create_line": 322,
+      "pid": 2959192,
+      "command": "/usr/bin/curl -fsS -o /tmp/connector-check https://support.valeworks-health.net/tools/linux-x64/connector-check",
+      "destination": "https://support.valeworks-health.net/tools/linux-x64/connector-check",
+      "files": [
+        {
+          "line": 324,
+          "pid": 2959192,
+          "path": "/tmp/connector-check"
+        }
+      ],
+      "same_pid_flows": [],
+      "other_pid_flows_same_destination_nearby": [
+        {
+          "line": 325,
+          "pid": 2959193,
+          "command": "curl --proxy http://PROXY-01.meridianhcs.local:8080 https://support.valeworks-health.net/",
+          "src_port": "39161",
+          "dst_ip": "10.10.3.20",
+          "dst_port": "8080"
+        }
+      ]
+    },
+    {
+      "source": "WS-LNGUYEN-01.meridianhcs.local/ecar.json",
+      "sha256": "cf16d92c95935d3f2bfd9fe34f69176f3571660a8f927f52b65d2345bcc7493b",
+      "create_line": 474,
+      "pid": 2977833,
+      "command": "curl -sS -o /dev/null -w '%{http_code}' https://wiki.meridianhcs.local/display/ENG/Architecture",
+      "destination": "https://wiki.meridianhcs.local/display/ENG/Architecture",
+      "files": [],
+      "same_pid_flows": [],
+      "other_pid_flows_same_destination_nearby": []
+    },
+    {
+      "source": "WS-MCHEN-01.meridianhcs.local/ecar.json",
+      "sha256": "101ed0b0c7060523005aca715be36321cca6e585e1a636b712fbbb8393627697",
+      "create_line": 479,
+      "pid": 7704,
+      "command": "curl.exe -fsS -o C:\\Users\\marcus.chen\\Downloads\\connector-check.exe https://support.valeworks-health.net/tools/windows-x64/connector-check.exe",
+      "destination": "https://support.valeworks-health.net/tools/windows-x64/connector-check.exe",
+      "files": [
+        {
+          "line": 489,
+          "pid": 7704,
+          "path": "C:\\Users\\marcus.chen\\Downloads\\connector-check.exe"
+        }
+      ],
+      "same_pid_flows": [],
+      "other_pid_flows_same_destination_nearby": [
+        {
+          "line": 496,
+          "pid": 7712,
+          "command": "curl.exe --proxy http://PROXY-01.meridianhcs.local:8080 \"https://support.valeworks-health.net/\"",
+          "src_port": "57407",
+          "dst_ip": "10.10.3.20",
+          "dst_port": "8080"
+        }
+      ]
+    }
+  ]
+}

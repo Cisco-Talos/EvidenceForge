@@ -13,6 +13,9 @@ from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import AuthContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions.process_execution import ProcessExecutionRequest
+from evidenceforge.generation.actions.windows_process_security import (
+    prepare_windows_process_creation_security,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.process_helpers import _windows_script_host_process
 from evidenceforge.generation.activity.service_process_profiles import matching_service_worker
@@ -328,6 +331,11 @@ class SystemProcessService:
             ),
         )
 
+        prepare_windows_process_creation_security(
+            event,
+            creator=self.state_manager.get_process_identity(system.hostname, parent_pid),
+            sid_for=self.identity.user_sid,
+        )
         self.sources._record_process_source_create_time(
             system.hostname,
             pid,

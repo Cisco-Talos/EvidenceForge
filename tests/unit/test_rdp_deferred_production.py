@@ -3891,9 +3891,10 @@ def test_disconnected_rdp_session_reconnects_through_same_exact_owner(
         process
         for process in state.get_processes_on_system(source.hostname)
         if process.image.casefold().endswith("mstsc.exe")
-        and reconnect_at < process.start_time < reconnect_at + timedelta(seconds=2)
+        and reconnect_at < process.start_time < updated_session.network_close_time
     ]
     assert len(reconnect_clients) == 1
+    assert reconnect_clients[0].start_time == updated_session.source_ready_time
     assert reconnect_clients[0].last_activity_time == updated_session.network_close_time
     assert dispatcher.deferred_session_publication_census().prepared_batches == 0
 

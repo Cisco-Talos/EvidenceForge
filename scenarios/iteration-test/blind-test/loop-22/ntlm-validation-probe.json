@@ -1,0 +1,35 @@
+{
+  "scope": "Engineering contract probe. Resolved explicit domain classifies domain-account NTLM Type3 logons; it is not given to blind reviewers. Pair matches use normalized account/source workstation anywhere in the supplied slice, plus a separate bounded-time check. Missing exported validation may reflect source filtering/unseen DC scope; generated ownership must be inspected before declaring a defect.",
+  "domain": "meridianhcs.local",
+  "counts": {
+    "domain_ntlm_type3_logons": 127,
+    "zero_guid": 127,
+    "matched_pair_anywhere": 127,
+    "matched_within_minus1_plus5_seconds": 124
+  },
+  "validation_totals": {
+    "validation_success": 181,
+    "validation_failure": 4
+  },
+  "by_host": {
+    "DC-02.meridianhcs.local": {
+      "matched_pair_anywhere": 35
+    },
+    "DC-01.meridianhcs.local": {
+      "matched_pair_anywhere": 29
+    },
+    "WS-DRAMIREZ-01.meridianhcs.local": {
+      "matched_pair_anywhere": 1
+    },
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "matched_pair_anywhere": 5
+    },
+    "FILE-SRV-01.meridianhcs.local": {
+      "matched_pair_anywhere": 54
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "matched_pair_anywhere": 3
+    }
+  },
+  "unmatched_examples": []
+}

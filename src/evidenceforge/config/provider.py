@@ -134,6 +134,7 @@ _TRUSTED_DERIVED_CACHE_SLOTS: tuple[tuple[str, str], ...] = (
         "load_resource_forecast_calibration",
     ),
     ("evidenceforge.generation.storage_world", "_load_catalog_config"),
+    ("evidenceforge.generation.rsa_material", "_deterministic_rsa_modulus"),
     ("evidenceforge.evaluation.thresholds", "load_thresholds"),
     ("evidenceforge.events.evidence_projection", "source_event_contracts"),
     ("evidenceforge.formats.snare", "load_snare_projections"),

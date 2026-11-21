@@ -120,13 +120,16 @@ def test_directory_metadata_is_deterministic_and_host_path_scoped() -> None:
         for path in ("/", "/Users/alex"):
             metadata = observations[host, path].metadata
             age_seconds = start.timestamp() - metadata.born.seconds
-            assert profile.directory_inode_range.min <= metadata.inode
-            assert metadata.inode <= profile.directory_inode_range.max
+            if path == "/" and profile.filesystem_root_identity == "apfs_presented_root":
+                assert metadata.inode == 2
+            else:
+                assert profile.directory_inode_range.min <= metadata.inode
+                assert metadata.inode <= profile.directory_inode_range.max
             assert profile.directory_age_range.min <= age_seconds
             assert age_seconds <= profile.directory_age_range.max
-    assert {
-        observations["MAC-01", path].metadata.inode for path in ("/", "/Users/alex")
-    }.isdisjoint(observations["MAC-02", path].metadata.inode for path in ("/", "/Users/alex"))
+    assert {observations["MAC-01", path].metadata.inode for path in ("/Users/alex",)}.isdisjoint(
+        observations["MAC-02", path].metadata.inode for path in ("/Users/alex",)
+    )
 
 
 def _terminal(

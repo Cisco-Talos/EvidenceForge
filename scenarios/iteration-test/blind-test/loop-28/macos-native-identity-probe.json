@@ -1,0 +1,65 @@
+{
+  "scope": "Descriptive data-only native identity census, not universal validity thresholds. One source can legitimately have zero-based client sequence counters; matching device IDs are not independently defects.",
+  "hosts": {
+    "MAC-MROSS-01.meridianhcs.local": {
+      "executable_paths": 29,
+      "executable_inode_min": 2992445,
+      "executable_inode_max": 2992539,
+      "executable_inode_span": 95,
+      "birthtime_adjacent_inversions": 0,
+      "allocation_values": 99,
+      "pidversion_min": 2482477,
+      "pidversion_max": 2521114,
+      "pidversion_missing_inside_range": 38539,
+      "directories": {
+        "/": {
+          "st_ino": 2,
+          "st_dev": 2876,
+          "st_size": 128,
+          "st_nlink": 1,
+          "st_birthtimespec": "2026-07-17T21:35:16.000000000Z"
+        },
+        "/Users/maya.ross": {
+          "st_ino": 2061341048678,
+          "st_dev": 2876,
+          "st_size": 128,
+          "st_nlink": 1,
+          "st_birthtimespec": "2026-01-22T08:16:17.000000000Z"
+        }
+      },
+      "executable_devices": [
+        2876
+      ]
+    },
+    "MAC-MROSS-02.meridianhcs.local": {
+      "executable_paths": 31,
+      "executable_inode_min": 2509760,
+      "executable_inode_max": 2509867,
+      "executable_inode_span": 108,
+      "birthtime_adjacent_inversions": 0,
+      "allocation_values": 113,
+      "pidversion_min": 6461355,
+      "pidversion_max": 6508523,
+      "pidversion_missing_inside_range": 47056,
+      "directories": {
+        "/": {
+          "st_ino": 2,
+          "st_dev": 692,
+          "st_size": 128,
+          "st_nlink": 1,
+          "st_birthtimespec": "2025-08-13T13:51:53.000000000Z"
+        },
+        "/Users/maya.ross": {
+          "st_ino": 2176108086487,
+          "st_dev": 692,
+          "st_size": 128,
+          "st_nlink": 1,
+          "st_birthtimespec": "2025-03-25T18:13:26.000000000Z"
+        }
+      },
+      "executable_devices": [
+        692
+      ]
+    }
+  }
+}

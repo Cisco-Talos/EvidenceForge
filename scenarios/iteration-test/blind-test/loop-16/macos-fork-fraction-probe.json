@@ -1,0 +1,61 @@
+{
+  "scope": "Data-only event-envelope time fractions of distinct native ES fork notifications. Repetition is a distribution observation, not a proof of origin or impossible kernel behavior.",
+  "hosts": {
+    "MAC-MROSS-02.meridianhcs.local": {
+      "fork_notifications": 58,
+      "repeated_fraction_groups": {
+        "965208000": [
+          {
+            "time": "2026-11-02T15:30:55.965208000Z",
+            "mach_time": 56204543164992
+          },
+          {
+            "time": "2026-11-02T15:31:17.965208000Z",
+            "mach_time": 56205071164992
+          },
+          {
+            "time": "2026-11-02T15:31:58.965208000Z",
+            "mach_time": 56206055164992
+          }
+        ]
+      }
+    },
+    "MAC-MROSS-01.meridianhcs.local": {
+      "fork_notifications": 48,
+      "repeated_fraction_groups": {
+        "198588000": [
+          {
+            "time": "2026-11-02T13:48:41.198588000Z",
+            "mach_time": 24953308766112
+          },
+          {
+            "time": "2026-11-02T13:49:08.198588000Z",
+            "mach_time": 24953956766112
+          },
+          {
+            "time": "2026-11-02T13:49:43.198588000Z",
+            "mach_time": 24954796766112
+          },
+          {
+            "time": "2026-11-02T13:50:02.198588000Z",
+            "mach_time": 24955252766112
+          }
+        ],
+        "487145000": [
+          {
+            "time": "2026-11-02T14:37:50.487145000Z",
+            "mach_time": 25024091691480
+          },
+          {
+            "time": "2026-11-02T14:38:28.487145000Z",
+            "mach_time": 25025003691480
+          },
+          {
+            "time": "2026-11-02T14:38:57.487145000Z",
+            "mach_time": 25025699691480
+          }
+        ]
+      }
+    }
+  }
+}

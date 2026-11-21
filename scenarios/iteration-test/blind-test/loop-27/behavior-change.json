@@ -1,0 +1,14 @@
+{
+  "revision": 565,
+  "id": "canonical-macos-ssh-descendant-close-transition-allocation",
+  "impact": "localized",
+  "domains": [
+    "macos-ssh-lifecycle",
+    "canonical-phase-timing"
+  ],
+  "formats": [
+    "macos_endpoint_security",
+    "ecar"
+  ],
+  "summary": "Allocate exact Mac SSH descendant close phases from scoped transition weights within existing transport/receiver anchors. Retain postorder, dependency frontiers and continuation-owned exact retry; Linux behavior is unchanged."
+}

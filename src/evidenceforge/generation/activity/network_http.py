@@ -36,22 +36,74 @@ from evidenceforge.generation.timing import (
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import _stable_seed
 
+from .network_common import _command_tokens
 from .network_proxy import _proxy_time_taken_ms
 
 logger = logging.getLogger(__name__)
 
 
 def _extract_http_url_from_command(command_line: str) -> str | None:
-    """Return the first valid HTTP(S) URL embedded in a process command line."""
-    for match in re.finditer(r"https?://[^\s'\"<>]+", command_line):
-        candidate = match.group(0).rstrip(").,;]")
-        try:
-            parsed = urlsplit(candidate)
-            _ = parsed.port
-        except ValueError:
+    """Return a request URL, excluding URL-valued client configuration options."""
+    tokens = _command_tokens(command_line)
+    exe = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower() if tokens else ""
+    wget = exe in {"wget", "wget.exe"}
+    ignored_value_options = {
+        "--proxy",
+        "-x",
+        "--preproxy",
+        "--referer",
+        "-e",
+        "--header",
+        "-H",
+        "--proxy-header",
+        "--data",
+        "--data-raw",
+        "--data-binary",
+        "--data-urlencode",
+        "-d",
+        "--form",
+        "--form-string",
+        "-F",
+        "--output",
+        "-o",
+        "--output-document",
+        "--resolve",
+        "--connect-to",
+        "--config",
+        "-K",
+        "--upload-file",
+        "-T",
+        "--user",
+        "-u",
+        "--proxy-user",
+        "-U",
+    }
+    if wget:
+        ignored_value_options.add("-O")
+        ignored_value_options.discard("-F")
+    skip = False
+    for token in tokens:
+        if skip:
+            skip = False
             continue
-        if parsed.scheme in {"http", "https"} and parsed.hostname:
-            return candidate
+        option = token.partition("=")[0]
+        if option in ignored_value_options:
+            skip = "=" not in token
+            continue
+        if any(
+            token.startswith(prefix) and token != prefix
+            for prefix in ("-x", "-H", "-e", "-o", "-u", "-U", "-T")
+        ):
+            continue
+        for match in re.finditer(r"https?://[^\s'\"<>]+", token):
+            candidate = match.group(0).rstrip(").,;]")
+            try:
+                parsed = urlsplit(candidate)
+                _ = parsed.port
+            except ValueError:
+                continue
+            if parsed.scheme in {"http", "https"} and parsed.hostname:
+                return candidate
     return None
 
 
@@ -106,14 +158,122 @@ def _source_native_http_referrer(
 
 
 def _http_method_for_process_command(command_line: str) -> str:
-    """Infer the HTTP method visible for a simple CLI HTTP command."""
-    lowered = f" {command_line.lower()} "
-    if " -i " in lowered or " --head " in lowered or " --head" in lowered:
+    """Infer a literal CLI method without conflating curl -I and -i."""
+    tokens = _command_tokens(command_line)
+    for index, token in enumerate(tokens):
+        if token in {"-X", "--request", "--method"} and index + 1 < len(tokens):
+            return tokens[index + 1].upper()
+        if token.startswith(("--request=", "--method=")):
+            return token.partition("=")[2].upper()
+        if token.startswith("-X") and len(token) > 2:
+            return token[2:].upper()
+    if any(
+        token in {"-I", "--head", "--spider"}
+        or (
+            token.startswith("-")
+            and not token.startswith("--")
+            and set(token[1:]) <= set("fsSILkviNOg012346hV")
+            and "I" in token[1:]
+        )
+        for token in tokens
+    ):
         return "HEAD"
-    method_match = re.search(r"(?:\s-X\s+|\s--request\s+)([A-Za-z]+)", command_line)
-    if method_match:
-        return method_match.group(1).upper()
+    if any(
+        token in {"-T", "--upload-file"} or token.startswith("--upload-file=") for token in tokens
+    ):
+        return "PUT"
+    if any(
+        (token.startswith(("-d", "-F")) and not token.startswith("--"))
+        or token.partition("=")[0]
+        in {
+            "-d",
+            "--data",
+            "--data-raw",
+            "--data-binary",
+            "--data-urlencode",
+            "-F",
+            "--form",
+            "--form-string",
+            "--post-data",
+            "--post-file",
+            "--json",
+        }
+        for token in tokens
+    ):
+        return "POST"
     return "GET"
+
+
+def _literal_http_process_owns_request(
+    *,
+    image: str,
+    command_line: str,
+    hostname: str,
+    dst_port: int,
+    method: str,
+    uri: str | None,
+    request_body_len: int = 0,
+) -> bool:
+    """Match supported non-body CLI intent to canonical request ownership.
+
+    A CONNECT-only view has no origin URI. It constrains authority rather than
+    claiming a hidden path; multipart/body ownership has a separate contract.
+    """
+    exe = image.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if exe not in {"curl", "curl.exe", "wget", "wget.exe"} or request_body_len:
+        return False
+    tokens = _command_tokens(command_line)
+    if any(
+        token.partition("=")[0]
+        in {
+            "--config",
+            "-K",
+            "--request-target",
+            "--url-query",
+            "--next",
+            "-G",
+            "--get",
+            "-d",
+            "--data",
+            "--data-raw",
+            "--data-binary",
+            "--data-urlencode",
+            "-F",
+            "--form",
+            "--form-string",
+            "-T",
+            "--upload-file",
+            "--json",
+        }
+        or (token.startswith(("-d", "-F", "-T", "-K")) and not token.startswith("--"))
+        for token in tokens
+    ):
+        return False
+    url = _extract_http_url_from_command(command_line)
+    if url is None:
+        return False
+    parsed = urlsplit(url)
+    if (parsed.hostname or "").lower().rstrip(".") != hostname.lower().rstrip("."):
+        return False
+    if (parsed.port or (443 if parsed.scheme == "https" else 80)) != dst_port:
+        return False
+    command_method = _http_method_for_process_command(command_line)
+    if command_method not in {"GET", "HEAD", "OPTIONS", "DELETE"}:
+        return False
+    if method == "CONNECT":
+        return parsed.scheme == "https"
+    if command_method != method:
+        return False
+    request_path = parsed.path or "/"
+    if parsed.query:
+        request_path += f"?{parsed.query}"
+    if uri is None:
+        return False
+    expected = urlsplit(uri)
+    expected_path = expected.path or "/"
+    if expected.query:
+        expected_path += f"?{expected.query}"
+    return request_path == expected_path
 
 
 def _http_context_from_process_command(

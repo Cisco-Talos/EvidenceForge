@@ -1,0 +1,99 @@
+{
+  "current": {
+    "count": 100,
+    "observations_at_or_below_5ms": 86,
+    "median_observed_gap_ms": 1.7395,
+    "maximum_gap_error_ms": 133.911,
+    "examples": [
+      {
+        "canonical_gap_ms": 5,
+        "observed_gap_ms": 3.109
+      },
+      {
+        "canonical_gap_ms": 42,
+        "observed_gap_ms": 0.679
+      },
+      {
+        "canonical_gap_ms": 79,
+        "observed_gap_ms": 2.553
+      },
+      {
+        "canonical_gap_ms": 116,
+        "observed_gap_ms": 19.976
+      },
+      {
+        "canonical_gap_ms": 17,
+        "observed_gap_ms": 3.965
+      },
+      {
+        "canonical_gap_ms": 54,
+        "observed_gap_ms": 2.19
+      },
+      {
+        "canonical_gap_ms": 91,
+        "observed_gap_ms": 0.6679999999999999
+      },
+      {
+        "canonical_gap_ms": 128,
+        "observed_gap_ms": 31.632
+      },
+      {
+        "canonical_gap_ms": 29,
+        "observed_gap_ms": 1.049
+      },
+      {
+        "canonical_gap_ms": 66,
+        "observed_gap_ms": 1.132
+      }
+    ]
+  },
+  "proposed": {
+    "count": 100,
+    "observations_at_or_below_5ms": 0,
+    "median_observed_gap_ms": 73.882,
+    "maximum_gap_error_ms": 2.1920000000000073,
+    "examples": [
+      {
+        "canonical_gap_ms": 5,
+        "observed_gap_ms": 5.203
+      },
+      {
+        "canonical_gap_ms": 42,
+        "observed_gap_ms": 42.053
+      },
+      {
+        "canonical_gap_ms": 79,
+        "observed_gap_ms": 79.707
+      },
+      {
+        "canonical_gap_ms": 116,
+        "observed_gap_ms": 116.618
+      },
+      {
+        "canonical_gap_ms": 17,
+        "observed_gap_ms": 17.402
+      },
+      {
+        "canonical_gap_ms": 54,
+        "observed_gap_ms": 53.985
+      },
+      {
+        "canonical_gap_ms": 91,
+        "observed_gap_ms": 91.045
+      },
+      {
+        "canonical_gap_ms": 128,
+        "observed_gap_ms": 128.244
+      },
+      {
+        "canonical_gap_ms": 29,
+        "observed_gap_ms": 29.208000000000002
+      },
+      {
+        "canonical_gap_ms": 66,
+        "observed_gap_ms": 65.92399999999999
+      }
+    ]
+  },
+  "scope": "Isolated canonical/source-planner probe; no generated dataset or reviewer score is changed"
+}

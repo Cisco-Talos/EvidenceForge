@@ -1,17 +1,7 @@
 # DNS, network, web, and identity overlays
 
-Read only the section matching the requested family. Always inspect the packaged file and existing
-project overlay before editing; this reference gives ownership and guardrails, not a substitute for
-the live schema.
-
-## Contents
-
-- [DNS and traffic](#dns-and-traffic)
-- [Beacon and storage profiles](#beacon-and-storage-profiles)
-- [Proxy, web, and HTTP](#proxy-web-and-http)
-- [TLS and public infrastructure](#tls-and-public-infrastructure)
-- [Generated identity pools](#generated-identity-pools)
-- [Repair decisions](#repair-decisions)
+Read the requested family and inspect its packaged file and project overlay before editing.
+The live schema remains authoritative.
 
 ## DNS and traffic
 
@@ -28,71 +18,82 @@ domains:
     tags: [web, healthcare]
 ```
 
-Query `eforge info dns_tags` rather than copying a hardcoded tag list. Domain
-entries merge by `domain`; lists append unless that keyed entry uses `_replace: true`. Other roots
-include `long_tail`, `ipv6_map`, and `ipv6_prefixes`; preserve their packaged shapes. Public CDN
-address ownership belongs to `public_identity_profiles.yaml`.
-
-Use `environment.network_identities` for a domain needed by one scenario. Do not add a real malicious
-IOC when a reserved, behavior-shaped identity will satisfy the exercise.
+Query `eforge info dns_tags` for current tags. Entries merge by `domain`; lists append unless that
+entry uses `_replace: true`. Preserve `long_tail`, `ipv6_map`, and `ipv6_prefixes` shapes. Public CDN
+ownership belongs to `public_identity_profiles.yaml`. Use `environment.network_identities` for one
+scenario's domains; prefer reserved, behavior-shaped identities over real malicious IOCs.
 
 ### `traffic_profiles.yaml`
 
-`role_traffic` and `persona_traffic` deep-merge. Connection entries can select exact domains or
-`dns_tags`; every referenced tag must exist. A persona profile may be either the packaged mapping
-shape with inbound/outbound branches or the supported list shape—match the surrounding default.
+`role_traffic` and `persona_traffic` deep-merge. Select exact domains or existing `dns_tags`.
+Match the default persona shape: mapping with inbound/outbound branches or supported list.
 
-`traffic_rates.yaml` owns intensity-level count/range defaults. `network_params.yaml` owns OUI data,
-external-client compatibility exclusions, Linux SMB connection owners, DNS-tunnel timing/answers,
-scanner port mixes, proxy status messages and `http_transport_floor_slack` (median/sigma/minimum/maximum ms, deep merged). The latter freezes short-HTTP close variation and its admission maximum; absent old profiles preserve legacy parameters. Public DNS/NTP identities belong to the canonical
-public identity registry. Do not use this file for scenario-defined internal infrastructure.
+`traffic_rates.yaml` owns intensity counts/ranges. `network_params.yaml` owns OUI, external-client
+exclusions, Linux SMB owners, DNS-tunnel timing/answers, scanner mixes and proxy status messages.
+Deep-merged `http_transport_floor_slack` freezes short-HTTP close median/sigma/minimum/maximum ms
+and admission maximum; absent frozen policy retains legacy parameters. Public DNS/NTP belongs to
+the public identity registry; scenario-defined internal infrastructure belongs in the scenario.
 `transport_histories`/`ssl_histories` replace selected profile lists: positive integer weights, native history strings, plus transport state.
 Once-only conn classes occur once/direction regardless of packet counts. Passive TLS uses client uppercase/server lowercase; encrypted/post-detection content stays unknown.
 
-### `public_dns_profiles.yaml`
-
-Owns provider-style NS/SOA/MX/AAAA answer behavior and `generic_aaaa_probability`; it does not own
+`public_dns_profiles.yaml` owns NS/SOA/MX/AAAA answers and `generic_aaaa_probability`, not
 the canonical domain/IP registry. Profile lists merge by `name`.
 
 ## Beacon and storage profiles
 
 ### `beacon_profiles.yaml`
 
-The `profiles` mapping deep-merges by profile name. A profile owns its user-agent pool and weighted
-HTTP sequence, including method, URI template, byte ranges, and optional DNS behavior. Preserve the
-documented safe template placeholders and use reserved destinations supplied by the scenario; a
-profile never authorizes callbacks or selects a destination by itself.
+`profiles` deep-merges by name: user-agent pool, weighted HTTP sequence, method, URI template,
+byte ranges, optional DNS. Preserve safe placeholders and scenario-supplied reserved destinations;
+profiles never authorize callbacks or select destinations alone.
+
+`network_params.yaml.rdp_payload_bounds` declares positive, ordered initiator/responder payload
+minima/maxima for initial, reconnect and compatibility RDP transports. Logical byte quotas cover
+that support through the existing operation allowance, not a small first random draw; physical
+counters, cumulative operation checks and lifecycle limits remain enforced. Absent frozen policy
+retains historical 50k–500k/100k–2M draws with repaired logical provisioning. Reject malformed
+present values; partial overlays preserve unspecified bounds.
 
 ### `storage_catalog.yaml`
 
-`population_counts` and named `profiles` deep-merge. Profiles define portable directory/subject
-vocabulary plus weighted extension/MIME pairs; they do not define concrete servers, shares, users,
-or access policy. Keep component names relative and traversal-free, keep MIME consistent with the
-extension, and use a pack instead when the vocabulary is reusable across projects or industries.
+`population_counts` and named `profiles` deep-merge portable directory/subject vocabulary and
+weighted extension/MIME pairs, not servers/shares/users/access policy. Components must be relative,
+traversal-free and MIME-consistent. Put vocabulary reusable across projects/industries in a pack.
+
+Engine-owned `file_size_policy.profiles` maps names to positive, ordered
+`minimum_bytes`/`maximum_bytes` supports for automatic metadata sizes. Route through
+`preset_extension_profiles`, `extension_profiles`, `preset_profiles`, then `default_profile`;
+extension keys are lowercase suffixes. Explicit seed sizes win; later SMB evolution is separate.
+Absent frozen policy retains original sizing. Keep this root outside portable pack vocabulary.
+
+Optional engine-owned `policy_repository` models Windows domain-policy metadata outside pack
+vocabulary. Given an explicit environment domain, recognized Windows DC SYSVOL/NETLOGON shares
+use bounded domain/GPO GUID paths and linked templates. `sysvol_root`/`netlogon_root` affect only
+synthesized roots; explicit roots/seeds win. Templates require literal relative `path`, MIME,
+positive ordered sizes and finite `presence_probability`; each GPO requires `GPT.INI`.
+Bounds model supports, not empirical calibration. Missing/disabled policy preserves legacy paths
+and RNG; malformed present policy rejects; partial overlays deep-merge. Custom shares, file sets,
+domain-unknown environments and Samba members retain existing behavior. Initial paths/size/MIME
+add no filesystem aliases or live AD/DFSR replication/mutation. Cap catalogs at finite realizable
+space and record requested/effective counts in the storage manifest.
 
 ## Proxy, web, and HTTP
 
-### `proxy_uri_templates.yaml`
-
-Roots are `default_http_policy`, `domains`, `tags`, `generic`, and `search_terms`. Domain-specific
-and tag templates control URI, method, content type, domain class, and referrer behavior. They do not
-make a domain browsable by themselves.
+`proxy_uri_templates.yaml` roots: `default_http_policy`, `domains`, `tags`, `generic`, `search_terms`.
+Domain/tag templates own
+URI, method, content type, domain class and referrer behavior; they do not make domains browsable.
 
 ### `site_maps.yaml`
 
-Roots are `search_terms`, `domains`, `tags`, and `generic`—the tag root is `tags`, not
-`tag_templates`. Curated domain entries define pages, navigation targets, CDN hosts, and
-subresources; tag and generic tiers are fallbacks. Site maps deep-merge.
-
-Do not fabricate `/about`, `/login`, `/api/v1`, or asset paths as an automatic repair. Ask for the
-application's real or intended route shape. Absence can be intentional because generic fallback
-exists.
+Roots: `search_terms`, `domains`, `tags` (not `tag_templates`), `generic`. Deep-merged domain entries
+own pages, navigation, CDN hosts and subresources; tag/generic tiers are fallbacks. Do not fabricate
+`/about`, `/login`, `/api/v1` or assets as repairs. Ask for intended routes; absence may be intentional.
 
 ### `web_session_profiles.yaml` and `web_scan_presets.yaml`
 
-`web_session_profiles.yaml` deep-merges visitor classes and User-Agent pools. Each named preset in
-`web_scan_presets.yaml` is replaced as a unit; copy the complete preset before changing it. Preset
-IDS entries require valid positive SIDs and messages and share the global signature identity space.
+Deep-merge `web_session_profiles.yaml` visitor classes/User-Agents. Replace each named
+`web_scan_presets.yaml` preset as a unit; copy it fully before editing. IDS entries need positive
+valid SIDs/messages and share global signature identities.
 
 ### `proxy_user_agents.yaml` and `proxy_phase_profiles.yaml`
 
@@ -102,15 +103,10 @@ observation delay; millisecond ranges must be non-negative, ordered, and bounded
 
 ### `http_file_profiles.yaml`
 
-Deep-merges three roots:
-
-- `extension_mime_types`: lowercase `.ext` to valid MIME type.
-- `request_profiles`: request MIME defaults and non-empty URI tokens.
-- `multipart`: complete browser/curl/generic boundary morphology, supported header order, and bounded
-  part/depth/file/quoted-printable limits.
-
-Changing multipart limits affects serializer safety and Zeek projection caps; copy the packaged
-subtree, change only the intended leaf, and validate.
+Deep-merge `extension_mime_types` (lowercase `.ext` → valid MIME), `request_profiles` (request MIME
+defaults/nonempty URI tokens), and `multipart` (browser/curl/generic boundaries, supported header
+order, bounded part/depth/file/quoted-printable limits). Multipart limits affect serializer safety
+and Zeek caps; copy the packaged subtree, change only the intended leaf, and validate.
 
 ## TLS and public infrastructure
 
@@ -122,6 +118,11 @@ subtree, change only the intended leaf, and validate.
   NTP, and mail.
 - `network_params.yaml`: scanner protocol mixes and network timing; not public identity ownership or
   canonical scenario infrastructure.
+  Optional `tls_detection_phase` models one physical first-TLS delay before sensor clocks:
+  `minimum_ms < median_ms < maximum_ms`, positive finite `sigma`. Partial overlays retain defaults;
+  physical close/HTTP bounds win; children reuse the transport phase. Absent frozen policy retains
+  legacy no-phase behavior; malformed/null present policy fails. These are modeled supports,
+  not measured network calibration.
 
 ## Generated identity pools
 
@@ -134,9 +135,8 @@ subtree, change only the intended leaf, and validate.
 | `suspicious_benign.yaml` | Benign-but-suspicious DNS and connection hosts, keyed by `hostname`. |
 | `command_parameter_pools.yaml` | Deep-merged command URL/host substitution pools. |
 
-Use reserved/documentation identities where required by safety policy. Do not reuse one public
-identity for contradictory client, hostile, and service roles. Scenario-authored identities take
-precedence over these fallbacks. Deprecated compatibility input and its migration are documented only
+Use reserved/documentation identities as safety policy requires; avoid contradictory public
+client/hostile/service roles. Scenario identities win. Deprecated inputs/migration belong only
 in the project migration guide.
 
 ## Repair decisions

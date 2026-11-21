@@ -1,0 +1,17 @@
+{
+  "previous_loop": 29,
+  "current_loop": 30,
+  "file_count": 115,
+  "changed_files": 2,
+  "changed_source_counts": {
+    "syslog.log": 2
+  },
+  "changed_paths": [
+    "MAIL-CLIN-01.meridianhcs.local/syslog.log",
+    "MAIL-EDGE-01.meridianhcs.local/syslog.log"
+  ],
+  "non_mac_changes": [
+    "MAIL-CLIN-01.meridianhcs.local/syslog.log",
+    "MAIL-EDGE-01.meridianhcs.local/syslog.log"
+  ]
+}

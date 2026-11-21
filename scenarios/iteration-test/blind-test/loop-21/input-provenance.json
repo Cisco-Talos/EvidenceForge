@@ -1,0 +1,57 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 21,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 558,
+  "behavior_surface_sha256": "67d45c517edbece824bc1aaf64c5a9af789db4f24f16fb8b54e9281bd0835fbb",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "ordinary Linux getty/login same-lifetime execution and free-terminal admission",
+    "exact privileged console-root role for shell ownership and strict/generic session teardown"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "before": "Actual generator handoff failed existing-getty PID versus separate login child; corrected missing email and closed-identity fixture misunderstandings retained in worklog",
+    "central": "71 initial;107 stamped central/source/manifest;12 final console cases including frozen overlay, canonical filtering, GDM and exact parent/State-checkpoint planner",
+    "siblings": "109 slow sudo ownership and lost-return/close cases51.58s; existing Windows/default+sof-elk native checkpoint2pass106.44s",
+    "console_native_checkpoint": "1 actual public CLI active-getty-exec checkpoint/resume with deterministic full bundle byte equivalence76.20s; all required original checkpoint/conn checks retained, Linux-specific output assertion added",
+    "fixture_corrections": "First unstamped smoke correctly rejected surface mismatch. New test initially used nonexistent bash_command tag, overbroad all-login assertion including pre-window legacy root, and Windows-specific fixture assertion with omitted Zeek. Preserved failures, corrected fixture and proved actual Linux console exec branch; no production guards weakened",
+    "global_rng": "3 final dedicated slow policy cases unchanged census",
+    "config": "105 files0issues, new optional typed console inventory/full-list override and frozen legacy absence",
+    "ruff": "1675 files final check/format",
+    "scope": "Pure planner derives occupancy from current/bounded retained State; same-lifetime exec uses shared exact State/registry/source transaction. Known root-owned login tied to exact session pointer. Six configured VT slots follows systemd default, max63 Linux native limit, not resource/retention quota increase. Normal native PAM closes and full idle-getty supervisor remain residual; old pre-window bootstrap not rewritten. No full routine/release gate.",
+    "retry_repair": "Shared exact console-root predicate admits only authoritative host/PID/argv/root-credential/qualified-exec role, retaining root/uncaptured boot authentication. Closed source projection validates exact State session role; no foreign-ownership bypass or quota change.",
+    "retry_gates": "Final51console+manifest6.79s1deselect;109sudo siblings51.84s; actualpublicconsoleactiveexeccheckpoint/replay1pass75.82s24deselect;globalRNG3;105config0issues;Ruff/check-format1676",
+    "physical_source_faults": "3actualeCAR cases insideEnginewindow: normalclose, fail-before exactrootrowcommit, lost-return. Retrydrains exactjournal/recovery and preserves rootidentity. Coherentnegativeidentity/sessioncases retainrejection.",
+    "fixture_corrections_addendum": "Initialnewfaultfixture outsideEnginewindow correctlysuppressedsource rows; nowactualEngine.start_time+15min. Invalidnegativeargv/host-parentage objects corrected coherently; source guards retained.",
+    "rdp_completion_repair": "81 final owner/console/RDP/manifest cases passed7.89s4deselected; real GroundTruthLedger accepts exact already_completed outcome without new source rows; negative early/host/principal/kind/plan closures rejected. Ruff/check-format1677. Previous557 console checkpoint/RNG/config gates retained: no new State/clock/config behavior."
+  },
+  "fix_classification": "adapter_to_family_model",
+  "failed_generation_attempts": [
+    {
+      "behavior_revision": 556,
+      "artifact_path": "failed-attempt-behavior556",
+      "exit_code": 21,
+      "failure": "Exact sudo session close lacked qualified cross-principal console-root role",
+      "assessment_ran": false
+    },
+    {
+      "behavior_revision": 557,
+      "artifact_path": "failed-attempt-behavior557",
+      "exit_code": 21,
+      "assessment_ran": false,
+      "failure": "Exact already-completed RDP close not acknowledged as modeled intent completion"
+    }
+  ]
+}

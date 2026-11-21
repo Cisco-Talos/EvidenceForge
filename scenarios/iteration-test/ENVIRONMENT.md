@@ -52,7 +52,7 @@ Corporate workstations use the corporate LAN; directory, file, mail, application
 
 The selected sources include Windows Security/Sysmon, eCAR, Linux syslog/Bash history, Zeek protocols, proxy/web records, Snort alerts, Cisco ASA, macOS Endpoint Security, Unified Log and zsh history. Native ES is the Mac process inventory. Unified Log represents selected native message families; an application start does not necessarily produce a ULF message. Native launchd ULF is outside the current collection model.
 
-Maya Ross uses Apple Terminal on MAC-MROSS-01 and iTerm2 on MAC-MROSS-02. Her Mac accounts are local; their audit/session identifiers are separate from directory logon identifiers. Installed applications include Chrome and ordinary engineering collaboration tools. The original storage, mail, proxy and directory services remain available.
+Maya Ross uses Apple Terminal on MAC-MROSS-01 and iTerm2 on MAC-MROSS-02. Her Mac accounts are local; their audit/session identifiers are separate from directory logon identifiers. Installed applications include Chrome and ordinary engineering collaboration tools, with Visual Studio Code available on MAC-MROSS-01. The original storage, mail, proxy and directory services remain available.
 
 The original enterprise_standard observation profile and low baseline are retained. Source-specific collection and process coverage are recorded in each generated bundle. This environment briefing is excluded from blind reviewer inputs.
 

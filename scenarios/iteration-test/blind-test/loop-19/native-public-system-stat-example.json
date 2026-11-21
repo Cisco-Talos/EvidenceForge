@@ -1,0 +1,115 @@
+{
+  "scope": "Read-only stat of fixed public system paths on this engineering host. No home enumeration, process capture, content reads, or blind-review input. Single-host example, not a calibrated population.",
+  "platform": "27.2.1",
+  "machine": "arm64",
+  "rows": [
+    {
+      "path": "/",
+      "device": 16777233,
+      "inode": 2,
+      "mode": 16877,
+      "size": 736,
+      "blocks": 0,
+      "nlink": 23,
+      "born": 1793942531.0,
+      "modified": 1793942531.0,
+      "changed": 1793942531.0
+    },
+    {
+      "path": "/Users",
+      "device": 16777233,
+      "inode": 16996,
+      "mode": 16877,
+      "size": 160,
+      "blocks": 0,
+      "nlink": 5,
+      "born": 1733563342.6476865,
+      "modified": 1794315006.851436,
+      "changed": 1794315006.851436
+    },
+    {
+      "path": "/Applications",
+      "device": 16777233,
+      "inode": 562571630,
+      "mode": 16893,
+      "size": 1760,
+      "blocks": 0,
+      "nlink": 55,
+      "born": 1793942531.0,
+      "modified": 1795207927.294499,
+      "changed": 1795207927.294499
+    },
+    {
+      "path": "/bin/zsh",
+      "device": 16777233,
+      "inode": 1152921500312611996,
+      "mode": 33261,
+      "size": 2045440,
+      "blocks": 2184,
+      "nlink": 1,
+      "born": 1793942531.0,
+      "modified": 1793942531.0,
+      "changed": 1793942531.0
+    },
+    {
+      "path": "/bin/ls",
+      "device": 16777233,
+      "inode": 1152921500312611962,
+      "mode": 33261,
+      "size": 252512,
+      "blocks": 112,
+      "nlink": 1,
+      "born": 1793942531.0,
+      "modified": 1793942531.0,
+      "changed": 1793942531.0
+    },
+    {
+      "path": "/usr/bin/login",
+      "device": 16777233,
+      "inode": 1152921500312612873,
+      "mode": 35181,
+      "size": 220912,
+      "blocks": 88,
+      "nlink": 1,
+      "born": 1793942531.0,
+      "modified": 1793942531.0,
+      "changed": 1793942531.0
+    },
+    {
+      "path": "/sbin/launchd",
+      "device": 16777233,
+      "inode": 1152921500312612045,
+      "mode": 33261,
+      "size": 1319360,
+      "blocks": 1120,
+      "nlink": 1,
+      "born": 1793942531.0,
+      "modified": 1793942531.0,
+      "changed": 1793942531.0
+    },
+    {
+      "path": "/usr/bin/uname",
+      "device": 16777233,
+      "inode": 1152921500312613582,
+      "mode": 33261,
+      "size": 166800,
+      "blocks": 40,
+      "nlink": 1,
+      "born": 1793942531.0,
+      "modified": 1793942531.0,
+      "changed": 1793942531.0
+    },
+    {
+      "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+      "device": 16777233,
+      "inode": 1152921500311916004,
+      "mode": 33261,
+      "size": 2470176,
+      "blocks": 2000,
+      "nlink": 1,
+      "born": 1793942531.0,
+      "modified": 1793942531.0,
+      "changed": 1793942531.0
+    }
+  ]
+}

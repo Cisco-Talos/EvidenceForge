@@ -1,0 +1,139 @@
+{
+  "scope": "Data-only console login census. Pre-window/filtered process starts may lack visible matches; these are descriptive counts, not universal completeness requirements.",
+  "login_records": 5,
+  "kinds": {
+    "getty_same_lifetime_exec": 5
+  },
+  "hosts": {
+    "APP-INT-01": 1,
+    "DB-PROD-01": 1,
+    "FILE-LNX-01": 1,
+    "PROXY-01": 1,
+    "WEB-EXT-01": 1
+  },
+  "pam_opens": 8,
+  "pam_opens_with_visible_same_lifetime_getty_exec": 5,
+  "rows": [
+    {
+      "host": "APP-INT-01",
+      "time_ms": 1793634109451,
+      "kind": "getty_same_lifetime_exec",
+      "pid": 36047,
+      "id": "6189a838-5ba3-4d32-879a-ecf53d99a742",
+      "parent_pid": "36047",
+      "previous_image": "/sbin/agetty",
+      "command_line": "/bin/login -- lina.nguyen",
+      "previous_command_line": "/sbin/agetty --noclear tty1 linux"
+    },
+    {
+      "host": "DB-PROD-01",
+      "time_ms": 1793624582618,
+      "kind": "getty_same_lifetime_exec",
+      "pid": 29349,
+      "id": "cba91760-5cbc-4643-bbc7-414c9f400f05",
+      "parent_pid": "29349",
+      "previous_image": "/sbin/agetty",
+      "command_line": "/bin/login -- maya.ross",
+      "previous_command_line": "/sbin/agetty --noclear tty1 linux"
+    },
+    {
+      "host": "FILE-LNX-01",
+      "time_ms": 1793628272378,
+      "kind": "getty_same_lifetime_exec",
+      "pid": 13744,
+      "id": "7f27aa0f-812c-4126-aa11-dfc0de88bfce",
+      "parent_pid": "13744",
+      "previous_image": "/sbin/agetty",
+      "command_line": "/bin/login -- aisha.johnson",
+      "previous_command_line": "/sbin/agetty --noclear tty1 linux"
+    },
+    {
+      "host": "PROXY-01",
+      "time_ms": 1793628581513,
+      "kind": "getty_same_lifetime_exec",
+      "pid": 18640,
+      "id": "ae9de61c-951f-43c3-b1f1-c4c3a1c9b817",
+      "parent_pid": "18640",
+      "previous_image": "/sbin/agetty",
+      "command_line": "/bin/login -- marcus.chen",
+      "previous_command_line": "/sbin/agetty --noclear tty1 linux"
+    },
+    {
+      "host": "WEB-EXT-01",
+      "time_ms": 1793628357143,
+      "kind": "getty_same_lifetime_exec",
+      "pid": 23971,
+      "id": "19ebf5e1-5583-4cb6-89b7-f4885e5dabba",
+      "parent_pid": "23971",
+      "previous_image": "/sbin/agetty",
+      "command_line": "/bin/login -- marcus.chen",
+      "previous_command_line": "/sbin/agetty --noclear tty2 linux"
+    }
+  ],
+  "pam_rows": [
+    {
+      "host": "APP-INT-01",
+      "time": "2026-11-02T15:41:50.872092Z",
+      "pid": 36047,
+      "user": "lina.nguyen",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 1
+    },
+    {
+      "host": "DB-PROD-01",
+      "time": "2026-11-02T13:03:06.474893Z",
+      "pid": 29349,
+      "user": "maya.ross",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 1
+    },
+    {
+      "host": "FILE-LNX-01",
+      "time": "2026-11-02T14:04:34.204158Z",
+      "pid": 13744,
+      "user": "aisha.johnson",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 1
+    },
+    {
+      "host": "LT-MRIVERA-02",
+      "time": "2026-11-02T13:03:27.835113Z",
+      "pid": 3411532,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "LT-MRIVERA-02",
+      "time": "2026-11-02T18:06:29.012372Z",
+      "pid": 3456316,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time": "2026-11-02T17:03:52.994965Z",
+      "pid": 2326274,
+      "user": "root",
+      "visible_login_matches": 0,
+      "same_lifetime_getty_matches": 0
+    },
+    {
+      "host": "PROXY-01",
+      "time": "2026-11-02T14:09:45.936966Z",
+      "pid": 18640,
+      "user": "marcus.chen",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 1
+    },
+    {
+      "host": "WEB-EXT-01",
+      "time": "2026-11-02T14:05:59.963311Z",
+      "pid": 23971,
+      "user": "marcus.chen",
+      "visible_login_matches": 1,
+      "same_lifetime_getty_matches": 1
+    }
+  ]
+}

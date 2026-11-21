@@ -1,0 +1,30 @@
+{
+  "scope": "Only two controlled child commands in a private zsh PTY. No user process enumeration, user rc/history, filesystem artifacts or raw prompt/transcript are retained. Not an Endpoint Security capture or every Terminal/iTerm configuration qualification.",
+  "os_version": "27.2.1",
+  "architecture": "arm64",
+  "shell_pid": 2719,
+  "monitor_observations": [
+    "on",
+    "off"
+  ],
+  "commands": [
+    {
+      "mode": "default_interactive_no_user_rc",
+      "pid": 2720,
+      "ppid": 2719,
+      "pgid": 2720,
+      "sid": 2719,
+      "foreground_pgid": 2720,
+      "stdin_is_tty": true
+    },
+    {
+      "mode": "explicit_monitor_off",
+      "pid": 2721,
+      "ppid": 2719,
+      "pgid": 2719,
+      "sid": 2719,
+      "foreground_pgid": 2719,
+      "stdin_is_tty": true
+    }
+  ]
+}

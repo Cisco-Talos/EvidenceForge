@@ -99,6 +99,20 @@ def test_interactive_shell_requires_no_command_or_script() -> None:
     assert not is_interactive_shell("/usr/bin/python3", "python3")
 
 
+@pytest.mark.parametrize(
+    ("image", "command"),
+    [
+        ("/bin/bash", "/bin/bash /Users/alex/Downloads/diagnostics.sh --check-config"),
+        ("/bin/zsh", "/bin/zsh /tmp/workspace-check.zsh"),
+        ("/bin/sh", "/bin/sh -c 'id'"),
+        ("/usr/bin/env", "/usr/bin/env MODE=check /bin/bash /tmp/diagnostics.sh"),
+    ],
+)
+def test_noninteractive_mac_shells_release_the_foreground_slot(image: str, command: str) -> None:
+    assert _linux_foreground_lifetime(image, command) == (1.0, 8.0)
+    assert _macos_foreground_lifetime(image, command) == (1.0, 8.0)
+
+
 def test_env_takes_the_lifetime_of_the_program_it_runs() -> None:
     assert unwrapped_command("/usr/bin/env", "env -i A=1 B=2 /usr/bin/curl https://x") == (
         "/usr/bin/curl",

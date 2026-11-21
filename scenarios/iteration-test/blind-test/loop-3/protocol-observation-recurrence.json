@@ -1,0 +1,485 @@
+{
+  "scope": "Descriptive state-conditioned protocol presence for positively service-classified sensor observations; absence alone is not a contradiction",
+  "sensors": {
+    "zeek-core": {
+      "source_sha256": {
+        "ssl.json": "091c709f0eb66a158458df27d81719fada05b77a3ec17a63b467b1600d8f6fd6",
+        "http.json": "6182e1b9c17d7f0d3aff4df37a7f9d871b4e9c17746af5dc7a2e3a344763b21b",
+        "conn.json": "f234a7fab45f15036fb5d98b1f3595df5d13e27349fc6c7373b2b8adff59d4f8"
+      },
+      "state_distribution": {
+        "ssl": {
+          "OTH": {
+            "total": 3,
+            "with_protocol": 0,
+            "without_protocol": 3,
+            "missing_with_bidirectional_payload_no_gap": 3
+          },
+          "RSTO": {
+            "total": 22,
+            "with_protocol": 0,
+            "without_protocol": 22,
+            "missing_with_bidirectional_payload_no_gap": 8
+          },
+          "RSTR": {
+            "total": 18,
+            "with_protocol": 0,
+            "without_protocol": 18,
+            "missing_with_bidirectional_payload_no_gap": 17
+          },
+          "S1": {
+            "total": 3,
+            "with_protocol": 3
+          },
+          "S2": {
+            "total": 5,
+            "with_protocol": 0,
+            "without_protocol": 5,
+            "missing_with_bidirectional_payload_no_gap": 5
+          },
+          "S3": {
+            "total": 4,
+            "with_protocol": 0,
+            "without_protocol": 4,
+            "missing_with_bidirectional_payload_no_gap": 4
+          },
+          "SF": {
+            "total": 283,
+            "with_protocol": 283
+          }
+        },
+        "http": {
+          "SF": {
+            "total": 2570,
+            "with_protocol": 2556,
+            "without_protocol": 14,
+            "missing_with_bidirectional_payload_no_gap": 14
+          }
+        }
+      },
+      "missing_examples": [
+        {
+          "source_line": 53,
+          "uid": "C0pbzE7YlQcYIIDGC5N",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.19827,
+          "orig_bytes": 535,
+          "resp_bytes": 11674,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 503,
+          "uid": "CdKA4gpr9cnjDLffJa",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 1.12584,
+          "orig_bytes": 4657,
+          "resp_bytes": 3417,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1187,
+          "uid": "CzRVrQAaBcpTgTjXJi1",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.657773,
+          "orig_bytes": 505,
+          "resp_bytes": 14472,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1289,
+          "uid": "Clc6j9sNrORMz12d7C",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.200648,
+          "orig_bytes": 860,
+          "resp_bytes": 15742,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1314,
+          "uid": "CG8IJIW6WgGHnjR3y5",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.511173,
+          "orig_bytes": 2576,
+          "resp_bytes": 10464,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1316,
+          "uid": "Cmec135E4FXJsvzgC",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.794907,
+          "orig_bytes": 846,
+          "resp_bytes": 4970,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1431,
+          "uid": "CDdDRsDoWO8FlLioDXy",
+          "service": "ssl",
+          "state": "S2",
+          "duration": 0.321192,
+          "orig_bytes": 3270,
+          "resp_bytes": 12886,
+          "history": "ShADadF",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1581,
+          "uid": "CmCTuunf72LDyvL25u",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.192981,
+          "orig_bytes": 4650,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 1714,
+          "uid": "ClYeuQkd7QrPGJy6dI",
+          "service": "ssl",
+          "state": "S2",
+          "duration": 1.113816,
+          "orig_bytes": 4172,
+          "resp_bytes": 49572,
+          "history": "ShADadF",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 2334,
+          "uid": "CwcSoGNscDnY63wOWW",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 1.450971,
+          "orig_bytes": 1066,
+          "resp_bytes": 1818,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 4490,
+          "uid": "CHHe8Ydrb5N6zPd4fP",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 1.933638,
+          "orig_bytes": 621,
+          "resp_bytes": 26793,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 4517,
+          "uid": "C8WwFyNPvdG5L2ZKt9",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 1.19079,
+          "orig_bytes": 4189,
+          "resp_bytes": 15649,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        }
+      ]
+    },
+    "zeek-db": {
+      "source_sha256": {
+        "ssl.json": "8f46903f83f7d254768c5e902992a5c6016438d2e007c4ff0321cdf4c54d25d3",
+        "http.json": "5eb36d7714bceccdee9792ae95fae39abc7bb2ed8d9a0ff849ffde7e6b9c2422",
+        "conn.json": "9baa4a956c103a725df333416f1f1102234d4c9ff80835313ec5fe5fad8cb632"
+      },
+      "state_distribution": {
+        "ssl": {
+          "RSTO": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "RSTR": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "S2": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "SF": {
+            "total": 15,
+            "with_protocol": 15
+          }
+        },
+        "http": {
+          "SF": {
+            "total": 16,
+            "with_protocol": 16
+          }
+        }
+      },
+      "missing_examples": [
+        {
+          "source_line": 44,
+          "uid": "CUiKQO38hsTCNDSrP",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.794726,
+          "orig_bytes": 846,
+          "resp_bytes": 4970,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 146,
+          "uid": "CBjY9wFtbH6e3D2SJm",
+          "service": "ssl",
+          "state": "S2",
+          "duration": 2.941022,
+          "orig_bytes": 4717,
+          "resp_bytes": 210,
+          "history": "ShADadF",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 313,
+          "uid": "CpNNFZhuHWnWW7QD9hv",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.547277,
+          "orig_bytes": 4875,
+          "resp_bytes": 2174,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        }
+      ]
+    },
+    "zeek-dmz": {
+      "source_sha256": {
+        "ssl.json": "67047384a669813d9e03bcd98269cd23827afab66f8c8a0634dee232317ae4f3",
+        "http.json": "d88c94a9f0b1558ad64372101167bb15434d86ae3dab228a51ee1771200711c3",
+        "conn.json": "36aa393bf8b491902bafb7247eaf7bba012b9467ac07c76fd7ea59092258b08c"
+      },
+      "state_distribution": {
+        "ssl": {
+          "OTH": {
+            "total": 5,
+            "with_protocol": 0,
+            "without_protocol": 5,
+            "missing_with_bidirectional_payload_no_gap": 5
+          },
+          "RSTO": {
+            "total": 57,
+            "with_protocol": 0,
+            "without_protocol": 57,
+            "missing_with_bidirectional_payload_no_gap": 7
+          },
+          "RSTR": {
+            "total": 38,
+            "with_protocol": 0,
+            "without_protocol": 38,
+            "missing_with_bidirectional_payload_no_gap": 36
+          },
+          "S1": {
+            "total": 8,
+            "with_protocol": 8
+          },
+          "S2": {
+            "total": 5,
+            "with_protocol": 0,
+            "without_protocol": 5,
+            "missing_with_bidirectional_payload_no_gap": 5
+          },
+          "S3": {
+            "total": 9,
+            "with_protocol": 0,
+            "without_protocol": 9,
+            "missing_with_bidirectional_payload_no_gap": 9
+          },
+          "SF": {
+            "total": 3105,
+            "with_protocol": 3105
+          }
+        },
+        "http": {
+          "OTH": {
+            "total": 2,
+            "with_protocol": 0,
+            "without_protocol": 2,
+            "missing_with_bidirectional_payload_no_gap": 2
+          },
+          "RSTO": {
+            "total": 10,
+            "with_protocol": 0,
+            "without_protocol": 10,
+            "missing_with_bidirectional_payload_no_gap": 5
+          },
+          "RSTR": {
+            "total": 11,
+            "with_protocol": 0,
+            "without_protocol": 11,
+            "missing_with_bidirectional_payload_no_gap": 11
+          },
+          "S2": {
+            "total": 1,
+            "with_protocol": 0,
+            "without_protocol": 1,
+            "missing_with_bidirectional_payload_no_gap": 1
+          },
+          "SF": {
+            "total": 2841,
+            "with_protocol": 2821,
+            "without_protocol": 20,
+            "missing_with_bidirectional_payload_no_gap": 16
+          }
+        }
+      },
+      "missing_examples": [
+        {
+          "source_line": 44,
+          "uid": "CNUV3ngu3lMz21tB1xU",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.116482,
+          "orig_bytes": 1155,
+          "resp_bytes": 1594,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 105,
+          "uid": "C3YBxiLOFH5DEHcVDhG",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.258903,
+          "orig_bytes": 1818,
+          "resp_bytes": 6148,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 232,
+          "uid": "COfUIefztFNNQRSK8",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.57834,
+          "orig_bytes": 1494,
+          "resp_bytes": 8068,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 249,
+          "uid": "C3xoMHC9PBKjeervQHX",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.544465,
+          "orig_bytes": 1501,
+          "resp_bytes": 6813,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 345,
+          "uid": "CoRF00nDf3YNKRVJyg",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 1.125907,
+          "orig_bytes": 4646,
+          "resp_bytes": 3417,
+          "history": "ShADadTRG",
+          "missed_bytes": 11
+        },
+        {
+          "source_line": 348,
+          "uid": "CNjOqKvrFzpJeNkS3L",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 1.033767,
+          "orig_bytes": 3904,
+          "resp_bytes": 1087,
+          "history": "ShADadTR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 486,
+          "uid": "CtoMKVtm5CyQPts4Wa",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.171228,
+          "orig_bytes": 2204,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 502,
+          "uid": "CH317zP0diqOrww98r",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.40181,
+          "orig_bytes": 767,
+          "resp_bytes": 10006,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 580,
+          "uid": "CSZcIu98dTxKgtlYKJ",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.231641,
+          "orig_bytes": 3661,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 739,
+          "uid": "CQz9NzRA6t5hvIzD4ND",
+          "service": "ssl",
+          "state": "RSTR",
+          "duration": 0.057178,
+          "orig_bytes": 24,
+          "resp_bytes": 1,
+          "history": "ShADadr",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 787,
+          "uid": "Co878CZQvYW0GsJmwf",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.06101,
+          "orig_bytes": 774,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        },
+        {
+          "source_line": 816,
+          "uid": "Co3S6rdQpIMtCdqG4",
+          "service": "ssl",
+          "state": "RSTO",
+          "duration": 0.033618,
+          "orig_bytes": 875,
+          "resp_bytes": 0,
+          "history": "ShADaR",
+          "missed_bytes": 0
+        }
+      ]
+    }
+  }
+}

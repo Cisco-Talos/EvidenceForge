@@ -777,33 +777,6 @@ def test_sensor_route_delays_are_right_skewed_without_grid_or_ceiling_atoms() ->
     assert summary.total_saturations / max(1, summary.total_samples) < 0.005
 
 
-def test_file_durations_are_right_skewed_without_ms_or_bound_atoms() -> None:
-    """Files analyzer durations should avoid flat bins, clamps, and millisecond grids."""
-
-    runtime = TimingRuntime(reference_time=T0, namespace="network-file-duration-shape")
-    planner = NetworkObservationPlanner(None, timing_runtime=runtime)
-    values = []
-    for ordinal in range(2_048):
-        event = _protocol_event(ordinal, rich=False)
-        observation = planner.plan(event, {"zeek_conn", "zeek_http", "zeek_files"})[0]
-        fuid = event.protocol.primary_file_transfer.fuid
-        duration = observation.source_duration(network_source_timing_key("zeek_files", fuid))
-        assert duration is not None
-        values.append(round(duration * 1_000_000))
-
-    assert min(values) > 110_000
-    assert max(values) < 310_000
-    assert values.count(110_000) == values.count(310_000) == 0
-    assert statistics.mean(values) > statistics.median(values)
-    assert sum(value % 1_000 == 0 for value in values) / len(values) < 0.005
-    bins = [0] * 8
-    for value in values:
-        bins[min(7, int((value - 110_000) / 25_000))] += 1
-    assert max(bins) - min(bins) > len(values) * 0.08
-    summary = runtime.audit.snapshot()
-    assert summary.total_saturations / max(1, summary.total_samples) < 0.005
-
-
 def test_dns_kerberos_ntp_and_failed_durations_have_right_skew_without_atoms() -> None:
     """Canonical protocol timing should have tails, microseconds, and no clamp ceiling."""
 

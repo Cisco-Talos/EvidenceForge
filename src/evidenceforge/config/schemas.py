@@ -2424,6 +2424,61 @@ class HttpRequestPhaseConfig(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class RdpPayloadBounds(BaseModel, extra="forbid", frozen=True):
+    """Shared physical RDP payload support and logical traffic provisioning."""
+
+    initiator_minimum_bytes: int = Field(gt=0, le=2**60 - 1, strict=True)
+    initiator_maximum_bytes: int = Field(gt=0, le=2**60 - 1, strict=True)
+    responder_minimum_bytes: int = Field(gt=0, le=2**60 - 1, strict=True)
+    responder_maximum_bytes: int = Field(gt=0, le=2**60 - 1, strict=True)
+
+    @model_validator(mode="after")
+    def ordered_support(self) -> Self:
+        """Reject reversed traffic supports before allocating logical identities."""
+        if self.initiator_minimum_bytes > self.initiator_maximum_bytes:
+            raise ValueError("RDP initiator minimum must not exceed maximum")
+        if self.responder_minimum_bytes > self.responder_maximum_bytes:
+            raise ValueError("RDP responder minimum must not exceed maximum")
+        return self
+
+
+class TlsDetectionPhaseConfig(BaseModel, extra="forbid", frozen=True):
+    """Modeled physical first-TLS detection delay shared by every sensor."""
+
+    minimum_ms: float = Field(
+        gt=0,
+        strict=True,
+        allow_inf_nan=False,
+        description="Preferred minimum delay after transport open in milliseconds",
+    )
+    median_ms: float = Field(
+        gt=0,
+        strict=True,
+        allow_inf_nan=False,
+        description="Median of the bounded modeled detection delay",
+    )
+    maximum_ms: float = Field(
+        gt=0,
+        le=30_000,
+        strict=True,
+        allow_inf_nan=False,
+        description="Maximum modeled delay, further bounded by the physical parent",
+    )
+    sigma: float = Field(
+        gt=0,
+        strict=True,
+        allow_inf_nan=False,
+        description="Lognormal shape of physical detection delay",
+    )
+
+    @model_validator(mode="after")
+    def valid_range(self) -> Self:
+        """Require a finite nondegenerate detection interval."""
+        if not self.minimum_ms < self.median_ms < self.maximum_ms:
+            raise ValueError("TLS detection phase requires minimum_ms < median_ms < maximum_ms")
+        return self
+
+
 class HttpTransportFloorSlackConfig(BaseModel, extra="forbid", frozen=True):
     """Bounded close-time variation above the short HTTP admission floor."""
 
@@ -2783,6 +2838,27 @@ class SmbProcessProfile(BaseModel, extra="forbid", frozen=True):
     lifecycle: Literal["resident", "operation", "transport", "service"]
     credential_source: Literal["none", "smb_principal"] = "none"
     operand_mode: SmbProcessOperandMode = "none"
+    automatic_file_extensions: tuple[str, ...] | None = Field(
+        default=None,
+        description="Ordinary automatic task file types; explicit operations remain authoritative.",
+    )
+
+    @field_validator("automatic_file_extensions")
+    @classmethod
+    def valid_automatic_file_extensions(
+        cls, values: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        """Normalize a nonempty task policy without making an empty set unrestricted."""
+        if values is None:
+            return None
+        normalized = tuple(value.strip().casefold() for value in values)
+        if not normalized or any(
+            not re.fullmatch(r"\.[a-z0-9][a-z0-9+-]*", value) for value in normalized
+        ):
+            raise ValueError("automatic_file_extensions requires nonempty dotted file extensions")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("automatic_file_extensions must be unique")
+        return normalized
 
     @field_validator("key_template", "command_line_template", "username_template")
     @classmethod
@@ -3472,9 +3548,26 @@ class WindowsSpecialPrivilegesConfig(BaseModel, extra="forbid"):
         return v
 
 
+class WindowsNtlmValidationTiming(BaseModel, extra="forbid", frozen=True):
+    """Preferred successful validation lead, bounded by its actual transport."""
+
+    minimum_ms: float = Field(gt=0, allow_inf_nan=False, strict=True)
+    maximum_ms: float = Field(gt=0, allow_inf_nan=False, strict=True)
+
+    @model_validator(mode="after")
+    def ordered_support(self) -> WindowsNtlmValidationTiming:
+        """Reject a reversed validation timing interval."""
+        if self.maximum_ms < self.minimum_ms:
+            raise ValueError("NTLM validation maximum_ms must be >= minimum_ms")
+        return self
+
+
 class WindowsAuthRealismConfig(BaseModel, extra="forbid"):
     """Windows authentication realism knobs."""
 
+    success_ntlm_validation: WindowsNtlmValidationTiming = Field(
+        default_factory=lambda: WindowsNtlmValidationTiming(minimum_ms=8.0, maximum_ms=120.0)
+    )
     workstation_lock: WindowsWorkstationLockConfig
     group_policy_refresh: WindowsGroupPolicyRefreshConfig
     remote_auth_transport: WindowsRemoteAuthTransportConfig
@@ -3505,6 +3598,27 @@ class BrowserProfileRoots(BaseModel, extra="forbid", frozen=True):
                 "Browser profile root must be absolute and may substitute only {username}"
             )
         return value
+
+
+class UnknownSourceUserAgentProfile(BaseModel, extra="forbid", frozen=True):
+    """Modeled header presentations without a known source-host OS."""
+
+    user_agents: tuple[str, ...] = Field(
+        min_length=1, max_length=256, description="Single-line modeled client presentations"
+    )
+
+    @field_validator("user_agents")
+    @classmethod
+    def safe_headers(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Keep default presentations bounded and free of header control characters."""
+        if any(
+            not value.strip()
+            or len(value) > 4096
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            for value in values
+        ):
+            raise ValueError("Unknown-source user agents must be bounded single-line header values")
+        return values
 
 
 class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):
@@ -4789,6 +4903,8 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     cpu_subtype: int = Field(strict=True, ge=-(2**31), lt=2**31)
     user_environment: tuple[str, ...]
     root_environment: tuple[str, ...]
+    native_generation_history: Literal["posix_hidden_births"] | None = None
+    filesystem_root_identity: Literal["apfs_presented_root"] | None = None
     directory_inode_range: MacosExecutionMetadataRange
     directory_permissions: int = Field(strict=True, ge=0, le=0o777)
     directory_size_bytes: int = Field(strict=True, ge=0, lt=2**31)
@@ -4873,6 +4989,11 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
             raise ValueError(
                 "Runtime file inodes must be disjoint from provisioned directory inodes"
             )
+        if (
+            self.filesystem_root_identity == "apfs_presented_root"
+            and self.directory_inode_range.min <= 2 <= self.directory_inode_range.max
+        ):
+            raise ValueError("Ordinary directory allocation overlaps the reserved APFS root inode")
         if self.directory_age_range.max >= 2**31:
             raise ValueError("Mac directory age range must fit bounded timedelta seconds")
         selectors = [
@@ -4982,6 +5103,11 @@ class MacosInstalledFileProfile(BaseModel, extra="forbid", frozen=True):
     size_log_sigma: float = Field(strict=True, gt=0, le=3)
     installation_age_seconds: MacosProvisioningRange
     build_lead_seconds: MacosProvisioningRange
+    preboot_product_ids: tuple[str, ...] = Field(
+        default=(),
+        max_length=128,
+        description="Machine products whose objects must predate a known canonical host boot",
+    )
     package_whole_second_probability: float = Field(default=0.5, ge=0, le=1)
     allocation_policy: Literal["dense-rounded"]
     allocation_unit_bytes: int = Field(strict=True, gt=0, lt=2**31, multiple_of=512)
@@ -4995,6 +5121,11 @@ class MacosInstalledFileProfile(BaseModel, extra="forbid", frozen=True):
         """Keep the modeled log-normal median inside its bounded support."""
         if not self.logical_size_bytes.min <= self.size_median_bytes <= self.logical_size_bytes.max:
             raise ValueError("Mac installed size median must lie inside logical_size_bytes")
+        if len(set(self.preboot_product_ids)) != len(self.preboot_product_ids) or any(
+            not value or value.strip() != value or "\0" in value
+            for value in self.preboot_product_ids
+        ):
+            raise ValueError("Mac preboot product selectors must be distinct exact product IDs")
         keys = [
             (rule.product_id, rule.artifact_name, rule.native_path)
             for rule in self.permission_rules
@@ -5148,6 +5279,30 @@ class SystemBinaryEntry(BaseModel, extra="forbid"):
 
 
 # --- Traffic Rates ---
+
+
+class LinuxConsolePolicy(BaseModel, extra="forbid", frozen=True):
+    """Bounded virtual consoles available to the ordinary getty/login adapter."""
+
+    terminals: tuple[str, ...] = Field(
+        min_length=1, max_length=63, description="Available Linux virtual terminal names"
+    )
+    getty_image: Literal["/sbin/agetty"] = Field(description="Qualified console getty image")
+    login_image: Literal["/bin/login"] = Field(description="Qualified login replacement image")
+
+    @field_validator("terminals")
+    @classmethod
+    def validate_terminals(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Keep one Linux virtual-terminal slot per configured number."""
+        if len(set(value)) != len(value) or any(
+            not terminal.startswith("tty")
+            or not terminal[3:].isdigit()
+            or not 1 <= int(terminal[3:]) <= 63
+            or terminal != f"tty{int(terminal[3:])}"
+            for terminal in value
+        ):
+            raise ValueError("terminals must be unique canonical tty1 through tty63 names")
+        return value
 
 
 class TrafficRateLevel(BaseModel, extra="forbid"):

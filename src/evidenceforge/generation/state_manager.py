@@ -11066,12 +11066,18 @@ class StateManager:
                 hourly_factor = hourly_regimes[hour % len(hourly_regimes)]
             base_churn = 76 if day >= 5 else 116 if 8 <= hour < 18 else 92
             hourly_target = round(base_churn * hourly_factor * host_workload_factor)
-            lower = max(48, round(hourly_target * 0.45))
-            upper = min(720, max(lower, round(hourly_target * 1.55)))
-            churn = rng.randint(lower, upper)
+            capacity_churn = 2 * _LINUX_PID_REORDER_LANE_WIDTH
+            lower = max(capacity_churn, round(hourly_target * 0.45))
+            upper = max(
+                lower + max(1, round(hourly_target * 0.55)),
+                min(720, round(hourly_target * 1.55)),
+            )
+            # Hidden PID consumption is a count, not an elapsed-time sample.
+            # Two bounded integer draws give nonuniform triangular mass on
+            # admissible capacity, without censoring quiet workloads to a floor.
+            churn = (rng.randint(lower, upper) + rng.randint(lower, upper)) // 2
             if rng.random() < 0.04:
                 churn += rng.randint(90, 480)
-            churn = max(churn, 2 * _LINUX_PID_REORDER_LANE_WIDTH)
             prefix.append(prefix[-1] + churn)
         return tuple(prefix)
 
@@ -11463,6 +11469,60 @@ class StateManager:
             candidate += 4
         next_counter = candidate + (4 * rng.randint(1, 17))
         return candidate, (system, next_counter), (system, rng.getstate())
+
+    def seal_macos_audit_identities(self, *, require_known_boot: bool = False) -> None:
+        """Resolve one native namespace using the existing canonical POSIX history.
+
+        Reservation handles and authentication proofs remain unchanged. A frozen
+        profile without this policy keeps legacy chronological resolution; raw
+        direct callers without a boot retain their explicit compatibility view.
+        Normal engine finalization requires its modeled boot facts.
+        """
+        from evidenceforge.generation.activity.macos_execution_metadata import (
+            load_macos_execution_metadata_profile,
+        )
+
+        with self._lock:
+            ledger = self._macos_audit_identity_intents
+            if not len(ledger):
+                ledger.seal()
+                return
+        # Resolve configuration before taking the State lock again: native
+        # preparation acquires configuration scope before State in other threads.
+        profile = load_macos_execution_metadata_profile()
+        with self._lock:
+            if profile is None or profile.native_generation_history != "posix_hidden_births":
+                ledger.seal()
+                return
+            if require_known_boot and any(
+                host not in self._system_boot_times for host in self._macos_audit_pid_versions
+            ):
+                raise StateError("Native process generation history requires each modeled Mac boot")
+            current_host: str | None = None
+            boot: datetime | None = None
+            prefix: tuple[int, ...] | None = None
+
+            def hidden_births(host: str, at: datetime) -> int:
+                nonlocal current_host, boot, prefix
+                if host != current_host:
+                    current_host = host
+                    boot = self._system_boot_times.get(host)
+                    prefix = self._linux_pid_weekly_churn_prefixes.get(host)
+                    if boot is not None and prefix is None:
+                        # The same pure prefix constructor used by PID planning.
+                        # Keep this one-host view local, not a new retained cache.
+                        prefix = self._build_linux_pid_weekly_churn_prefix(host)
+                if boot is None:
+                    if require_known_boot:
+                        raise StateError("Native process generation history lost its modeled boot")
+                    return 0
+                if at < boot:
+                    raise StateError("Native process generation cannot precede its modeled boot")
+                assert prefix is not None
+                elapsed = int((ensure_utc(at) - ensure_utc(boot)).total_seconds())
+                return self._linux_pid_hidden_churn_from_prefix(prefix, elapsed)
+
+            ledger.seal(history_offset=hidden_births)
 
     def _preview_macos_audit_pid_version(
         self, system: str, os_category: str, *, previous: int | None = None

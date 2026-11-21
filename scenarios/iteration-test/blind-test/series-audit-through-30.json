@@ -1,0 +1,195 @@
+{
+  "scope": "Completed new-epoch loops1\u201330: actual original score/report parsing, canonical score means, required report/manifest/deliberation links, fixed authored hashes and unchanged reviewer source hashes. Does not replace native content review or verify a past engine source snapshot.",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "reviewer_source_sha256": {
+    "expert-briefing.md": "0ba7858b79562384792cedf81f2bcfe9102570ac945b8dc06d2553e4c54d3e27",
+    "expert-personas.md": "26ff3c883d57f9e1a6ec6535293f06692339042051586d58342aeda9a3cf7ea4"
+  },
+  "loops": [
+    {
+      "loop": 1,
+      "initial_average": 55.75,
+      "automated_eval": 98.52740080428205,
+      "deliberation_average": 79.0
+    },
+    {
+      "loop": 2,
+      "initial_average": 42.5,
+      "automated_eval": 98.21569229515023,
+      "deliberation_average": 51.0
+    },
+    {
+      "loop": 3,
+      "initial_average": 41.0,
+      "automated_eval": 98.59412546986576,
+      "deliberation_average": 52.5
+    },
+    {
+      "loop": 4,
+      "initial_average": 47.5,
+      "automated_eval": 98.59412546986576,
+      "deliberation_average": 64.5
+    },
+    {
+      "loop": 5,
+      "initial_average": 53.75,
+      "automated_eval": 98.27728828320228,
+      "deliberation_average": 69.25
+    },
+    {
+      "loop": 6,
+      "initial_average": 45.5,
+      "automated_eval": 98.27727818716039,
+      "deliberation_average": 66.25
+    },
+    {
+      "loop": 7,
+      "initial_average": 48.25,
+      "automated_eval": 98.42940251033318,
+      "deliberation_average": 65.75
+    },
+    {
+      "loop": 8,
+      "initial_average": 47.25,
+      "automated_eval": 98.07337116382875,
+      "deliberation_average": 69.5
+    },
+    {
+      "loop": 9,
+      "initial_average": 41.0,
+      "automated_eval": 98.3561213429993,
+      "deliberation_average": 50.25
+    },
+    {
+      "loop": 10,
+      "initial_average": 46.25,
+      "automated_eval": 98.41213273839097,
+      "deliberation_average": 64.25
+    },
+    {
+      "loop": 11,
+      "initial_average": 49.0,
+      "automated_eval": 98.36488191751666,
+      "deliberation_average": 68.75
+    },
+    {
+      "loop": 12,
+      "initial_average": 38.25,
+      "automated_eval": 98.29003492968762,
+      "deliberation_average": 43.5
+    },
+    {
+      "loop": 13,
+      "initial_average": 61.25,
+      "automated_eval": 98.29003492968762,
+      "deliberation_average": 72.25
+    },
+    {
+      "loop": 14,
+      "initial_average": 52.5,
+      "automated_eval": 98.29003492968762,
+      "deliberation_average": 66.25
+    },
+    {
+      "loop": 15,
+      "initial_average": 39.75,
+      "automated_eval": 98.29003492968762,
+      "deliberation_average": 61.25
+    },
+    {
+      "loop": 16,
+      "initial_average": 38.75,
+      "automated_eval": 98.40432397830354,
+      "deliberation_average": null
+    },
+    {
+      "loop": 17,
+      "initial_average": 38.0,
+      "automated_eval": 98.28211615063223,
+      "deliberation_average": 62.5
+    },
+    {
+      "loop": 18,
+      "initial_average": 48.0,
+      "automated_eval": 98.41037730212695,
+      "deliberation_average": 67.5
+    },
+    {
+      "loop": 19,
+      "initial_average": 37.75,
+      "automated_eval": 98.41037730212695,
+      "deliberation_average": 57.25
+    },
+    {
+      "loop": 20,
+      "initial_average": 50.5,
+      "automated_eval": 98.41037730212695,
+      "deliberation_average": 69.5
+    },
+    {
+      "loop": 21,
+      "initial_average": 59.25,
+      "automated_eval": 98.29981680873311,
+      "deliberation_average": 70.5
+    },
+    {
+      "loop": 22,
+      "initial_average": 26.5,
+      "automated_eval": 98.29981680873311,
+      "deliberation_average": 30.0
+    },
+    {
+      "loop": 23,
+      "initial_average": 42.75,
+      "automated_eval": 98.16485287711808,
+      "deliberation_average": 64.0
+    },
+    {
+      "loop": 24,
+      "initial_average": 50.0,
+      "automated_eval": 98.2530975632962,
+      "deliberation_average": 68.75
+    },
+    {
+      "loop": 25,
+      "initial_average": 54.5,
+      "automated_eval": 98.25030082067876,
+      "deliberation_average": 74.0
+    },
+    {
+      "loop": 26,
+      "initial_average": 41.75,
+      "automated_eval": 98.25030082067876,
+      "deliberation_average": 63.25
+    },
+    {
+      "loop": 27,
+      "initial_average": 42.75,
+      "automated_eval": 98.25030082067876,
+      "deliberation_average": 71.25
+    },
+    {
+      "loop": 28,
+      "initial_average": 45.5,
+      "automated_eval": 98.25030082067876,
+      "deliberation_average": 62.75
+    },
+    {
+      "loop": 29,
+      "initial_average": 48.25,
+      "automated_eval": 98.25030082067876,
+      "deliberation_average": 63.5
+    },
+    {
+      "loop": 30,
+      "initial_average": 34.75,
+      "automated_eval": 98.25030082067876,
+      "deliberation_average": 37.5
+    }
+  ]
+}

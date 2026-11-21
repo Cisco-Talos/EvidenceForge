@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "distinct_dkim_keys": 12,
+  "keys_with_small_factors": 9,
+  "trial_division_bound": 10000,
+  "keys": [
+    {
+      "query": "mail._domainkey.meridianhcs.com",
+      "source": "zeek-core/dns.json",
+      "line": 2239,
+      "uid": "CVaWDRJWqGIuDF9iD4",
+      "spki_sha256": "5fe82be080d9ece67f0446af965cafd2a28211c1e487b7bcf88ec1d5b3caee41",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": [
+        3,
+        17,
+        23
+      ]
+    },
+    {
+      "query": "s1._domainkey.atlassian.net",
+      "source": "zeek-core/dns.json",
+      "line": 2265,
+      "uid": "CW8M3MPnzGbu4mG0M3",
+      "spki_sha256": "90f016d6bccefac5ef6b8a28b934c8b9c4bf6e119fe07dde33c4d08be270036a",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": [
+        3,
+        617
+      ]
+    },
+    {
+      "query": "k1._domainkey.zoom.us",
+      "source": "zeek-core/dns.json",
+      "line": 2291,
+      "uid": "CC2PxMTxTm1tPLMqb",
+      "spki_sha256": "a119814ce2ec96d167d422b744069bca92e2574708a1d4adb86eaa23104f8499",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": []
+    },
+    {
+      "query": "selector1._domainkey.duo.com",
+      "source": "zeek-core/dns.json",
+      "line": 2301,
+      "uid": "CWDTvHJJqJ8UdOk1ZVD",
+      "spki_sha256": "0081fd63b00bc0e317f31dc3ba0d3fd6ca2de76c697ba447b09fe4998b0240c5",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": [
+        173,
+        953
+      ]
+    },
+    {
+      "query": "k1._domainkey.meridianhcs.com",
+      "source": "zeek-core/dns.json",
+      "line": 2307,
+      "uid": "Cj6xkHZEWK8TRCzXzL",
+      "spki_sha256": "47a7fdb9d25a999dc0a8d345bb751a3e3bb4ddf581660f2c150333db21ad97ff",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": []
+    },
+    {
+      "query": "selector1._domainkey.meridianhcs.com",
+      "source": "zeek-core/dns.json",
+      "line": 2386,
+      "uid": "CPNg8CGKJZHFA0Hjrz",
+      "spki_sha256": "7cdfd058fc4239df2962e7851d7b1201429dc310226e8dd98c81c18589c82aca",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": [
+        3,
+        383,
+        577,
+        929
+      ]
+    },
+    {
+      "query": "selector1._domainkey.okta.com",
+      "source": "zeek-core/dns.json",
+      "line": 2413,
+      "uid": "CahI5JjqrcKAkaRqBJ",
+      "spki_sha256": "9751ee51817d096de956b499437f49939220d57a71d4aee6438552a238bdd196",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": []
+    },
+    {
+      "query": "k1._domainkey.github.com",
+      "source": "zeek-core/dns.json",
+      "line": 2467,
+      "uid": "CKIiXbyDsa4ZhMxvNeu",
+      "spki_sha256": "0619441c9351def9c0822eff931e246fad8c4a3b5fbff300ffea3d9aa9433f1d",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": [
+        5,
+        11
+      ]
+    },
+    {
+      "query": "mta._domainkey.atlassian.net",
+      "source": "zeek-core/dns.json",
+      "line": 2481,
+      "uid": "CiP6P9XhYwlfFSnO9Bj",
+      "spki_sha256": "df32c2dc9c1530f42abcca27eabbc6aa3267b30e26328a51730a96f1abe4faa5",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": [
+        7,
+        29,
+        73,
+        521
+      ]
+    },
+    {
+      "query": "selector2._domainkey.okta.com",
+      "source": "zeek-core/dns.json",
+      "line": 2561,
+      "uid": "C41zStBTcZnQJ66PHC",
+      "spki_sha256": "0ab4de0154a9c0dcbbb0516f0db403f26c404ae467813c4d1c25839a144be27e",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": [
+        5,
+        11
+      ]
+    },
+    {
+      "query": "selector1._domainkey.microsoft.com",
+      "source": "zeek-core/dns.json",
+      "line": 2572,
+      "uid": "CvtphtUK3lO0eGx7VF",
+      "spki_sha256": "7c750f04a86ddfd3b7db5be5beb78b61d9aecbe9d5640d68202dcced640bfc7b",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": [
+        7
+      ]
+    },
+    {
+      "query": "selector1._domainkey.sendgrid.net",
+      "source": "zeek-core/dns.json",
+      "line": 2574,
+      "uid": "CLOo1S4SB5U4gIRvrC",
+      "spki_sha256": "bcd13496a9fe6f04dfbfe9cbeea8dc37d2078eb98731622f95ec8fc40d293dae",
+      "bits": 2048,
+      "exponent": 65537,
+      "small_prime_factors": [
+        17
+      ]
+    }
+  ],
+  "limitation": "Absence of small factors alone does not establish primality or full RSA validity; native factor-validation tests cover the shared builder."
+}

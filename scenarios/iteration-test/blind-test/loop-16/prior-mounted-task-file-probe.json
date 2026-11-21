@@ -1,0 +1,97 @@
+{
+  "scope": "Data-only native-Mac directory eCAR mounted FILE rows attributed to cat/tee; ordinary versus explicit intent cannot be established from this probe alone. Binary streaming can be intentional.",
+  "hosts": {
+    "MAC-MROSS-02.meridianhcs.local": {
+      "operation_image_action_extension_counts": [
+        {
+          "image": "/bin/cat",
+          "action": "READ",
+          "extension": ".docx",
+          "records": 4
+        },
+        {
+          "image": "/bin/cat",
+          "action": "READ",
+          "extension": ".pdf",
+          "records": 2
+        },
+        {
+          "image": "/bin/cat",
+          "action": "READ",
+          "extension": ".xlsx",
+          "records": 1
+        }
+      ],
+      "office_pdf_examples": [
+        {
+          "timestamp_ms": 1793626649955,
+          "image": "/bin/cat",
+          "action": "READ",
+          "path": "/Volumes/ClinicalResearch/Team/2026/project-plan.pdf",
+          "command_line": "/bin/cat /Volumes/ClinicalResearch/Team/2026/project-plan.pdf"
+        },
+        {
+          "timestamp_ms": 1793635557353,
+          "image": "/bin/cat",
+          "action": "READ",
+          "path": "/Volumes/ClinicalResearch/Archive/2025/service-review.xlsx",
+          "command_line": "/bin/cat /Volumes/ClinicalResearch/Archive/2025/service-review.xlsx"
+        },
+        {
+          "timestamp_ms": 1793639447996,
+          "image": "/bin/cat",
+          "action": "READ",
+          "path": "/Volumes/Shared/Reference/project-plan.docx",
+          "command_line": "/bin/cat /Volumes/Shared/Reference/project-plan.docx"
+        },
+        {
+          "timestamp_ms": 1793639552454,
+          "image": "/bin/cat",
+          "action": "READ",
+          "path": "/Volumes/Shared/Reference/onboarding.docx",
+          "command_line": "/bin/cat /Volumes/Shared/Reference/onboarding.docx"
+        },
+        {
+          "timestamp_ms": 1793644672097,
+          "image": "/bin/cat",
+          "action": "READ",
+          "path": "/Volumes/Users/Reports/draft-draft.pdf",
+          "command_line": "/bin/cat /Volumes/Users/Reports/draft-draft.pdf"
+        },
+        {
+          "timestamp_ms": 1793644935510,
+          "image": "/bin/cat",
+          "action": "READ",
+          "path": "/Volumes/ClinicalResearch/Team/project-plan-review.docx",
+          "command_line": "/bin/cat /Volumes/ClinicalResearch/Team/project-plan-review.docx"
+        },
+        {
+          "timestamp_ms": 1793645105922,
+          "image": "/bin/cat",
+          "action": "READ",
+          "path": "/Volumes/ResearchShared/Reference/2024/meeting-notes.docx",
+          "command_line": "/bin/cat /Volumes/ResearchShared/Reference/2024/meeting-notes.docx"
+        }
+      ],
+      "office_pdf_observations": 7
+    },
+    "MAC-MROSS-01.meridianhcs.local": {
+      "operation_image_action_extension_counts": [
+        {
+          "image": "/bin/cat",
+          "action": "READ",
+          "extension": ".json",
+          "records": 1
+        },
+        {
+          "image": "/usr/bin/tee",
+          "action": "WRITE",
+          "extension": ".json",
+          "records": 1
+        }
+      ],
+      "office_pdf_examples": [],
+      "office_pdf_observations": 0
+    }
+  }
+}

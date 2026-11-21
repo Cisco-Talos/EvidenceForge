@@ -1,0 +1,35 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 10,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 543,
+  "behavior_surface_sha256": "0ee436b2327469c27704060621c5f2ae3474a389affec450d52c0ac17ebcab22",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "RDP canonical readiness, negotiation and target startup work"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "primary": "83 passed,23 deselected,79.63s",
+    "target_phase_contracts": "4 passed,0.98s; includes replay, phase support, missing manager and short-window rejection",
+    "deferred_production": "70 slow passed,22.73s; reconnect identity/fault/native/configured-clock/source-admission matrix",
+    "reconnect_new_assertion": "2 slow passed,68 deselected,3.51s; exact source_ready_time binding",
+    "checkpoint_smoke": "2 passed,15 deselected,106.45s",
+    "global_rng_policy": "3 slow passed,7.48s",
+    "config_validation": "105files,0errors/warnings",
+    "ruff": "PASS",
+    "routine_suite": "No full routine/release pass claimed",
+    "retained_failures": "Pre-manifest integration rejection and old reconnect2second assertion retained; new assertion binds actual canonical source readiness and transport lifetime"
+  }
+}

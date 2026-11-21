@@ -1,0 +1,14 @@
+{
+  "previous_loop": 27,
+  "current_loop": 28,
+  "file_count": 115,
+  "changed_files": 2,
+  "changed_source_counts": {
+    "macos_endpoint_security.ndjson": 2
+  },
+  "changed_paths": [
+    "MAC-MROSS-01.meridianhcs.local/macos_endpoint_security.ndjson",
+    "MAC-MROSS-02.meridianhcs.local/macos_endpoint_security.ndjson"
+  ],
+  "non_mac_changes": []
+}

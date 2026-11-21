@@ -50,6 +50,7 @@ class PersistentSmbProjectionPhase(StrEnum):
     CLIENT_PROCESS = "client_process"
     TRANSPORT = "transport"
     TYPE3_LOGON = "type3_logon"
+    CREDENTIAL_VALIDATION = "credential_validation"
     TREE_OR_FILE = "tree_or_file"
     TREE_DISCONNECT = "tree_disconnect"
     LOGOFF = "logoff"

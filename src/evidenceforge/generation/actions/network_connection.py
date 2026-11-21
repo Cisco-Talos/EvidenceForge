@@ -68,6 +68,7 @@ from evidenceforge.generation.actions.network_identity import (
     _network_request_stable_id,
     _register_network_request_type,
 )
+from evidenceforge.generation.activity.network_params import rdp_payload_bounds
 from evidenceforge.generation.activity.timing_profiles import (
     SshAcceptedAuthenticationTiming,
     SshAuthenticationTimingPlan,
@@ -211,7 +212,7 @@ class PersistentSmbRootIntent:
             source_port=transaction.src_port,
             session_kind="network",
             start_time=self.auth_time,
-            logon_guid_required=True,
+            logon_guid_required=self.auth_protocol.casefold() not in {"ntlm", "ntlmssp"},
             lifecycle_group_id=self.lifecycle_group_id,
             auth_protocol=self.auth_protocol,
             smb_principal=self.smb_principal,
@@ -1217,6 +1218,7 @@ class DeferredRdpApplicationIntent:
             )
         else:
             logical_span = self.hard_deadline - transaction.started_at
+            payload_support = rdp_payload_bounds()
             identity = RdpLogicalSessionIdentity(
                 logical_session_id=session_identity.object_id,
                 affinity=RdpSessionAffinity(
@@ -1233,8 +1235,14 @@ class DeferredRdpApplicationIntent:
                 reconnect_timeout=logical_span,
                 hard_deadline=self.hard_deadline,
                 budget=ApplicationChannelBudget(
-                    initiator_bytes=transaction.orig_bytes * self.max_logical_generations,
-                    responder_bytes=transaction.resp_bytes * self.max_logical_generations,
+                    initiator_bytes=max(
+                        transaction.orig_bytes, payload_support.initiator_maximum_bytes
+                    )
+                    * self.max_logical_generations,
+                    responder_bytes=max(
+                        transaction.resp_bytes, payload_support.responder_maximum_bytes
+                    )
+                    * self.max_logical_generations,
                     operations=self.max_logical_generations,
                 ),
             )

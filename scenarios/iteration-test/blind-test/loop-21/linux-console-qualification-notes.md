@@ -1,0 +1,32 @@
+# Newly observed Linux console handoff — qualify for next family
+
+19Host:10/bin/logincreations on6Linuxhosts have a separate /sbin/agetty direct
+parent. APP-INTreusesPID36047/UUID6189a838-5ba3-4d32-879a-ecf53d99a742forlogin
+PIDs3374484at13:02:20.742and3376990at13:09:15.034;DB-PRODreusesparent29350for
+logins1366445/1373719. NativePAMcorroboratesdistinctloginPIDs. All4independently
+confirmed inactualdeliberation. OrdinaryagettyexecsloginwithsamePID; wrappers/
+normalizationremainraw-dataalternatives, butengineauditconfirmsexplicitcurrent
+creationpath, notancestorrewriting.
+
+Owning generator path _emit_linux_local_logon_syslog at13104+ calls
+_linux_local_login_parent_pid at37113+ toselecta livepersistentagetty, then
+`generate_process('/bin/login',parent_pid=getty)` creatingadifferentPID. Ashared
+console action/lifecycle owner should represent getty->login exec in-place,
+properinitparent/TTY/session, shellfork, cleanupandfreshgettyrespawn. DoNOTfixone
+rendererPPIDorpretendagettyforksnormally. ExistingcanonicalStateexecutioncanmodel
+POSIXimageepochs; inventorysupportedLinuxrendering andsource timingbeforecode.
+Also19Hostnoticed5named-userloginprocessexitsandnormalizedlogoutswithoutPAM/
+logindcloses, whereasrootclosesevidenceexists. Lowerconfidencecollection/graceful
+outcomeuncertain; inspectcanonicalcloseownerbeforeaddingunconditionalnativecloses.
+Maybetargetsamefamilyifnormalcloseintentproven; neverfillgapsmerelyforcompleteness.
+
+Primaryimmutableutil-linuxv2.40.2agetty.c lines537–538calls execv(options.login,
+login_argv), preservingprocessPID. Mainmasterfetch404; useverifiedtaggedsource:
+https://raw.githubusercontent.com/util-linux/util-linux/v2.40.2/term-utils/agetty.c
+Additionalprojectmaintainerissue4032hasnativeEXECVE PID332ppid1exampleandpatch.
+
+No21enginecodeyet.20generationnotstartedwhilefinalecar-onlytestactive; current
+source555Macgenerationhistorymustremainsole20family. Needcomplete20actualgen+post
+beforeany21enginechange. Existingdirectory-statfollowupinthisfolderUNSELECTED;
+thisnewconfirmedconsolefamilyhashigherleverage. Benchmarkauthored/reviewerhashes
+stayfixedthrough30; nochanges toexactMacfork offsets.

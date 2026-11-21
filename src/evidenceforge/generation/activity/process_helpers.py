@@ -15,11 +15,13 @@ from typing import Any
 
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.process_lifetimes import (
-    numeric_sleep_seconds as numeric_sleep_seconds,
-)
-from evidenceforge.generation.activity.process_lifetimes import (
+    executable_basename,
+    load_process_lifetimes,
     posix_command_lifetime,
     unwrapped_command,
+)
+from evidenceforge.generation.activity.process_lifetimes import (
+    numeric_sleep_seconds as numeric_sleep_seconds,
 )
 from evidenceforge.utils.rng import _stable_seed
 
@@ -95,7 +97,7 @@ def _windows_service_process_account(process_name: str, command_line: str) -> st
 
 def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
     """Estimate foreground Linux command lifetime for shell-history ordering."""
-    return posix_command_lifetime(process_name, command_line)
+    return posix_command_lifetime(process_name, command_line, os_category="linux")
 
 
 def _linux_shell_process_reserves_foreground(process_name: str, command_line: str) -> bool:
@@ -141,9 +143,13 @@ def _macos_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
     wrapped = unwrapped_command(process_name, command_line)
     if wrapped is not None:
         return _macos_foreground_lifetime(*wrapped)
+    # A shell's resident profile describes interactive use. Script and -c
+    # invocations follow command policy, including explicit keep-alive intent.
+    if executable_basename(process_name) in load_process_lifetimes().interactive_shells.executables:
+        return posix_command_lifetime(process_name, command_line, os_category="macos")
     if ".app/Contents/" in process_name or profile.get("lifetime") == "long":
         return None
-    return posix_command_lifetime(process_name, command_line)
+    return posix_command_lifetime(process_name, command_line, os_category="macos")
 
 
 def _macos_profiled_short_lifetime(

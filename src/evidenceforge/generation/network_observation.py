@@ -49,6 +49,7 @@ from evidenceforge.generation.timing import (
     ConstantDistribution,
     SourceClockKey,
     SourceClockSpec,
+    TemporalConstraintGraph,
     TimingDistributionError,
     TimingRuntime,
     TimingScope,
@@ -3397,23 +3398,34 @@ class NetworkObservationPlanner:
             or event.protocol.leaf_certificate is not None
         )
         if needs_tls_timing:
-            ssl_window = get_timing_window(
-                "source.zeek_ssl_analyzer",
-                default_min_ms=3,
-                default_max_ms=650,
-                default_position="after",
-                default_class="same_observation",
-            )
-            ssl_time = cls._sample_after_within(
-                observed_start,
-                observed_close,
-                minimum_us=ssl_window.min_ms * 1_000,
-                maximum_us=ssl_window.max_ms * 1_000,
-                relationship_key="source.zeek_ssl_analyzer",
-                scope=scope,
-                sample_key="ssl",
-                runtime=runtime,
-            )
+            canonical_tls_time = dict(event.network.phase_times).get("tls_detected")
+            if canonical_tls_time is not None:
+                ssl_time = cls._project_phase_time(
+                    canonical_tls_time,
+                    canonical_start=canonical_start,
+                    observed_start=observed_start,
+                    sensor_identity=sensor_identity,
+                    timing=timing,
+                    runtime=runtime,
+                )
+            else:
+                ssl_window = get_timing_window(
+                    "source.zeek_ssl_analyzer",
+                    default_min_ms=3,
+                    default_max_ms=650,
+                    default_position="after",
+                    default_class="same_observation",
+                )
+                ssl_time = cls._sample_after_within(
+                    observed_start,
+                    observed_close,
+                    minimum_us=ssl_window.min_ms * 1_000,
+                    maximum_us=ssl_window.max_ms * 1_000,
+                    relationship_key="source.zeek_ssl_analyzer",
+                    scope=scope,
+                    sample_key="ssl",
+                    runtime=runtime,
+                )
             if "zeek_ssl" in visible_formats and event.protocol.ssl is not None:
                 source_times[network_source_timing_key("zeek_ssl")] = ssl_time
 
@@ -3425,22 +3437,12 @@ class NetworkObservationPlanner:
             default_class="same_observation",
         )
         ocsp = event.protocol.ocsp
-        ocsp_transfer = (
-            next(
-                (
-                    transfer
-                    for transfer in event.protocol.file_transfers
-                    if ocsp is not None and transfer.fuid == ocsp.id
-                ),
-                None,
-            )
-            if ocsp is not None
-            else None
-        )
-        ocsp_duration_floor_us = (
-            max(4, round(max(0.0, ocsp_transfer.duration) * 0.55 * 1_000_000))
-            if ocsp_transfer is not None
-            else 0
+        projected_file_durations = cls._project_file_elapsed_durations(
+            event,
+            canonical_start=canonical_start,
+            sensor_identity=sensor_identity,
+            timing=timing,
+            runtime=runtime,
         )
         http_time: datetime | None = None
         http = event.protocol.http
@@ -3469,13 +3471,24 @@ class NetworkObservationPlanner:
                 default_class="same_observation",
             )
             http_upper = observed_close
-            if observed_close is not None and ocsp_duration_floor_us:
-                downstream_reserve_us = file_window.min_ms * 1_000 + ocsp_duration_floor_us + 3
-                http_upper = observed_close - timedelta(microseconds=downstream_reserve_us)
+            if observed_close is not None:
+                linked = set((*http.orig_fuids, *http.resp_fuids))
+                longest_file_us = max(
+                    (
+                        round(projected_file_durations[t.fuid] * 1_000_000)
+                        for t in event.protocol.file_transfers
+                        if t.fuid in linked
+                    ),
+                    default=0,
+                )
+                if longest_file_us:
+                    http_upper = observed_close - timedelta(microseconds=longest_file_us + 3)
             if canonical_request is not None:
                 http_time = request_anchor
-                if http_upper is not None:
-                    http_time = min(http_time, http_upper)
+                if http_upper is not None and http_time > http_upper:
+                    raise TimingDistributionError(
+                        "HTTP request leaves no room for its canonical file interval"
+                    )
             else:
                 http_time = cls._sample_after_within(
                     request_anchor,
@@ -3492,17 +3505,11 @@ class NetworkObservationPlanner:
 
         transfers = sorted(event.protocol.file_transfers, key=lambda transfer: not transfer.is_orig)
         natural_file_uppers = [
-            (
-                observed_close - timedelta(microseconds=ocsp_duration_floor_us)
-                if (
-                    observed_close is not None
-                    and ocsp is not None
-                    and transfer.fuid == ocsp.id
-                    and ocsp_duration_floor_us
-                )
-                else observed_close
-            )
-            for transfer in transfers
+            observed_close
+            - timedelta(microseconds=round(projected_file_durations[t.fuid] * 1_000_000) + 1)
+            if observed_close is not None and projected_file_durations[t.fuid] > 0
+            else observed_close
+            for t in transfers
         ]
         reserved_file_uppers = list(natural_file_uppers)
         next_file_upper: datetime | None = None
@@ -3577,13 +3584,14 @@ class NetworkObservationPlanner:
                 sample_key=f"file:{ordinal}:{transfer.fuid}",
                 runtime=runtime,
             )
-            duration = cls._sample_file_duration(
-                transfer.duration,
-                source=transfer.source,
-                start=file_time,
-                close=observed_close,
+            file_time, duration = cls._file_analysis_span(
+                file_time,
+                not_before=anchor,
+                start_upper=file_upper,
+                observed_close=observed_close,
+                duration=projected_file_durations[transfer.fuid],
                 scope=scope,
-                sample_key=f"duration:{ordinal}:{transfer.fuid}",
+                file_id=transfer.fuid,
                 runtime=runtime,
             )
             file_times[transfer.fuid] = file_time
@@ -3785,67 +3793,87 @@ class NetworkObservationPlanner:
             raise
 
     @classmethod
-    def _sample_file_duration(
+    def _project_file_elapsed_durations(
         cls,
-        canonical_duration: float,
+        event: CanonicalOccurrence,
         *,
-        source: str,
-        start: datetime,
-        close: datetime | None,
-        scope: TimingScope,
-        sample_key: str,
+        canonical_start: datetime,
+        sensor_identity: str,
+        timing: NetworkSensorObservationTiming,
         runtime: TimingRuntime | SourceTimingPlanningRuntime,
-    ) -> float:
-        """Sample a file-analysis duration with interior transport-close slack."""
+    ) -> dict[str, float]:
+        """Project shared elapsed values, independently of analyzer emission delay."""
+        durations: dict[str, float] = {}
+        clock_key = cls._sensor_clock_key(sensor_identity, timing.profile_name)
+        clock_spec = cls._sensor_clock_spec(timing)
+        for transfer in event.protocol.file_transfers:
+            if transfer.duration <= 0:
+                durations[transfer.fuid] = 0.0
+                continue
+            canonical_anchor = max(canonical_start, ensure_utc(event.timestamp))
+            if transfer.observation_not_before is not None:
+                canonical_anchor = max(
+                    canonical_anchor, ensure_utc(transfer.observation_not_before)
+                )
+            canonical_end = canonical_anchor + timedelta(
+                microseconds=max(1, round(transfer.duration * 1_000_000))
+            )
+            projected_start = runtime.clocks.project(
+                canonical_anchor, key=clock_key, spec=clock_spec
+            )
+            projected_end = runtime.clocks.project(canonical_end, key=clock_key, spec=clock_spec)
+            elapsed_us = round((projected_end - projected_start).total_seconds() * 1_000_000)
+            if elapsed_us < 0:
+                runtime.audit.record_saturation("source.zeek_file.clock_interval")
+                raise TimingDistributionError(
+                    "Sensor clock inverted a canonical file-analysis interval"
+                )
+            durations[transfer.fuid] = max(1, elapsed_us) / 1_000_000
+        return durations
 
-        if canonical_duration <= 0:
-            return 0.0
-        canonical_us = max(1, round(canonical_duration * 1_000_000))
-        if close is None:
-            maximum_us = max(canonical_us + 3, round(canonical_us * 1.45))
-        else:
-            available_us = round((close - start).total_seconds() * 1_000_000)
-            if available_us <= 3:
-                runtime.audit.record_saturation("source.zeek_file.duration_window")
-                return 0.0
-            cap_us = {
-                "HTTP": 120_000,
-                "SMB": 160_000,
-                "SMTP": 280_000,
-            }.get(source.upper(), 100_000)
-            margin_maximum = min(cap_us, max(3, available_us // 3))
-            margin = runtime.sampler.sample_microseconds(
-                cls._right_skew_distribution(1, margin_maximum),
-                relationship_key="source.zeek_file.close_slack",
-                scope=scope,
-                sample_key=f"{sample_key}:close",
+    @staticmethod
+    def _file_analysis_span(
+        preferred_start: datetime,
+        *,
+        not_before: datetime,
+        start_upper: datetime | None,
+        observed_close: datetime | None,
+        duration: float,
+        scope: TimingScope,
+        file_id: str,
+        runtime: TimingRuntime | SourceTimingPlanningRuntime,
+    ) -> tuple[datetime, float]:
+        """Constrain the full projected span without resampling its speed."""
+        if duration <= 0:
+            return preferred_start, 0.0
+        graph = TemporalConstraintGraph(
+            timing_runtime=runtime,
+            scope=TimingScope(
+                stable_id=scope.stable_id,
+                source=scope.source,
+                lifecycle_id=f"{scope.lifecycle_id}:file:{file_id}",
+            ),
+            relationship_key="source.zeek_file.elapsed.constraints",
+        )
+        graph.add_node(
+            "file_start",
+            preferred_start,
+            not_before=not_before,
+            not_after=start_upper - timedelta(microseconds=1) if start_upper is not None else None,
+        )
+        graph.add_node("file_end", preferred_start + timedelta(seconds=duration))
+        graph.constrain_after("file_end", "file_start", min_gap=timedelta(seconds=duration))
+        if observed_close is not None:
+            graph.add_node(
+                "transport_close",
+                observed_close,
+                not_before=observed_close,
+                not_after=observed_close,
             )
-            maximum_us = available_us - margin
-            if maximum_us <= 2:
-                runtime.audit.record_saturation("source.zeek_file.duration_window")
-                return 0.0
-        lower_us = max(0, min(maximum_us - 2, round(canonical_us * 0.55)))
-        preferred_us = min(canonical_us, max(1, round(maximum_us * 0.82)))
-        upper_us = min(maximum_us, max(preferred_us + 3, round(canonical_us * 1.55)))
-        if upper_us <= lower_us + 2:
-            lower_us = 0
-            upper_us = maximum_us
-        try:
-            duration_us = runtime.sampler.sample_microseconds(
-                TruncatedLognormalDistribution(
-                    median=float(max(1, preferred_us)),
-                    sigma=0.42,
-                    minimum=float(lower_us),
-                    maximum=float(upper_us),
-                ),
-                relationship_key="source.zeek_file.duration",
-                scope=scope,
-                sample_key=sample_key,
-            )
-        except TimingDistributionError:
-            runtime.audit.record_saturation("source.zeek_file.duration_window")
-            duration_us = max(1, maximum_us // 2)
-        return duration_us / 1_000_000
+            graph.constrain_after("transport_close", "file_end", min_gap=timedelta(microseconds=1))
+        resolved = graph.resolve()
+        start, end = resolved["file_start"], resolved["file_end"]
+        return start, (end - start).total_seconds()
 
     @classmethod
     def _observed_traffic(

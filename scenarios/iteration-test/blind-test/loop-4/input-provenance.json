@@ -1,0 +1,39 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 4,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 537,
+  "behavior_surface_sha256": "101ae72d399f6a468788c604af9f57e545de6afdf0c8816f70d2a59e581edfb1",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "coherent eCAR process-state collector queue"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "source_timing": "102 passed",
+    "source_and_native_siblings": "532 passed, 22 deselected, 52.82 seconds",
+    "ruff_check": "PASS",
+    "ruff_format": "PASS",
+    "behavior_surface": "PASS",
+    "routine_suite": "Not completed; focused gates only, no commit requested."
+  },
+  "evaluator_correction": {
+    "generation_changed": false,
+    "bundle_regenerated": false,
+    "old_evaluation": "before-proof-policy-automated-eval.json",
+    "reason": "Independent receipt checker still required historical dependent timing policy for process-state transitions. Producer correctly records shared process-create queue. Accept only both known historical/current policy choices for those five phases; all phase/identity/anchor/bounds checks remain.",
+    "source_sha256": "0bd902e7b7befe97c1ce7488bff7e4a31eb5092880f263dd20a81e899c7e20f4",
+    "tests": "64 unit producer/proof/policy tests; broader related set 87 passed including 28 integrations (overlap not summed)"
+  }
+}

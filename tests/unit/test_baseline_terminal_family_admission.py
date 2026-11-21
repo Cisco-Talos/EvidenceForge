@@ -119,6 +119,40 @@ def test_system_dhcp_authored_lease_skips_remaining_host_families(
     assert baseline._dhcp_lease_state[system.hostname]["next_renewal"] == authored_time.timestamp()
 
 
+@pytest.mark.parametrize("needs_tgt", [False, True])
+def test_dc_authentication_plans_as_transport_only_when_cache_requires_it(
+    needs_tgt: bool,
+) -> None:
+    baseline, activity, _state, _linux = _minimal_linux_system_traffic(
+        _WINDOW_START + timedelta(hours=2)
+    )
+    client = System(hostname="WKS-01", ip="10.0.0.25", os="Windows 11", type="workstation")
+    dc = System(
+        hostname="DC-01", ip="10.0.0.10", os="Windows Server 2022", type="domain_controller"
+    )
+    baseline.scenario.environment.systems = [client, dc]
+    baseline._system_pids = {client.hostname: {"lsass": 500}}
+    baseline._activity_multiplier = lambda *_args: 1.0
+    baseline._baseline_network_close_bound_seconds = lambda **kwargs: kwargs[
+        "requested_duration_max"
+    ]
+    activity._should_emit_visible_kerberos_tgt.return_value = needs_tgt
+
+    baseline._generate_system_dc_authentication(
+        current_hour=_WINDOW_START,
+        dc_hostnames=[dc.hostname],
+        dc_ips=[dc.ip],
+        rng=random.Random(22),
+    )
+
+    modes = [
+        call.kwargs["kerberos_audit_mode"] for call in activity.generate_connection.call_args_list
+    ]
+    assert "tgs" in modes
+    assert ("tgt" in modes) is needs_tgt
+    assert activity._should_emit_visible_kerberos_tgt.called
+
+
 @pytest.mark.parametrize(
     "layout", ("two", "reversed", "windows-last", "single", "windows-only", "empty")
 )
@@ -457,6 +491,7 @@ def test_optional_baseline_smb_omits_first_exact_plan_that_closes_after_window()
         orig_bytes=10_000,
         resp_bytes=2_000,
         emit_dns=True,
+        selector=None,
     )
     baseline._plan_baseline_smb_activity = Mock(return_value=(intent,))
     exact_plan = SimpleNamespace(
@@ -506,6 +541,7 @@ def test_baseline_smb_drops_process_owner_from_disconnected_rdp_session() -> Non
         orig_bytes=2_000,
         resp_bytes=8_000,
         emit_dns=True,
+        selector=None,
     )
     baseline._plan_baseline_smb_activity = Mock(return_value=(intent,))
 

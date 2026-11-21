@@ -1,0 +1,213 @@
+{
+  "console_login_rows": 10,
+  "hosts": {
+    "APP-INT-01": 2,
+    "DB-PROD-01": 2,
+    "FILE-LNX-01": 1,
+    "MAIL-CLIN-01": 1,
+    "MAIL-EDGE-01": 3,
+    "PROXY-01": 1
+  },
+  "rows": [
+    {
+      "host": "APP-INT-01",
+      "time_ms": 1793624540742,
+      "action": "CREATE",
+      "pid": 3374484,
+      "id": "6d1d20cd-86e6-4bef-bf37-a4844ebc26f4",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- lina.nguyen",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "36047",
+        "source_process_uuid": "6189a838-5ba3-4d32-879a-ecf53d99a742",
+        "source_pid": "36047",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    },
+    {
+      "host": "APP-INT-01",
+      "time_ms": 1793624955034,
+      "action": "CREATE",
+      "pid": 3376990,
+      "id": "ae862d32-f5aa-4d41-9ca5-9e36ca0b9ea4",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- aisha.johnson",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "36047",
+        "source_process_uuid": "6189a838-5ba3-4d32-879a-ecf53d99a742",
+        "source_pid": "36047",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    },
+    {
+      "host": "DB-PROD-01",
+      "time_ms": 1793624478028,
+      "action": "CREATE",
+      "pid": 1366445,
+      "id": "a7498641-7000-4fd5-a55b-d5f471f366f3",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- maya.ross",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "29350",
+        "source_process_uuid": "03c8eda6-52ea-486a-8522-7b1cd9328639",
+        "source_pid": "29350",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    },
+    {
+      "host": "DB-PROD-01",
+      "time_ms": 1793627812880,
+      "action": "CREATE",
+      "pid": 1373719,
+      "id": "6774254f-3bbb-45ab-88a7-b2440fc7bda9",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- marcus.chen",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "29350",
+        "source_process_uuid": "03c8eda6-52ea-486a-8522-7b1cd9328639",
+        "source_pid": "29350",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    },
+    {
+      "host": "FILE-LNX-01",
+      "time_ms": 1793626466441,
+      "action": "CREATE",
+      "pid": 2782176,
+      "id": "99cc9781-e2d0-4ade-a941-c716c5d55e48",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- priya.patel",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "13744",
+        "source_process_uuid": "7f27aa0f-812c-4126-aa11-dfc0de88bfce",
+        "source_pid": "13744",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    },
+    {
+      "host": "MAIL-CLIN-01",
+      "time_ms": 1793627987235,
+      "action": "CREATE",
+      "pid": 701511,
+      "id": "559258fd-9b09-438c-a83e-b045127b9b18",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- marcus.chen",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "15500",
+        "source_process_uuid": "9eb2103c-4ec5-4a25-ae8c-2ee26f7f97e7",
+        "source_pid": "15500",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time_ms": 1793625602196,
+      "action": "CREATE",
+      "pid": 2287036,
+      "id": "31ec5db6-c9fc-4a4c-b57a-fc8c0ba0201a",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- aisha.johnson",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "19802",
+        "source_process_uuid": "592b5e2b-cb5e-4141-9cb9-e791d7ade0d9",
+        "source_pid": "19802",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time_ms": 1793627789545,
+      "action": "CREATE",
+      "pid": 2292236,
+      "id": "18709824-565b-4060-9dfa-58215c3d085c",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- marcus.chen",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "19804",
+        "source_process_uuid": "64616284-8dfc-403a-97f2-af96d3a7fb19",
+        "source_pid": "19804",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "time_ms": 1793636544227,
+      "action": "CREATE",
+      "pid": 2315644,
+      "id": "f189cb48-c408-4e78-86d3-c091c5132b1d",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- lina.nguyen",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "19802",
+        "source_process_uuid": "592b5e2b-cb5e-4141-9cb9-e791d7ade0d9",
+        "source_pid": "19802",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    },
+    {
+      "host": "PROXY-01",
+      "time_ms": 1793628385385,
+      "action": "CREATE",
+      "pid": 2630409,
+      "id": "bec6adbc-5c6f-4494-9416-91f0b0698f4a",
+      "parent_pid": null,
+      "parent_id": null,
+      "properties": {
+        "command_line": "login -- marcus.chen",
+        "image_path": "/bin/login",
+        "parent_image_path": "/sbin/agetty",
+        "logon_id": "0x3e7",
+        "src_pid": "18640",
+        "source_process_uuid": "ae9de61c-951f-43c3-b1f1-c4c3a1c9b817",
+        "source_pid": "18640",
+        "source_image_path": "/sbin/agetty",
+        "source_principal": "root"
+      }
+    }
+  ]
+}

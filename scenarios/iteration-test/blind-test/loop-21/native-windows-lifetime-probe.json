@@ -1,0 +1,1229 @@
+{
+  "scope": "Source-specific matched visible lifetime census. Missing window-boundary pairs are excluded; no universal duration validity cutoff or invented target distribution. Sysmon uses UtcTime, Security TimeCreated, eCAR timestamps.",
+  "sources": {
+    "sysmon": {
+      "matched_pairs": 754,
+      "minimum_s": 3.029,
+      "median_s": 72.3635,
+      "under_one_second": 0,
+      "under_three_seconds": 0,
+      "negative": 0,
+      "between_3_and_3_35_seconds": 33,
+      "per_host": {
+        "DC-01.meridianhcs.local": {
+          "pairs": 158,
+          "minimum_s": 3.031,
+          "under_one_second": 0
+        },
+        "DC-02.meridianhcs.local": {
+          "pairs": 127,
+          "minimum_s": 3.106,
+          "under_one_second": 0
+        },
+        "FILE-SRV-01.meridianhcs.local": {
+          "pairs": 100,
+          "minimum_s": 3.081,
+          "under_one_second": 0
+        },
+        "MAIL-FIN-01.meridianhcs.local": {
+          "pairs": 69,
+          "minimum_s": 3.029,
+          "under_one_second": 0
+        },
+        "WS-AJOHNSON-01.meridianhcs.local": {
+          "pairs": 80,
+          "minimum_s": 3.035,
+          "under_one_second": 0
+        },
+        "WS-DRAMIREZ-01.meridianhcs.local": {
+          "pairs": 32,
+          "minimum_s": 3.138,
+          "under_one_second": 0
+        },
+        "WS-EBROOKS-01.meridianhcs.local": {
+          "pairs": 32,
+          "minimum_s": 3.241,
+          "under_one_second": 0
+        },
+        "WS-MCHEN-01.meridianhcs.local": {
+          "pairs": 69,
+          "minimum_s": 3.053,
+          "under_one_second": 0
+        },
+        "WS-PPATEL-01.meridianhcs.local": {
+          "pairs": 44,
+          "minimum_s": 3.086,
+          "under_one_second": 0
+        },
+        "WS-SMARTINEZ-01.meridianhcs.local": {
+          "pairs": 43,
+          "minimum_s": 3.222,
+          "under_one_second": 0
+        }
+      },
+      "per_image": {
+        "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnui.exe": {
+          "pairs": 3,
+          "minimum_s": 2153.77,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Citrix\\ICA Client\\SelfServicePlugin\\SelfService.exe": {
+          "pairs": 1,
+          "minimum_s": 403.169,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe": {
+          "pairs": 2,
+          "minimum_s": 66.514,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARMservice.exe": {
+          "pairs": 7,
+          "minimum_s": 5.782,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe": {
+          "pairs": 7,
+          "minimum_s": 13.842,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe": {
+          "pairs": 4,
+          "minimum_s": 19.65,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdater.exe": {
+          "pairs": 4,
+          "minimum_s": 871.778,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe": {
+          "pairs": 4,
+          "minimum_s": 8316.739,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Cisco Spark\\Webex.exe": {
+          "pairs": 1,
+          "minimum_s": 5664.437,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Dell\\CommandUpdate\\dcu-cli.exe": {
+          "pairs": 3,
+          "minimum_s": 268.148,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe": {
+          "pairs": 4,
+          "minimum_s": 7848.174,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Google\\Drive File Stream\\97.0.1.0\\GoogleDriveFS.exe": {
+          "pairs": 2,
+          "minimum_s": 2561.826,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe": {
+          "pairs": 3,
+          "minimum_s": 256.671,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft Monitoring Agent\\Agent\\MonitoringHost.exe": {
+          "pairs": 1,
+          "minimum_s": 974.085,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE": {
+          "pairs": 5,
+          "minimum_s": 5079.416,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE": {
+          "pairs": 1,
+          "minimum_s": 3505.498,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft OneDrive\\OneDriveStandaloneUpdater.exe": {
+          "pairs": 1,
+          "minimum_s": 31.372,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe": {
+          "pairs": 1,
+          "minimum_s": 9.804,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Mozilla Firefox\\firefox.exe": {
+          "pairs": 3,
+          "minimum_s": 5684.369,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPA.exe": {
+          "pairs": 4,
+          "minimum_s": 2286.937,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Veeam\\Backup and Replication\\Backup\\Veeam.Backup.Service.exe": {
+          "pairs": 2,
+          "minimum_s": 6247.493,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Zoom\\bin\\ZoomUpdate.exe": {
+          "pairs": 3,
+          "minimum_s": 4.089,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Zscaler\\ZSATray\\ZSATray.exe": {
+          "pairs": 2,
+          "minimum_s": 3483.347,
+          "under_one_second": 0
+        },
+        "C:\\Users\\aisha.johnson\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe": {
+          "pairs": 2,
+          "minimum_s": 377.827,
+          "under_one_second": 0
+        },
+        "C:\\Users\\aisha.johnson\\AppData\\Local\\Temp\\ChromeSetup.exe": {
+          "pairs": 1,
+          "minimum_s": 260.282,
+          "under_one_second": 0
+        },
+        "C:\\Users\\aisha.johnson\\AppData\\Local\\slack\\Slack.exe": {
+          "pairs": 1,
+          "minimum_s": 380.881,
+          "under_one_second": 0
+        },
+        "C:\\Users\\diego.ramirez\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe": {
+          "pairs": 1,
+          "minimum_s": 6024.659,
+          "under_one_second": 0
+        },
+        "C:\\Users\\marcus.chen\\AppData\\Local\\Postman\\Postman.exe": {
+          "pairs": 1,
+          "minimum_s": 5329.307,
+          "under_one_second": 0
+        },
+        "C:\\Users\\marcus.chen\\Downloads\\connector-check.exe": {
+          "pairs": 1,
+          "minimum_s": 59.177,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\PSEXESVC.exe": {
+          "pairs": 1,
+          "minimum_s": 15.803,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\CompatTelRunner.exe": {
+          "pairs": 1,
+          "minimum_s": 12.209,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\DirectoryCacheSvc.exe": {
+          "pairs": 1,
+          "minimum_s": 3.339,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\MpCmdRun.exe": {
+          "pairs": 12,
+          "minimum_s": 4.438,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\OpenSSH\\ssh.exe": {
+          "pairs": 18,
+          "minimum_s": 613.088,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\SearchFilterHost.exe": {
+          "pairs": 6,
+          "minimum_s": 2386.956,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\SearchProtocolHost.exe": {
+          "pairs": 11,
+          "minimum_s": 1371.843,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe": {
+          "pairs": 25,
+          "minimum_s": 4.512,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\cleanmgr.exe": {
+          "pairs": 2,
+          "minimum_s": 141.907,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\cmd.exe": {
+          "pairs": 16,
+          "minimum_s": 3.138,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\conhost.exe": {
+          "pairs": 115,
+          "minimum_s": 3.031,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\curl.exe": {
+          "pairs": 3,
+          "minimum_s": 12.099,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\dllhost.exe": {
+          "pairs": 119,
+          "minimum_s": 3.108,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\gpresult.exe": {
+          "pairs": 2,
+          "minimum_s": 3.136,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\gpupdate.exe": {
+          "pairs": 7,
+          "minimum_s": 3.053,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\ipconfig.exe": {
+          "pairs": 1,
+          "minimum_s": 3.21,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\mmc.exe": {
+          "pairs": 5,
+          "minimum_s": 6.801,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\ms-index-service.exe": {
+          "pairs": 1,
+          "minimum_s": 7.587,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\msdtc.exe": {
+          "pairs": 1,
+          "minimum_s": 1293.706,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\mstsc.exe": {
+          "pairs": 12,
+          "minimum_s": 158.383,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\net.exe": {
+          "pairs": 6,
+          "minimum_s": 3.292,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\runas.exe": {
+          "pairs": 2,
+          "minimum_s": 3.541,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\sc.exe": {
+          "pairs": 3,
+          "minimum_s": 21.706,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\schtasks.exe": {
+          "pairs": 1,
+          "minimum_s": 5.891,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\smss.exe": {
+          "pairs": 13,
+          "minimum_s": 752.195,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\spoolsv.exe": {
+          "pairs": 3,
+          "minimum_s": 2222.537,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\taskhostw.exe": {
+          "pairs": 144,
+          "minimum_s": 3.106,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\userinit.exe": {
+          "pairs": 19,
+          "minimum_s": 3.029,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\usoclient.exe": {
+          "pairs": 3,
+          "minimum_s": 10.27,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wbem\\WMIC.exe": {
+          "pairs": 1,
+          "minimum_s": 32.93,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe": {
+          "pairs": 89,
+          "minimum_s": 30.041,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wevtutil.exe": {
+          "pairs": 1,
+          "minimum_s": 7.398,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\whoami.exe": {
+          "pairs": 2,
+          "minimum_s": 5.89,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\winlogon.exe": {
+          "pairs": 13,
+          "minimum_s": 349.005,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wsqmcons.exe": {
+          "pairs": 2,
+          "minimum_s": 9.458,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\Temp\\KB5034441_update.exe": {
+          "pairs": 1,
+          "minimum_s": 37.509,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.19041.3636_none_7c91d6e7c9f7f1f5\\TiWorker.exe": {
+          "pairs": 1,
+          "minimum_s": 1405.603,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.20348.2322_none_7c91d6e7c9f7f1f5\\TiWorker.exe": {
+          "pairs": 2,
+          "minimum_s": 736.491,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.22621.3155_none_7c91d6e7c9f7f1f5\\TiWorker.exe": {
+          "pairs": 1,
+          "minimum_s": 962.183,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\explorer.exe": {
+          "pairs": 13,
+          "minimum_s": 543.762,
+          "under_one_second": 0
+        }
+      }
+    },
+    "security": {
+      "matched_pairs": 755,
+      "minimum_s": 2.722882,
+      "median_s": 72.028983,
+      "under_one_second": 0,
+      "under_three_seconds": 5,
+      "negative": 0,
+      "between_3_and_3_35_seconds": 32,
+      "per_host": {
+        "DC-01.meridianhcs.local": {
+          "pairs": 158,
+          "minimum_s": 2.954681,
+          "under_one_second": 0
+        },
+        "DC-02.meridianhcs.local": {
+          "pairs": 126,
+          "minimum_s": 3.049634,
+          "under_one_second": 0
+        },
+        "FILE-SRV-01.meridianhcs.local": {
+          "pairs": 100,
+          "minimum_s": 3.022499,
+          "under_one_second": 0
+        },
+        "MAIL-FIN-01.meridianhcs.local": {
+          "pairs": 69,
+          "minimum_s": 2.722882,
+          "under_one_second": 0
+        },
+        "WS-AJOHNSON-01.meridianhcs.local": {
+          "pairs": 80,
+          "minimum_s": 2.947851,
+          "under_one_second": 0
+        },
+        "WS-DRAMIREZ-01.meridianhcs.local": {
+          "pairs": 33,
+          "minimum_s": 3.039923,
+          "under_one_second": 0
+        },
+        "WS-EBROOKS-01.meridianhcs.local": {
+          "pairs": 32,
+          "minimum_s": 2.974712,
+          "under_one_second": 0
+        },
+        "WS-MCHEN-01.meridianhcs.local": {
+          "pairs": 69,
+          "minimum_s": 2.964089,
+          "under_one_second": 0
+        },
+        "WS-PPATEL-01.meridianhcs.local": {
+          "pairs": 44,
+          "minimum_s": 3.103325,
+          "under_one_second": 0
+        },
+        "WS-SMARTINEZ-01.meridianhcs.local": {
+          "pairs": 44,
+          "minimum_s": 3.001146,
+          "under_one_second": 0
+        }
+      },
+      "per_image": {
+        "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnui.exe": {
+          "pairs": 3,
+          "minimum_s": 2153.762824,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Citrix\\ICA Client\\SelfServicePlugin\\SelfService.exe": {
+          "pairs": 1,
+          "minimum_s": 403.152266,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe": {
+          "pairs": 2,
+          "minimum_s": 66.389641,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARMservice.exe": {
+          "pairs": 7,
+          "minimum_s": 5.727615,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe": {
+          "pairs": 7,
+          "minimum_s": 13.823214,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe": {
+          "pairs": 4,
+          "minimum_s": 19.562148,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdater.exe": {
+          "pairs": 4,
+          "minimum_s": 871.640779,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe": {
+          "pairs": 4,
+          "minimum_s": 8316.727482,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Cisco Spark\\Webex.exe": {
+          "pairs": 1,
+          "minimum_s": 5664.400611,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Dell\\CommandUpdate\\dcu-cli.exe": {
+          "pairs": 3,
+          "minimum_s": 267.792219,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe": {
+          "pairs": 4,
+          "minimum_s": 7848.189856,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Google\\Drive File Stream\\97.0.1.0\\GoogleDriveFS.exe": {
+          "pairs": 2,
+          "minimum_s": 2561.725996,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe": {
+          "pairs": 3,
+          "minimum_s": 256.639141,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft Monitoring Agent\\Agent\\MonitoringHost.exe": {
+          "pairs": 1,
+          "minimum_s": 973.990631,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE": {
+          "pairs": 5,
+          "minimum_s": 5079.29772,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE": {
+          "pairs": 1,
+          "minimum_s": 3505.491249,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft OneDrive\\OneDriveStandaloneUpdater.exe": {
+          "pairs": 1,
+          "minimum_s": 31.335706,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe": {
+          "pairs": 1,
+          "minimum_s": 9.691809,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Mozilla Firefox\\firefox.exe": {
+          "pairs": 3,
+          "minimum_s": 5684.194468,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPA.exe": {
+          "pairs": 4,
+          "minimum_s": 2286.858722,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Veeam\\Backup and Replication\\Backup\\Veeam.Backup.Service.exe": {
+          "pairs": 2,
+          "minimum_s": 6247.40005,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Zoom\\bin\\ZoomUpdate.exe": {
+          "pairs": 3,
+          "minimum_s": 4.000916,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Zscaler\\ZSATray\\ZSATray.exe": {
+          "pairs": 2,
+          "minimum_s": 3483.197121,
+          "under_one_second": 0
+        },
+        "C:\\Users\\aisha.johnson\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe": {
+          "pairs": 2,
+          "minimum_s": 377.809482,
+          "under_one_second": 0
+        },
+        "C:\\Users\\aisha.johnson\\AppData\\Local\\Temp\\ChromeSetup.exe": {
+          "pairs": 1,
+          "minimum_s": 260.03117,
+          "under_one_second": 0
+        },
+        "C:\\Users\\aisha.johnson\\AppData\\Local\\slack\\Slack.exe": {
+          "pairs": 1,
+          "minimum_s": 380.863816,
+          "under_one_second": 0
+        },
+        "C:\\Users\\diego.ramirez\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe": {
+          "pairs": 1,
+          "minimum_s": 6024.576678,
+          "under_one_second": 0
+        },
+        "C:\\Users\\marcus.chen\\AppData\\Local\\Postman\\Postman.exe": {
+          "pairs": 1,
+          "minimum_s": 5329.374713,
+          "under_one_second": 0
+        },
+        "C:\\Users\\marcus.chen\\Downloads\\connector-check.exe": {
+          "pairs": 1,
+          "minimum_s": 59.001227,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\PSEXESVC.exe": {
+          "pairs": 1,
+          "minimum_s": 15.723093,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\CompatTelRunner.exe": {
+          "pairs": 1,
+          "minimum_s": 12.000144,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\DirectoryCacheSvc.exe": {
+          "pairs": 1,
+          "minimum_s": 3.258054,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\MpCmdRun.exe": {
+          "pairs": 12,
+          "minimum_s": 4.042204,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\OpenSSH\\ssh.exe": {
+          "pairs": 18,
+          "minimum_s": 613.070898,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\SearchFilterHost.exe": {
+          "pairs": 6,
+          "minimum_s": 2386.869949,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\SearchProtocolHost.exe": {
+          "pairs": 11,
+          "minimum_s": 1371.482736,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe": {
+          "pairs": 25,
+          "minimum_s": 4.491163,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\cleanmgr.exe": {
+          "pairs": 2,
+          "minimum_s": 141.858913,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\cmd.exe": {
+          "pairs": 16,
+          "minimum_s": 3.039923,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\conhost.exe": {
+          "pairs": 115,
+          "minimum_s": 2.974712,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\curl.exe": {
+          "pairs": 3,
+          "minimum_s": 12.11594,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\dllhost.exe": {
+          "pairs": 120,
+          "minimum_s": 3.000313,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\gpresult.exe": {
+          "pairs": 2,
+          "minimum_s": 2.964089,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\gpupdate.exe": {
+          "pairs": 7,
+          "minimum_s": 3.077266,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\ipconfig.exe": {
+          "pairs": 1,
+          "minimum_s": 3.03501,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\mmc.exe": {
+          "pairs": 5,
+          "minimum_s": 6.763393,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\ms-index-service.exe": {
+          "pairs": 1,
+          "minimum_s": 7.528919,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\msdtc.exe": {
+          "pairs": 1,
+          "minimum_s": 1293.629629,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\mstsc.exe": {
+          "pairs": 12,
+          "minimum_s": 158.256268,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\net.exe": {
+          "pairs": 6,
+          "minimum_s": 3.152273,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\runas.exe": {
+          "pairs": 2,
+          "minimum_s": 3.519835,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\sc.exe": {
+          "pairs": 3,
+          "minimum_s": 21.724872,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\schtasks.exe": {
+          "pairs": 1,
+          "minimum_s": 5.851578,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\smss.exe": {
+          "pairs": 13,
+          "minimum_s": 752.114588,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\spoolsv.exe": {
+          "pairs": 3,
+          "minimum_s": 2222.500042,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\taskhostw.exe": {
+          "pairs": 145,
+          "minimum_s": 3.037251,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\userinit.exe": {
+          "pairs": 19,
+          "minimum_s": 2.722882,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\usoclient.exe": {
+          "pairs": 3,
+          "minimum_s": 10.255275,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wbem\\WMIC.exe": {
+          "pairs": 1,
+          "minimum_s": 32.868834,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe": {
+          "pairs": 88,
+          "minimum_s": 30.000143,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wevtutil.exe": {
+          "pairs": 1,
+          "minimum_s": 7.164458,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\whoami.exe": {
+          "pairs": 2,
+          "minimum_s": 5.750806,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\winlogon.exe": {
+          "pairs": 13,
+          "minimum_s": 349.002902,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wsqmcons.exe": {
+          "pairs": 2,
+          "minimum_s": 9.440987,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\Temp\\KB5034441_update.exe": {
+          "pairs": 1,
+          "minimum_s": 37.274434,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.19041.3636_none_7c91d6e7c9f7f1f5\\TiWorker.exe": {
+          "pairs": 1,
+          "minimum_s": 1405.555846,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.20348.2322_none_7c91d6e7c9f7f1f5\\TiWorker.exe": {
+          "pairs": 2,
+          "minimum_s": 736.406846,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.22621.3155_none_7c91d6e7c9f7f1f5\\TiWorker.exe": {
+          "pairs": 1,
+          "minimum_s": 961.987695,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\explorer.exe": {
+          "pairs": 13,
+          "minimum_s": 543.770848,
+          "under_one_second": 0
+        }
+      }
+    },
+    "ecar": {
+      "matched_pairs": 749,
+      "minimum_s": 2.722,
+      "median_s": 72.443,
+      "under_one_second": 0,
+      "under_three_seconds": 9,
+      "negative": 0,
+      "between_3_and_3_35_seconds": 27,
+      "per_host": {
+        "DC-01.meridianhcs.local": {
+          "pairs": 155,
+          "minimum_s": 2.955,
+          "under_one_second": 0
+        },
+        "DC-02.meridianhcs.local": {
+          "pairs": 127,
+          "minimum_s": 2.963,
+          "under_one_second": 0
+        },
+        "FILE-SRV-01.meridianhcs.local": {
+          "pairs": 99,
+          "minimum_s": 3.022,
+          "under_one_second": 0
+        },
+        "MAIL-FIN-01.meridianhcs.local": {
+          "pairs": 68,
+          "minimum_s": 2.722,
+          "under_one_second": 0
+        },
+        "WS-AJOHNSON-01.meridianhcs.local": {
+          "pairs": 80,
+          "minimum_s": 2.883,
+          "under_one_second": 0
+        },
+        "WS-DRAMIREZ-01.meridianhcs.local": {
+          "pairs": 32,
+          "minimum_s": 3.04,
+          "under_one_second": 0
+        },
+        "WS-EBROOKS-01.meridianhcs.local": {
+          "pairs": 32,
+          "minimum_s": 2.975,
+          "under_one_second": 0
+        },
+        "WS-MCHEN-01.meridianhcs.local": {
+          "pairs": 68,
+          "minimum_s": 2.964,
+          "under_one_second": 0
+        },
+        "WS-PPATEL-01.meridianhcs.local": {
+          "pairs": 44,
+          "minimum_s": 3.055,
+          "under_one_second": 0
+        },
+        "WS-SMARTINEZ-01.meridianhcs.local": {
+          "pairs": 44,
+          "minimum_s": 3.0,
+          "under_one_second": 0
+        }
+      },
+      "per_image": {
+        "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnui.exe": {
+          "pairs": 3,
+          "minimum_s": 2153.777,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Citrix\\ICA Client\\SelfServicePlugin\\SelfService.exe": {
+          "pairs": 1,
+          "minimum_s": 403.152,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe": {
+          "pairs": 2,
+          "minimum_s": 66.39,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARMservice.exe": {
+          "pairs": 7,
+          "minimum_s": 5.727,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe": {
+          "pairs": 7,
+          "minimum_s": 13.74,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe": {
+          "pairs": 4,
+          "minimum_s": 19.563,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdater.exe": {
+          "pairs": 4,
+          "minimum_s": 871.654,
+          "under_one_second": 0
+        },
+        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe": {
+          "pairs": 4,
+          "minimum_s": 8316.727,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Cisco Spark\\Webex.exe": {
+          "pairs": 1,
+          "minimum_s": 5664.402,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Dell\\CommandUpdate\\dcu-cli.exe": {
+          "pairs": 3,
+          "minimum_s": 267.791,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe": {
+          "pairs": 4,
+          "minimum_s": 7848.138,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Google\\Drive File Stream\\97.0.1.0\\GoogleDriveFS.exe": {
+          "pairs": 2,
+          "minimum_s": 2561.71,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe": {
+          "pairs": 3,
+          "minimum_s": 256.631,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft Monitoring Agent\\Agent\\MonitoringHost.exe": {
+          "pairs": 1,
+          "minimum_s": 973.968,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE": {
+          "pairs": 5,
+          "minimum_s": 5079.298,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE": {
+          "pairs": 1,
+          "minimum_s": 3505.432,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft OneDrive\\OneDriveStandaloneUpdater.exe": {
+          "pairs": 1,
+          "minimum_s": 31.426,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe": {
+          "pairs": 1,
+          "minimum_s": 9.692,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Mozilla Firefox\\firefox.exe": {
+          "pairs": 3,
+          "minimum_s": 5684.166,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPA.exe": {
+          "pairs": 4,
+          "minimum_s": 2286.858,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Veeam\\Backup and Replication\\Backup\\Veeam.Backup.Service.exe": {
+          "pairs": 2,
+          "minimum_s": 6247.398,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Zoom\\bin\\ZoomUpdate.exe": {
+          "pairs": 3,
+          "minimum_s": 4.001,
+          "under_one_second": 0
+        },
+        "C:\\Program Files\\Zscaler\\ZSATray\\ZSATray.exe": {
+          "pairs": 2,
+          "minimum_s": 3483.047,
+          "under_one_second": 0
+        },
+        "C:\\Users\\aisha.johnson\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe": {
+          "pairs": 2,
+          "minimum_s": 377.811,
+          "under_one_second": 0
+        },
+        "C:\\Users\\aisha.johnson\\AppData\\Local\\Temp\\ChromeSetup.exe": {
+          "pairs": 1,
+          "minimum_s": 260.031,
+          "under_one_second": 0
+        },
+        "C:\\Users\\aisha.johnson\\AppData\\Local\\slack\\Slack.exe": {
+          "pairs": 1,
+          "minimum_s": 380.864,
+          "under_one_second": 0
+        },
+        "C:\\Users\\diego.ramirez\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe": {
+          "pairs": 1,
+          "minimum_s": 6024.633,
+          "under_one_second": 0
+        },
+        "C:\\Users\\marcus.chen\\AppData\\Local\\Postman\\Postman.exe": {
+          "pairs": 1,
+          "minimum_s": 5329.175,
+          "under_one_second": 0
+        },
+        "C:\\Users\\marcus.chen\\Downloads\\connector-check.exe": {
+          "pairs": 1,
+          "minimum_s": 59.002,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\PSEXESVC.exe": {
+          "pairs": 1,
+          "minimum_s": 15.724,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\CompatTelRunner.exe": {
+          "pairs": 1,
+          "minimum_s": 12.0,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\DirectoryCacheSvc.exe": {
+          "pairs": 1,
+          "minimum_s": 3.259,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\MpCmdRun.exe": {
+          "pairs": 11,
+          "minimum_s": 4.0,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\OpenSSH\\ssh.exe": {
+          "pairs": 17,
+          "minimum_s": 613.071,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\SearchFilterHost.exe": {
+          "pairs": 6,
+          "minimum_s": 2386.899,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\SearchProtocolHost.exe": {
+          "pairs": 11,
+          "minimum_s": 1371.479,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe": {
+          "pairs": 25,
+          "minimum_s": 4.491,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\cleanmgr.exe": {
+          "pairs": 2,
+          "minimum_s": 141.859,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\cmd.exe": {
+          "pairs": 16,
+          "minimum_s": 3.04,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\conhost.exe": {
+          "pairs": 114,
+          "minimum_s": 2.968,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\curl.exe": {
+          "pairs": 3,
+          "minimum_s": 12.035,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\dllhost.exe": {
+          "pairs": 118,
+          "minimum_s": 3.0,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\gpresult.exe": {
+          "pairs": 2,
+          "minimum_s": 2.964,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\gpupdate.exe": {
+          "pairs": 7,
+          "minimum_s": 2.99,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\ipconfig.exe": {
+          "pairs": 1,
+          "minimum_s": 3.035,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\mmc.exe": {
+          "pairs": 5,
+          "minimum_s": 6.763,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\ms-index-service.exe": {
+          "pairs": 1,
+          "minimum_s": 7.529,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\msdtc.exe": {
+          "pairs": 1,
+          "minimum_s": 1293.629,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\mstsc.exe": {
+          "pairs": 12,
+          "minimum_s": 158.231,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\net.exe": {
+          "pairs": 6,
+          "minimum_s": 3.152,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\runas.exe": {
+          "pairs": 2,
+          "minimum_s": 3.522,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\sc.exe": {
+          "pairs": 3,
+          "minimum_s": 21.732,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\schtasks.exe": {
+          "pairs": 1,
+          "minimum_s": 5.863,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\smss.exe": {
+          "pairs": 13,
+          "minimum_s": 752.132,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\spoolsv.exe": {
+          "pairs": 3,
+          "minimum_s": 2222.549,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\taskhostw.exe": {
+          "pairs": 144,
+          "minimum_s": 2.963,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\userinit.exe": {
+          "pairs": 19,
+          "minimum_s": 2.722,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\usoclient.exe": {
+          "pairs": 3,
+          "minimum_s": 10.267,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wbem\\WMIC.exe": {
+          "pairs": 1,
+          "minimum_s": 32.867,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe": {
+          "pairs": 88,
+          "minimum_s": 30.0,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wevtutil.exe": {
+          "pairs": 1,
+          "minimum_s": 7.165,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\whoami.exe": {
+          "pairs": 2,
+          "minimum_s": 5.749,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\winlogon.exe": {
+          "pairs": 13,
+          "minimum_s": 348.96,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\System32\\wsqmcons.exe": {
+          "pairs": 2,
+          "minimum_s": 9.457,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\Temp\\KB5034441_update.exe": {
+          "pairs": 1,
+          "minimum_s": 37.275,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.19041.3636_none_7c91d6e7c9f7f1f5\\TiWorker.exe": {
+          "pairs": 1,
+          "minimum_s": 1405.588,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.20348.2322_none_7c91d6e7c9f7f1f5\\TiWorker.exe": {
+          "pairs": 2,
+          "minimum_s": 736.407,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.22621.3155_none_7c91d6e7c9f7f1f5\\TiWorker.exe": {
+          "pairs": 1,
+          "minimum_s": 961.987,
+          "under_one_second": 0
+        },
+        "C:\\Windows\\explorer.exe": {
+          "pairs": 13,
+          "minimum_s": 543.7,
+          "under_one_second": 0
+        }
+      }
+    }
+  }
+}

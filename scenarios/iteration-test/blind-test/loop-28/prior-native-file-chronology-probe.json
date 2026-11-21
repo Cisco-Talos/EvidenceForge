@@ -1,0 +1,14 @@
+{
+  "scope": "Descriptive unique host/process-start/image observations. Later file birth is qualified: metadata restoration can occur in real data; installation-owner chronology is the investigation.",
+  "unique_observations": 214,
+  "later_births": [
+    {
+      "host": "MAC-MROSS-02.meridianhcs.local",
+      "pid": 1,
+      "path": "/sbin/launchd",
+      "process_start": "2026-10-06T13:00:00.000000Z",
+      "file_birth": "2026-10-29T09:40:49.455382268Z",
+      "seconds_after_start": 1975249.455382
+    }
+  ]
+}

@@ -64,6 +64,7 @@ from evidenceforge.generation.actions.windows_remote_authentication import (
     WindowsRemoteAuthenticationRequest,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
+from evidenceforge.generation.activity.network_params import sample_rdp_payload_bytes
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
     sysmon_envelope_timing,
@@ -82,6 +83,12 @@ from evidenceforge.generation.network_runtime import NetworkTransactionPlan
 from evidenceforge.generation.rdp_sessions import (
     RdpReconnectStateManager,
     RdpSessionAdmissionReceipt,
+)
+from evidenceforge.generation.rdp_target_timing import (
+    RDP_SESSION_MANAGER_READINESS_SECONDS,
+    plan_rdp_target_bootstrap,
+    rdp_target_phase_windows,
+    rdp_target_work_max_seconds,
 )
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import (
@@ -179,9 +186,15 @@ def rdp_action_deadline_transport_headroom_seconds(
         default_position="after",
         default_class="source_latency",
     )
+    phases = rdp_target_phase_windows()
+    negotiation = timedelta(seconds=max(0.000001, phases.negotiation.max_ms / 1000))
+    readiness = max(
+        timedelta(seconds=RDP_SESSION_MANAGER_READINESS_SECONDS),
+        clock_separation + timedelta(milliseconds=flow_window.max_ms + 25) + negotiation,
+    )
     cross_host_bootstrap_seconds = (
-        clock_separation
-        + timedelta(milliseconds=flow_window.max_ms + 25)
+        readiness
+        + timedelta(seconds=rdp_target_work_max_seconds(phases))
         + timedelta(milliseconds=350, microseconds=2)
     ).total_seconds()
     minimum_transport_seconds = max(60.0, cross_host_bootstrap_seconds)
@@ -945,6 +958,7 @@ class RdpSessionActionBundle:
             transport_role="rdp",
             source="rdp_session",
         )
+        orig_bytes, resp_bytes = sample_rdp_payload_bytes(rng)
         network_request = NetworkConnectionRequest(
             src_ip=source_ip,
             dst_ip=self._request.target_system.ip,
@@ -953,8 +967,8 @@ class RdpSessionActionBundle:
             proto="tcp",
             service="rdp",
             duration=duration,
-            orig_bytes=rng.randint(50000, 500000),
-            resp_bytes=rng.randint(100000, 2000000),
+            orig_bytes=orig_bytes,
+            resp_bytes=resp_bytes,
             src_port=src_port,
             emit_dns=True,
             source_system=source_system,
@@ -1385,6 +1399,7 @@ class RdpSessionActionBundle:
         )
         rng = _get_rng()
         try:
+            orig_bytes, resp_bytes = sample_rdp_payload_bytes(rng)
             uid = self._executor.generate_connection(
                 src_ip=source_ip,
                 dst_ip=self._request.target_system.ip,
@@ -1393,8 +1408,8 @@ class RdpSessionActionBundle:
                 proto="tcp",
                 service="rdp",
                 duration=duration,
-                orig_bytes=rng.randint(50_000, 500_000),
-                resp_bytes=rng.randint(100_000, 2_000_000),
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
                 src_port=source_port,
                 emit_dns=False,
                 source_system=source_system,
@@ -1448,7 +1463,6 @@ class RdpSessionActionBundle:
             raise StateError("Exact RDP transport must close before its logical deadline")
         session_start = ensure_utc(logon_time)
         action_id = self._request.stable_id
-        batch_builder = state.begin_materialization_batch()
         smss = next(
             (
                 process
@@ -1460,24 +1474,23 @@ class RdpSessionActionBundle:
             None,
         )
         session_smss = None
-        if smss is not None:
-            smss_lead_ms = 1_500 + (_stable_seed(f"rdp-session-smss-lead:{action_id}") % 6_501)
-            session_smss_time = max(
-                session_start - timedelta(milliseconds=smss_lead_ms),
-                ensure_utc(self._request.time) + timedelta(seconds=5),
-            )
-            winlogon_time = max(
-                session_start,
-                session_smss_time + timedelta(milliseconds=500),
-            )
-            auth_time = max(
-                session_start + timedelta(milliseconds=1_250),
-                winlogon_time + timedelta(milliseconds=1_250),
-            )
-        else:
-            session_smss_time = session_start
-            winlogon_time = session_start
-            auth_time = session_start + timedelta(milliseconds=1_250)
+        phases = plan_rdp_target_bootstrap(
+            timing=self._timing_planner(),
+            transport_open=self._request.time,
+            logon_time=session_start,
+            transport_close=transport_close,
+            session_deadline=logical_terminal_deadline,
+            stable_id=action_id,
+            hostname=self._request.target_system.hostname,
+            has_session_manager=smss is not None,
+        )
+        session_smss_time = phases.session_manager or session_start
+        winlogon_time = phases.winlogon
+        auth_time = phases.authentication
+        user_manager_time = phases.user_manager
+        explorer_time = phases.desktop
+        userinit_terminate_at = phases.user_manager_exit
+        batch_builder = state.begin_materialization_batch()
         session_plan = batch_builder.plan_session(
             username=user.username,
             system=self._request.target_system.hostname,
@@ -1528,18 +1541,6 @@ class RdpSessionActionBundle:
             auth_logon_type=10,
             parent_plan=session_smss,
         )
-        user_manager_delay, desktop_shell_delay = (
-            self._timing_planner().windows_session_bootstrap_delays(
-                stable_id=action_id,
-                host=self._request.target_system.hostname,
-                lifecycle_id=action_id,
-                remote=True,
-            )
-        )
-        user_manager_time = auth_time + timedelta(seconds=user_manager_delay)
-        explorer_time = user_manager_time + timedelta(seconds=desktop_shell_delay)
-        if explorer_time >= transport_close:
-            raise StateError("Exact RDP transport closes before desktop bootstrap completes")
         userinit = batch_builder.plan_process(
             system=self._request.target_system.hostname,
             parent_pid=winlogon.identity.pid,
@@ -1576,20 +1577,6 @@ class RdpSessionActionBundle:
             parent_plan=userinit,
             session_plan=session_plan,
         )
-        userinit_terminate_at = explorer_time + timedelta(
-            seconds=self._timing_planner().triangular_seconds(
-                relationship_key="rdp.userinit_after_desktop_ready",
-                stable_id=action_id,
-                minimum=0.65,
-                mode=2.1,
-                maximum=4.900001,
-                host=self._request.target_system.hostname,
-                lifecycle_id=action_id,
-                sample_key="userinit_terminate",
-            )
-        )
-        if userinit_terminate_at >= transport_close:
-            raise StateError("Exact RDP transport closes before userinit can terminate")
         batch_builder.bind_session_processes(
             session_plan,
             user_manager_plan=userinit,
@@ -1764,6 +1751,7 @@ class RdpSessionActionBundle:
         )
         rng = _get_rng()
         try:
+            orig_bytes, resp_bytes = sample_rdp_payload_bytes(rng)
             uid = self._executor.generate_connection(
                 src_ip=source_ip,
                 dst_ip=self._request.target_system.ip,
@@ -1772,8 +1760,8 @@ class RdpSessionActionBundle:
                 proto="tcp",
                 service="rdp",
                 duration=duration,
-                orig_bytes=rng.randint(50_000, 500_000),
-                resp_bytes=rng.randint(100_000, 2_000_000),
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
                 src_port=source_port,
                 emit_dns=False,
                 source_system=source_system,
@@ -2527,38 +2515,28 @@ class RdpSessionActionBundle:
                     sample_key="transport_open",
                 )
             )
+        negotiation_window = rdp_target_phase_windows().negotiation
         target_logon_gap = timing.triangular_seconds(
             relationship_key="rdp.target_logon_after_transport",
             stable_id=timing_id,
-            minimum=0.899999,
-            mode=1.12,
-            maximum=1.600001,
+            minimum=negotiation_window.min_ms / 1000,
+            mode=(
+                negotiation_window.min_ms
+                + 0.35 * (negotiation_window.max_ms - negotiation_window.min_ms)
+            )
+            / 1000,
+            maximum=negotiation_window.max_ms / 1000,
             host=self._request.target_system.hostname,
             lifecycle_id=self._request.stable_id,
             sample_key="target_logon",
         )
-        graph = TemporalConstraintGraph()
-        graph.add_node(
-            "transport_observed",
-            observed_connection_time,
-            not_before=self._request.time,
-        )
-        graph.add_node(
-            "target_logon",
-            observed_connection_time + timedelta(seconds=target_logon_gap),
-        )
-        graph.constrain_after(
-            "target_logon",
-            "transport_observed",
-            min_gap=timedelta(milliseconds=900),
-        )
-        resolved = graph.resolved_time("target_logon")
         source_timing_planner = getattr(
             getattr(self._executor, "dispatcher", None),
             "source_timing_planner",
             None,
         )
-        modeled_source = source_ip in getattr(self._executor, "_ip_to_system", {})
+        source_system = getattr(self._executor, "_ip_to_system", {}).get(source_ip)
+        modeled_source = source_system is not None
         source_clock_headroom = timedelta(0)
         target_clock_headroom = timedelta(0)
         if modeled_source and source_timing_planner is not None:
@@ -2569,13 +2547,14 @@ class RdpSessionActionBundle:
             ):
                 raise StateError("RDP source ordering requires endpoint-clock headroom support")
             source_clock_headroom = source_timing_planner.endpoint_clock_positive_headroom(
-                ensure_utc(transport_start_time or self._request.time),
+                ensure_utc(observed_connection_time),
                 "windows",
             )
             target_clock_headroom = source_timing_planner.endpoint_clock_negative_headroom(
-                resolved + source_clock_headroom,
+                ensure_utc(observed_connection_time),
                 "windows",
             )
+        source_ready_time = ensure_utc(observed_connection_time)
         if (
             modeled_source
             or self._has_exact_deferred_projection_owners()
@@ -2590,17 +2569,39 @@ class RdpSessionActionBundle:
                 default_position="after",
                 default_class="source_latency",
             )
-            resolved = max(
-                resolved,
-                ensure_utc(transport_start_time or self._request.time)
-                + source_clock_headroom
+            source_ready_time += (
+                source_clock_headroom
                 + target_clock_headroom
-                + timedelta(milliseconds=flow_window.max_ms + 25, microseconds=1),
+                + timedelta(
+                    milliseconds=flow_window.max_ms + 25,
+                    microseconds=1,
+                )
             )
+        prior_source_close = None
         if self._request.logon_id:
             prior_source_close = self._executor._rdp_reconnect_source_frontier(
                 self._request.logon_id
             )
-            if prior_source_close is not None and resolved <= prior_source_close:
-                resolved = prior_source_close + timedelta(milliseconds=100)
-        return resolved
+        negotiation_ready_time = source_ready_time
+        if prior_source_close is not None:
+            negotiation_ready_time = max(
+                negotiation_ready_time, ensure_utc(prior_source_close) + timedelta(milliseconds=100)
+            )
+        graph = TemporalConstraintGraph(timing_runtime=timing.runtime)
+        graph.add_node(
+            "transport_observed", observed_connection_time, not_before=self._request.time
+        )
+        graph.add_node("negotiation_ready", negotiation_ready_time, not_before=source_ready_time)
+        graph.constrain_after("negotiation_ready", "transport_observed", min_gap=timedelta(0))
+        if prior_source_close is not None:
+            graph.add_node("prior_source_close", ensure_utc(prior_source_close))
+            graph.constrain_after(
+                "negotiation_ready", "prior_source_close", min_gap=timedelta(milliseconds=100)
+            )
+        graph.add_node("target_logon", negotiation_ready_time + timedelta(seconds=target_logon_gap))
+        graph.constrain_after(
+            "target_logon",
+            "negotiation_ready",
+            min_gap=timedelta(microseconds=max(1, negotiation_window.min_ms * 1000)),
+        )
+        return graph.resolved_time("target_logon")

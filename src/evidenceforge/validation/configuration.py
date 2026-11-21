@@ -355,6 +355,8 @@ def _validate_storage_catalog(result: ValidationResult, data: dict[str, Any]) ->
     """Validate project storage-catalog overlays with the public vocabulary schema."""
 
     from evidenceforge.composition.models import StorageCatalogData
+    from evidenceforge.generation.activity.storage_file_sizes import StorageFileSizePolicy
+    from evidenceforge.generation.activity.storage_policy_repository import PolicyRepositoryLayout
 
     file_name = "storage_catalog.yaml"
     counts = data.get("population_counts")
@@ -397,6 +399,18 @@ def _validate_storage_catalog(result: ValidationResult, data: dict[str, Any]) ->
                     "population_counts.auto must map non-empty names to positive integers",
                 )
             )
+
+    if "policy_repository" in data:
+        try:
+            PolicyRepositoryLayout.model_validate(data["policy_repository"])
+        except ValidationError as exc:
+            result.issues.append(Issue("ERROR", file_name, f"invalid policy_repository: {exc}"))
+
+    if "file_size_policy" in data:
+        try:
+            StorageFileSizePolicy.model_validate(data["file_size_policy"])
+        except ValidationError as exc:
+            result.issues.append(Issue("ERROR", file_name, f"invalid file_size_policy: {exc}"))
 
     profiles = data.get("profiles")
     if not isinstance(profiles, dict) or not profiles:
@@ -1462,6 +1476,22 @@ class _DnsValidationState:
     site_referenced_hosts: set[str]
 
 
+def _validate_unknown_source_user_agents(result: ValidationResult, data: dict[str, Any]) -> None:
+    """Validate the optional unmodeled-client presentation policy."""
+    if "unknown_source" not in data:
+        return
+    from evidenceforge.config.schemas import UnknownSourceUserAgentProfile
+
+    try:
+        UnknownSourceUserAgentProfile.model_validate(data["unknown_source"])
+    except ValidationError:
+        result.issues.append(
+            Issue(
+                "ERROR", "proxy_user_agents.yaml", "unknown_source must contain valid user_agents"
+            )
+        )
+
+
 def _validate_dns_and_ids(
     *,
     dns_data: dict[str, Any],
@@ -1865,6 +1895,7 @@ def _validate_dns_and_ids(
                             f'Domain "{domain}" class "{domain_class}" uses browser-like path "{path}"',
                         )
                     )
+    _validate_unknown_source_user_agents(result, proxy_ua_data)
     browser_families = proxy_ua_data.get("browser_process_families", {})
     from evidenceforge.config.schemas import BrowserProfileRoots
 
@@ -3832,6 +3863,7 @@ def _collect_system_process_schema_checks(
 ) -> None:
     """Check platform policy now and append entry schemas for the later ordered validation pass."""
     from evidenceforge.config.schemas import (
+        LinuxConsolePolicy,
         LoadedModuleEntry,
         ScheduledTaskEntry,
         SystemBinaryEntry,
@@ -3840,6 +3872,14 @@ def _collect_system_process_schema_checks(
 
     # system_processes.yaml: scheduled_tasks, system_services, system_binaries
     if sys_proc_data:
+        if sys_proc_data.get("linux_console") is not None:
+            schema_checks.append(
+                (
+                    [sys_proc_data["linux_console"]],
+                    LinuxConsolePolicy,
+                    "system_processes.yaml (linux_console)",
+                )
+            )
         schema_checks.append(
             (
                 sys_proc_data.get("scheduled_tasks", []),
@@ -4139,7 +4179,9 @@ def _collect_network_parameter_schema_checks(
         ProtocolConfirmationConfig,
         PublicDnsResolverEntry,
         PublicNtpServerEntry,
+        RdpPayloadBounds,
         SslHistoryEntry,
+        TlsDetectionPhaseConfig,
         TransportHistoryEntry,
         validate_entry,
     )
@@ -4186,6 +4228,26 @@ def _collect_network_parameter_schema_checks(
         )
         if err:
             result.issues.append(Issue("ERROR", "network_params.yaml (http_request_phase)", err))
+        if "rdp_payload_bounds" in net_params:
+            err = validate_entry(
+                net_params["rdp_payload_bounds"],
+                RdpPayloadBounds,
+                "network_params.yaml (rdp_payload_bounds)",
+            )
+            if err:
+                result.issues.append(
+                    Issue("ERROR", "network_params.yaml (rdp_payload_bounds)", err)
+                )
+        if "tls_detection_phase" in net_params:
+            err = validate_entry(
+                net_params["tls_detection_phase"],
+                TlsDetectionPhaseConfig,
+                "network_params.yaml (tls_detection_phase)",
+            )
+            if err:
+                result.issues.append(
+                    Issue("ERROR", "network_params.yaml (tls_detection_phase)", err)
+                )
         schema_checks.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
         schema_checks.append(
             (

@@ -142,7 +142,7 @@ def test_unmodeled_sources_get_stable_population_diverse_user_agents() -> None:
     ]
 
     assert first == second
-    assert set(first) == set(load_proxy_user_agents()["workstation"]["windows"])
+    assert set(first) == set(load_proxy_user_agents()["unknown_source"]["user_agents"])
     assert max(first.count(user_agent) for user_agent in set(first)) < 32
 
 

@@ -2,17 +2,6 @@
 
 Inspect the matching packaged YAML and existing overlay before editing; validation is the schema authority.
 
-## Contents
-
-- [Linux activity](#linux-activity)
-- [Mac native source profiles](#mac-native-source-profiles)
-- [Mac filesystem and execution metadata](#modeled-mac-filesystem-and-execution-metadata)
-- [SMB client and server profiles](#smb-client-and-server-profiles)
-- [Authentication and endpoint noise](#authentication-and-endpoint-noise)
-- [Volume and distribution](#volume-and-distribution)
-- [Observation and timing](#observation-and-timing)
-- [Safety fixture families](#safety-fixture-families)
-
 ## Linux activity
 
 ### `bash_commands.yaml`
@@ -50,6 +39,12 @@ operands; `rename` uses remote source/destination; mounted `transfer` requires n
 `{source_path}` and `{destination_path}`. Allowed template fields are `server`, `share`, `path`,
 `client_path`, `local_path`, `source_path`, `destination_path`, `username`, `smb_principal`,
 `auth_options`, `operation`, and `client_ip`; traversal, conversions, and format specs are invalid.
+
+Operation processes may set `automatic_file_extensions`: nonempty dotted, case-insensitive
+extensions for ordinary automatic baseline tasks, not executable read restrictions. Omitted/null
+preserves unrestricted selection and frozen catalogs. Explicit paths/references, batches, supplied
+files, transfers and storylines remain authoritative. Intersect other selectors; skip shares lacking
+an eligible available file before preparation. Default Mac cat/tee and Linux mounted tee tasks use text.
 
 Mounted CIFS uses kernel transport plus an explicit operation actor; `mount.cifs` does not own later I/O. Direct `smbclient` is operation/process-owned, Explorer is resident, and GVFS is background texture only.
 Samba uses a service listener plus a per-transport `smbd` worker. Audit `minimal` is lifecycle-only; operation/failure tiers permit only monotonic `standard`/`high` mappings.
@@ -132,11 +127,6 @@ reserved-host allowlists extend. They cannot authorize live credentials/hosts, p
 - Use reserved/test hosts accepted by the packaged safety schema.
 - Never weaken default markers or allowlists to make validation pass.
 
-## Verification
-
-Treat cadence, rate, role, missingness, or safety changes as semantic. Run `eforge validate-config
---json` fresh after every edit; validate affected scenarios from the same working directory.
-
 ## Mac native source profiles
 
 `macos_unified_log_profiles.yaml` selects modeled macOS 27 workspace/policy/SSH messages. `macos_endpoint_security_profiles.yaml` selects arm64 v11 process/files (`fork exec exit create close rename unlink`). These are simulated collectors; generation inspects no host logs. Frozen inputs retain their captured subscriptions and facts. Catalog edits do not qualify unmeasured native families.
@@ -148,3 +138,6 @@ Treat cadence, rate, role, missingness, or safety changes as semantic. Run `efor
 Its `filesystem_workload` selects live Code document activity: bounded names/counts/sizes/delays, idle/atomic-replacement/cleanup probabilities and nominal permissions/allocation. Preserve the qualified pre-operation stat phase. This adds neither an authored file event nor generic SMB/download/plist conversion, reads or mappings. Values model workload, not measured Code/APFS behavior.
 
 See `/eforge:references:evidence-endpoint-macos` for admitted process/file contracts and the repository's `docs/reference/CUSTOMIZING_CONFIG.md` for an overlay example. Validate configuration and affected scenarios from the same project root after edits.
+
+Treat cadence, rate, role, missingness, or safety changes as semantic. Run
+`eforge validate-config --json` fresh after every edit and validate affected scenarios from that root.

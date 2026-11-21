@@ -1,0 +1,32 @@
+{
+  "rsa_first_resolution": [
+    {
+      "bits": 2048,
+      "cold": {
+        "wall_seconds": 0.4003426669987675,
+        "cpu_seconds": 0.400316
+      },
+      "cache_hit_seconds": 5.542002327274531e-06,
+      "cache_identity_preserved": true
+    },
+    {
+      "bits": 3072,
+      "cold": {
+        "wall_seconds": 1.6166416250016482,
+        "cpu_seconds": 1.6164990000000001
+      },
+      "cache_hit_seconds": 5.583999154623598e-06,
+      "cache_identity_preserved": true
+    },
+    {
+      "bits": 4096,
+      "cold": {
+        "wall_seconds": 3.098231832998863,
+        "cpu_seconds": 3.0978009999999996
+      },
+      "cache_hit_seconds": 6.999998731771484e-06,
+      "cache_identity_preserved": true
+    }
+  ],
+  "scope": "Diagnostic only; not an authenticity score or standardized benchmark"
+}

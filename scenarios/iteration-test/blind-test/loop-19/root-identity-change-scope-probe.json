@@ -1,0 +1,13 @@
+{
+  "scope": "Data-only before/after engineering change-scope check, not blind A/B scoring.",
+  "only_before": [],
+  "only_after": [],
+  "changed_files": [
+    "MAC-MROSS-01.meridianhcs.local/macos_endpoint_security.ndjson",
+    "MAC-MROSS-02.meridianhcs.local/macos_endpoint_security.ndjson"
+  ],
+  "native_changed_field_counts": {
+    "event.exec.cwd.stat.st_ino": 52
+  },
+  "native_row_count_changes": []
+}

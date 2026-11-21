@@ -1,0 +1,24 @@
+{
+  "later_unrelated_session_frontier": "2026-11-02T13:25:00+00:00",
+  "observations": [
+    {
+      "kind": "workstation_locked",
+      "canonical_time": "2026-11-02T13:05:00+00:00",
+      "rendered_time": "2026-11-02T13:05:00.025048+00:00",
+      "delay_from_canonical_seconds": 0.025048
+    },
+    {
+      "kind": "workstation_unlocked",
+      "canonical_time": "2026-11-02T13:15:00+00:00",
+      "rendered_time": "2026-11-02T13:15:00.050791+00:00",
+      "delay_from_canonical_seconds": 0.050791
+    },
+    {
+      "kind": "account_changed",
+      "canonical_time": "2026-11-02T13:18:00+00:00",
+      "rendered_time": "2026-11-02T13:18:00.003197+00:00",
+      "delay_from_canonical_seconds": 0.003197
+    }
+  ],
+  "rendered_lock_dwell_seconds": 600.025743
+}

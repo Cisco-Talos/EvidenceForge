@@ -1,0 +1,22 @@
+{
+  "selected_family": [
+    "Native Dovecot fetched-body byte/count coherence across all IMAPS summary entry paths"
+  ],
+  "code_change_for_loop": true,
+  "fix_classification": "source_native_single_schema",
+  "focused_validation": {
+    "before": "Actual29native census19logout summaries/8positive-body-data with zero bodycount cases. Corrected direct shared-owner controls2FAIL46PASS1.24s. Initial count/byte biconditional/count<=bytes controls rejected as too strict for empty/partial fetches; original diagnostic log retained separately.",
+    "scope": "Bounded native Dovecot application-summary projection, not a complete canonical IMAP FETCH model. Retain existing draws/byte allocation; condition a zero count on existing positive message-count support only when body bytes are positive. Exact conditional distribution avoids clamp-to-one atom; empty-byte counted fetches allowed. Existing valid summaries, canonical transport/tuple, orig/out budgets, worker PID and token codec remain under existing owners. One new categorical count draw only for invalid cases; no new raw timing RNG/State/cache/quota/config pool/emitter patch. All authored hashes unchanged.",
+    "after": "121focused tests PASS30deselected6.46s, including48corrected native output counter controls and Dovecot identity/email/SMTP timing/manifest siblings. Four actual public-engine slow cases PASS73.29s:LinuxIMAPS,OWA bypass,network-filtered IMAPS and static-NAT alias; native logout counters and session tuple/codec/interval proof preserved.",
+    "rng": "3slow global timing RNG policy tests PASS7.58s; continuous timing census unchanged.",
+    "config": "105files0errors0warnings;no new config pool or overlay.",
+    "ruff": "Whole-tree check PASS;1691files format check PASS.",
+    "diagnostic": "Successful unreviewed567generation preserved under unreviewed-confirmatory-generation-behavior567;eval98.25030082067876/143703records,all115data files byte-identical29. No panel/scores for that diagnostic. Only corrected568bundle is assessed as30."
+  },
+  "unreviewed_diagnostic_generation": {
+    "path": "unreviewed-confirmatory-generation-behavior567",
+    "behavior_revision": 567,
+    "scored": false,
+    "generation_and_post_exit": 0
+  }
+}

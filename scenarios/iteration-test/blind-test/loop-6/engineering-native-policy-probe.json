@@ -1,0 +1,7 @@
+{
+  "scope": "Temporary proposed policy in actual dispatcher and native syslog emitter, no production file edits",
+  "directory": "/private/tmp/native-delay-precision-p8in0z4o",
+  "records": 100,
+  "millisecond_aligned": 0,
+  "fractional_residue_count": 98
+}

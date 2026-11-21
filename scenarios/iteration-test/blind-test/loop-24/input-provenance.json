@@ -1,0 +1,49 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 24,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 562,
+  "behavior_surface_sha256": "71903841a68d8b6d327cab9b38f7ad9f2838ec6d685cb27529fb19d13340c50f",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "Linux finite interval-report completion shared across direct and sudo entry paths",
+    "Implicit local GUI authored command adapter to common foreground action owner"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "before": "15newcases:6FAIL9PASSagainst560; directGUI/SSHvmstat2x4planned4.43696sbelow6s wait. Native22direct3.054/3.518vs4sudo5.706\u20136.124, qualifiedweaknotimpossible-success.",
+    "central": "18newprofile/grammar/platform/legacy/commonbounds/GUI+SSHcases plus existing POSIX/process/baseline owners:308PASS1skip5.65s",
+    "siblings": "71manifest/Linuxsudo/typedpipeline/console/CUPS casesPASS7.02s1deselect",
+    "rng": "3PASS7.61s; unchanged exact census; existing baseline sampler site reused, no added raw timing RNG",
+    "config": "105files0issues; typed ProcessLifetimeTable/LifetimeRule validates new policy",
+    "ruff": "1680filescheck/formatPASS",
+    "scope": "Linux-qualifiedliteralpositiveinterval/count vmstatgrammar with named allowed flags and completion overhead; no Mac vm_stat/iostat/sar grammar claim. Frozen legacy table keeps old direct and sudo behavior. Existing cancellation/session deadlines may close early; no fabricated success/exit status, no newState/cache/quota. No fullroutine/releasegate.",
+    "final_owners": "382PASS1skip7.53s, includes all lifetime+Linuxsudo+typed process sessions/pipelines+manifest",
+    "foreground_adapter": "Before4FAIL missing bounded adapter. After117foreground/processownerPASS3.16s; 6public native/typed and no-cancellation/nonGUI/explicitparent controlsPASS44.87s. First toy fixture used wrong min_seconds/max_seconds schema keys, then a typed docker lifetime expectation exposed an existing storyline-estimator limitation; corrected to a genuinely unbounded nc sibling. Unitcontrols still cover actual baseline docker/journalctl cases; do not claim every storyline follower estimator is fixed.",
+    "final_rng": "3PASS7.49s unchangedcensus",
+    "final_config": "105files0issues",
+    "final_ruff": "1681filescheck/formatPASS",
+    "foreground_scope": "Existing anchored connection helper extracted into common stateless foreground action owner with optional external deadline; old network adapter preserves exact deadline. New authored fallback only active local GUI gnome-terminal-server sessions and implicit parents. No cancellation, new SSH channel, console terminal, explicit parent substitution, cache/State/quota or raw RNG growth."
+  },
+  "fix_classification": "family_level plus adapter_to_family_model",
+  "failed_generation_attempts": [
+    {
+      "behavior_revision": 561,
+      "exit_code": 21,
+      "reason": "Authored support tar encountered local GUI shell occupied by baseline docker compose logs -f --tail20; no modeled release. Cleanup SSH journal diagnostic retained.",
+      "path": "failed-attempt-behavior561",
+      "assessment_or_eval_run": false
+    }
+  ]
+}

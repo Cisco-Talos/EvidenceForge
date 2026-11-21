@@ -12,6 +12,9 @@ logical_size_bytes: {min: 16384, max: 33554432}
 size_median_bytes: 1048576
 size_log_sigma: 1.2
 installation_age_seconds: {min: 86400, max: 15552000}
+# Machine OS objects belong to the already booted system snapshot when boot is known.
+# Older frozen profiles without this optional selector retain their previous policy.
+preboot_product_ids: [apple-macos]
 build_lead_seconds: {min: 86400, max: 5184000}
 # Some packages preserve whole-second build dates; host-local times retain native precision.
 package_whole_second_probability: 0.5

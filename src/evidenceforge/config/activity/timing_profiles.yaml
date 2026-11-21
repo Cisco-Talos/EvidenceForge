@@ -43,6 +43,43 @@ ssh_authentication:
     RSA: {min: 20, max: 240}
 
 relationships:
+  linux.console.getty_before_login:
+    class: causal_prerequisite
+    position: before
+    min_ms: 400
+    max_ms: 1800
+  # Modeled RDP startup work follows readiness fences. These windows are not
+  # empirical Windows kernel measurements; admission reads the same support.
+  rdp.target_logon_after_transport:
+    class: causal_prerequisite
+    position: after
+    min_ms: 900
+    max_ms: 1600
+  rdp.session_manager_lead_before_logon:
+    class: causal_prerequisite
+    position: before
+    min_ms: 1500
+    max_ms: 8000
+  rdp.session_manager_spawn_after_ready:
+    class: causal_prerequisite
+    position: after
+    min_ms: 80
+    max_ms: 800
+  rdp.winlogon_spawn_after_ready:
+    class: causal_prerequisite
+    position: after
+    min_ms: 120
+    max_ms: 1500
+  rdp.authentication_after_winlogon:
+    class: causal_prerequisite
+    position: after
+    min_ms: 350
+    max_ms: 2400
+  rdp.userinit_after_desktop_ready:
+    class: teardown
+    position: after
+    min_ms: 650
+    max_ms: 4900
   baseline.user_activity_dispatch:
     class: human_workflow
     position: after

@@ -94,7 +94,9 @@ def test_baseline_mounted_admission_preserves_non_mac_sibling_paths(os_label: st
                 return_value=[SimpleNamespace(logon_type=2, username="alice", explorer_pid=None)]
             )
         ),
-        activity_generator=SimpleNamespace(_storage_world=world),
+        activity_generator=SimpleNamespace(
+            _storage_world=world, automatic_smb_task_spec=lambda **kwargs: kwargs["spec"]
+        ),
         generation_seed=42,
         _generation_epoch=start,
         _infra_ips={"dc": [dc.ip]},
@@ -103,10 +105,18 @@ def test_baseline_mounted_admission_preserves_non_mac_sibling_paths(os_label: st
         _resolve_traffic_rate=lambda _key: (60, 120),
         _scaled_interval_range=lambda _system, _key, low, high: (low, high),
     )
+    baseline._eligible_baseline_smb_tasks = BaselineMixin._eligible_baseline_smb_tasks.__get__(
+        baseline
+    )
     with generation_seed_scope(42):
         intents = BaselineMixin._plan_baseline_smb_activity(baseline, start)
     assert intents
     shares = {intent.share_ref for intent in intents}
+    admit = baseline.activity_generator.automatic_smb_task_spec
+    baseline.activity_generator.automatic_smb_task_spec = lambda **_kwargs: None
+    with generation_seed_scope(42):
+        assert BaselineMixin._plan_baseline_smb_activity(baseline, start) == ()
+    baseline.activity_generator.automatic_smb_task_spec = admit
     if os_label.startswith("macOS"):
         assert shares == {"FS.research"}
         assert all(intent.actor == actor for intent in intents)

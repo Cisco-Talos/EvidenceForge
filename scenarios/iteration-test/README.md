@@ -1,35 +1,44 @@
 # Canonical iteration-test benchmark
 
-The active Scenario 2.0 benchmark now includes the Mac-supported mixed fleet:
-9 named users, 23 systems (two macOS 27 arm64 workstations), and a six-hour window
-starting November 2, 2026 at 13:00 UTC, with two hours of warmup. The pinned
-`evidenceforge/technology@1.0.0` industry pack, include structure, baseline and
-existing Windows/Linux storyline are retained. The Mac epoch updates the inherited
-raw Apache timestamp to agree with the collection window.
+The November 20, 2026 benchmark promotes the assessed
+[`iteration-test-realism-candidate`](../iteration-test-realism-candidate/README.md).
+It retains Scenario 2.0, the exact packaged technology 1.0.0 industry pack,
+9 named users, 23 systems, seed 42, a six-hour collection window beginning
+November 2 at 13:00 UTC, and two hours of warmup.
 
-## Mac timing
+The authored workload adds cross-platform diagnostic download/execute/follow-up
+sequences, explicitly launched VS Code on one Mac, practical Mac diagnostic and
+configuration work, and an explicit mounted-share read/save sequence. The existing
+Windows/Linux narrative, Mac launch-item lifecycles, source selections and low
+baseline remain. Reviewer instructions and examination requirements are unchanged.
 
-Compact introductory terminal queries use human typing cadence. Longer local and
-SSH inspection groups use jittered intervals around their former approximate span.
-Chrome helper starts use variable automated delays (300ms–2s). Six explicit inventory
-activations now declare successful completion after a variable 100–750ms delay,
-replacing six exact two-second lifetimes. These are bounded modeling choices, not
-native timing measurements. The existing canonical scheduling and lifecycle owners
-keep native ES, eCAR and shell history aligned; no output timestamps are rewritten.
-Complete Mac process-start coverage remains required.
+## New assessment history
 
-## References and output status
+**Epoch: `2026-11-20-realism`. This history starts at loop 1.**
 
-- The exact previous Windows/Linux inputs are preserved under
-  [`tests/fixtures/scenarios/iteration-test-pre-macos`](../../tests/fixtures/scenarios/iteration-test-pre-macos/README.md),
-  including their original names, relative includes and SHA-256 manifest.
-- [`ORIGIN.json`](ORIGIN.json) records promotion and per-group timing changes.
-- [`ENVIRONMENT.md`](ENVIRONMENT.md) describes the current attack-free environment.
-- The retained [`iteration-test-macos`](../iteration-test-macos/README.md) variant
-  has matching timing policies and contains the historical assessment reports.
+`blind-test/` contains only this epoch's generated bundles, reports and scores.
+Do not carry earlier loop numbers forward, seed this history
+with the candidate trial score, or combine its rolling averages with older epochs.
+This is an explicit reset because the authored scenario changed substantially.
+See [history policy](blind-test/README.md) and [epoch metadata](blind-test/HISTORY.json).
+The current run is indexed in [series progress](blind-test/SERIES.json).
 
-Existing adjacent generation manifests, data and eval results belong to the previous
-input. They have not been rewritten and are stale for this scenario. Likewise, Mac
-assessment loops 1–42 predate these timing edits; none establishes a new score for
-the revised benchmark. Generate into a fresh output directory for new comparisons.
-The intentionally low baseline retains its known noise-to-signal validation warning.
+## Previous versions and evidence
+
+- The previous scenario YAML and its required YAML includes are at
+  [`iteration-test-previous-2026-11-20`](../iteration-test-previous-2026-11-20/scenario.yaml).
+  Old datasets and reports are not part of that version archive; they were
+  removed on November 20 after explicit cleanup authorization.
+- The exploratory candidate's authored YAML remains under
+  [`iteration-test-realism-candidate`](../iteration-test-realism-candidate/README.md).
+  Its obsolete trial artifacts were deleted after promotion; no trial score is
+  part of this new series.
+- Older Windows/Linux authored snapshots remain in
+  [`tests/fixtures/scenarios/iteration-test-pre-macos`](../../tests/fixtures/scenarios/iteration-test-pre-macos/README.md).
+- `ORIGIN.json` records promotion, source and prior authored hashes. Only the canonical name, destination hint and
+  description change from the promoted candidate; its activity is retained.
+
+Each assessment stores its output separately under `blind-test/loop-N/`.
+Validation intentionally retains the eight candidate
+warnings about the low baseline, warmup logons outside collection, and download
+commands whose network consequences are inferred automatically.

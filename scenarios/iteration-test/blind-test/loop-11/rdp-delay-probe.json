@@ -1,0 +1,312 @@
+{
+  "scope": "Descriptive same-tuple RDP transport-to-login timing from data only; source clock offsets and auth infrastructure remain alternatives",
+  "source_sha256": {
+    "DC-02.meridianhcs.local/windows_event_security.xml": "2367bca7f177b3c286a301161d643536b00536e532b27a89b55bdfa53d611c86",
+    "WS-PPATEL-01.meridianhcs.local/windows_event_security.xml": "135ae73595f5e014582005f8e504f5151cfb7ac9efa55be220dd28512747fcf7",
+    "DC-01.meridianhcs.local/windows_event_security.xml": "a5f0c05fc926dc990769131a770c0992f49c7e17bb92c778bbbd3896b53a6c4d",
+    "WS-DRAMIREZ-01.meridianhcs.local/windows_event_security.xml": "ad675ea0d1cfae93b62ea7d45eb7cae2b8a53b432f5918dc00be5480ac87889a",
+    "MAIL-FIN-01.meridianhcs.local/windows_event_security.xml": "2f559cc89c87eb6e12ad17b7366ee1a7ffb6138eb5e50d860cfc4bd350bfa9b4",
+    "WS-AJOHNSON-01.meridianhcs.local/windows_event_security.xml": "4c2868e80f3297b65cb1cbb59add5babcb4af70a55ec2124516a7a8b5e329b7f",
+    "FILE-SRV-01.meridianhcs.local/windows_event_security.xml": "6031c86ab35a178390bbb82fde8670adb1887d375bfbda0e7c9dc5df9f595d5d",
+    "WS-MCHEN-01.meridianhcs.local/windows_event_security.xml": "dd2c07cba8383d1a54d3cf944915772208818690365391450e391f44ef57b0cb",
+    "WS-SMARTINEZ-01.meridianhcs.local/windows_event_security.xml": "c95a37ae42c0b0667eacbbd36f7e5f252d63782371fd0cbfb606624f4b8d1c89",
+    "WS-EBROOKS-01.meridianhcs.local/windows_event_security.xml": "65263947152d8ebdd415491ade3d0e662fa8d330d4d0703b0b24c3eb9098fc0b",
+    "zeek-core/conn.json": "4ef05a381a1565be08bf58013649c7446cdfb539b2f1e2a060fb3b2cad52d81b"
+  },
+  "targets": {
+    "DC-02.meridianhcs.local": {
+      "ecar": {
+        "count": 3,
+        "range_seconds": 0.15398478507995605,
+        "observations": [
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 60313,
+            "uid": "CsnXCaPcREaaL1tmtr",
+            "conn_state": "SF",
+            "delay_seconds": 9.221297025680542
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 54224,
+            "uid": "CO531o7Sjm9eoSgPXat",
+            "conn_state": "SF",
+            "delay_seconds": 9.318257808685303
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 65234,
+            "uid": "CHSDbLPVB4cKwvtm4O",
+            "conn_state": "SF",
+            "delay_seconds": 9.164273023605347
+          }
+        ]
+      },
+      "security": {
+        "count": 3,
+        "range_seconds": 0.15176987648010254,
+        "observations": [
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 60313,
+            "uid": "CsnXCaPcREaaL1tmtr",
+            "conn_state": "SF",
+            "delay_seconds": 9.233289957046509
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 54224,
+            "uid": "CO531o7Sjm9eoSgPXat",
+            "conn_state": "SF",
+            "delay_seconds": 9.321035861968994
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 65234,
+            "uid": "CHSDbLPVB4cKwvtm4O",
+            "conn_state": "SF",
+            "delay_seconds": 9.169265985488892
+          }
+        ]
+      }
+    },
+    "DC-01.meridianhcs.local": {
+      "ecar": {
+        "count": 3,
+        "range_seconds": 1.2572870254516602,
+        "observations": [
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 64451,
+            "uid": "CDRgfepU9iLGuDy1R0m",
+            "conn_state": "SF",
+            "delay_seconds": 9.64375901222229
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 55210,
+            "uid": "CvkF6y5BDFsPcs0sX2",
+            "conn_state": "SF",
+            "delay_seconds": 8.38647198677063
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 62805,
+            "uid": "C1KXwZNg5FuBFKMHBAd",
+            "conn_state": "SF",
+            "delay_seconds": 9.402075052261353
+          }
+        ]
+      },
+      "security": {
+        "count": 3,
+        "range_seconds": 1.2048759460449219,
+        "observations": [
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 64451,
+            "uid": "CDRgfepU9iLGuDy1R0m",
+            "conn_state": "SF",
+            "delay_seconds": 9.647954940795898
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 55210,
+            "uid": "CvkF6y5BDFsPcs0sX2",
+            "conn_state": "SF",
+            "delay_seconds": 8.443078994750977
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 62805,
+            "uid": "C1KXwZNg5FuBFKMHBAd",
+            "conn_state": "SF",
+            "delay_seconds": 9.447910070419312
+          }
+        ]
+      }
+    },
+    "MAIL-FIN-01.meridianhcs.local": {
+      "ecar": {
+        "count": 4,
+        "range_seconds": 0.3218400478363037,
+        "observations": [
+          {
+            "principal": "aisha.johnson",
+            "source_ip": "10.10.1.35",
+            "source_port": 63921,
+            "uid": "CJLkNOcipK592Pevqr",
+            "conn_state": "SF",
+            "delay_seconds": 9.299329042434692
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 51126,
+            "uid": "CX2SheX8P32CVyOR5q",
+            "conn_state": "SF",
+            "delay_seconds": 9.08101201057434
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 59501,
+            "uid": "CBWFFj70gTvuAlcKA",
+            "conn_state": "SF",
+            "delay_seconds": 9.279253005981445
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 55345,
+            "uid": "CJXWUpZjWLk9zFYLqGt",
+            "conn_state": "SF",
+            "delay_seconds": 9.402852058410645
+          }
+        ]
+      },
+      "security": {
+        "count": 4,
+        "range_seconds": 0.33820080757141113,
+        "observations": [
+          {
+            "principal": "aisha.johnson",
+            "source_ip": "10.10.1.35",
+            "source_port": 63921,
+            "uid": "CJLkNOcipK592Pevqr",
+            "conn_state": "SF",
+            "delay_seconds": 9.33266282081604
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 51126,
+            "uid": "CX2SheX8P32CVyOR5q",
+            "conn_state": "SF",
+            "delay_seconds": 9.081042051315308
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 59501,
+            "uid": "CBWFFj70gTvuAlcKA",
+            "conn_state": "SF",
+            "delay_seconds": 9.33332109451294
+          },
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 55345,
+            "uid": "CJXWUpZjWLk9zFYLqGt",
+            "conn_state": "SF",
+            "delay_seconds": 9.419242858886719
+          }
+        ]
+      }
+    },
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "ecar": {
+        "count": 1,
+        "range_seconds": 0.0,
+        "observations": [
+          {
+            "principal": "aisha.johnson",
+            "source_ip": "10.10.1.99",
+            "source_port": 40051,
+            "uid": "Cv0sIdmL1QBXL7InlF",
+            "conn_state": "SF",
+            "delay_seconds": 7.495048999786377
+          }
+        ]
+      },
+      "security": {
+        "count": 1,
+        "range_seconds": 0.0,
+        "observations": [
+          {
+            "principal": "aisha.johnson",
+            "source_ip": "10.10.1.99",
+            "source_port": 40051,
+            "uid": "Cv0sIdmL1QBXL7InlF",
+            "conn_state": "SF",
+            "delay_seconds": 7.498327970504761
+          }
+        ]
+      }
+    },
+    "FILE-SRV-01.meridianhcs.local": {
+      "ecar": {
+        "count": 3,
+        "range_seconds": 1.1211369037628174,
+        "observations": [
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 60806,
+            "uid": "CFiklRsAr9d1PwJXaM",
+            "conn_state": "SF",
+            "delay_seconds": 8.711066007614136
+          },
+          {
+            "principal": "aisha.johnson",
+            "source_ip": "10.10.1.35",
+            "source_port": 55278,
+            "uid": "CXfCOlaAGogo08ySxK",
+            "conn_state": "SF",
+            "delay_seconds": 7.589929103851318
+          },
+          {
+            "principal": "aisha.johnson",
+            "source_ip": "10.10.1.35",
+            "source_port": 62113,
+            "uid": "CHvg6NCoUFQiAvwJ1P",
+            "conn_state": "SF",
+            "delay_seconds": 7.767416000366211
+          }
+        ]
+      },
+      "security": {
+        "count": 3,
+        "range_seconds": 1.132443904876709,
+        "observations": [
+          {
+            "principal": "marcus.chen",
+            "source_ip": "10.10.1.31",
+            "source_port": 60806,
+            "uid": "CFiklRsAr9d1PwJXaM",
+            "conn_state": "SF",
+            "delay_seconds": 8.807045936584473
+          },
+          {
+            "principal": "aisha.johnson",
+            "source_ip": "10.10.1.35",
+            "source_port": 55278,
+            "uid": "CXfCOlaAGogo08ySxK",
+            "conn_state": "SF",
+            "delay_seconds": 7.674602031707764
+          },
+          {
+            "principal": "aisha.johnson",
+            "source_ip": "10.10.1.35",
+            "source_port": 62113,
+            "uid": "CHvg6NCoUFQiAvwJ1P",
+            "conn_state": "SF",
+            "delay_seconds": 7.763575077056885
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,438 @@
+{
+  "before": [
+    {
+      "service": "ssl",
+      "requested_state": "SF",
+      "state": "SF",
+      "ssl": true,
+      "http": false,
+      "history": "ShADadfF",
+      "duration": 3.275903
+    },
+    {
+      "service": "ssl",
+      "requested_state": "RSTO",
+      "state": "RSTO",
+      "ssl": false,
+      "http": false,
+      "history": "ShADaR",
+      "duration": 1.012301
+    },
+    {
+      "service": "ssl",
+      "requested_state": "RSTR",
+      "state": "RSTR",
+      "ssl": false,
+      "http": false,
+      "history": "ShADadr",
+      "duration": 0.591829
+    },
+    {
+      "service": "ssl",
+      "requested_state": "S2",
+      "state": "S2",
+      "ssl": false,
+      "http": false,
+      "history": "ShADadF",
+      "duration": 1.218791
+    },
+    {
+      "service": "ssl",
+      "requested_state": "S3",
+      "state": "S3",
+      "ssl": false,
+      "http": false,
+      "history": "ShADadf",
+      "duration": 1.934822
+    },
+    {
+      "service": "ssl",
+      "requested_state": "S0",
+      "state": "S0",
+      "ssl": false,
+      "http": false,
+      "history": "S",
+      "duration": null
+    },
+    {
+      "service": "ssl",
+      "requested_state": "REJ",
+      "state": "REJ",
+      "ssl": false,
+      "http": false,
+      "history": "Sr",
+      "duration": null
+    },
+    {
+      "service": "ssl",
+      "requested_state": "OTH",
+      "state": "OTH",
+      "ssl": false,
+      "http": false,
+      "history": "ADad",
+      "duration": 3
+    },
+    {
+      "service": "http",
+      "requested_state": "SF",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 3
+    },
+    {
+      "service": "http",
+      "requested_state": "RSTO",
+      "state": "RSTO",
+      "ssl": false,
+      "http": false,
+      "history": "ShADaR",
+      "duration": 0.35913
+    },
+    {
+      "service": "http",
+      "requested_state": "RSTR",
+      "state": "RSTR",
+      "ssl": false,
+      "http": false,
+      "history": "ShADadr",
+      "duration": 1.328433
+    },
+    {
+      "service": "http",
+      "requested_state": "S2",
+      "state": "S2",
+      "ssl": false,
+      "http": false,
+      "history": "ShADadF",
+      "duration": 2.025396
+    },
+    {
+      "service": "http",
+      "requested_state": "S3",
+      "state": "S3",
+      "ssl": false,
+      "http": false,
+      "history": "ShADadf",
+      "duration": 1.115673
+    },
+    {
+      "service": "http",
+      "requested_state": "S0",
+      "state": "S0",
+      "ssl": false,
+      "http": false,
+      "history": "S",
+      "duration": null
+    },
+    {
+      "service": "http",
+      "requested_state": "REJ",
+      "state": "REJ",
+      "ssl": false,
+      "http": false,
+      "history": "Sr",
+      "duration": null
+    },
+    {
+      "service": "http",
+      "requested_state": "OTH",
+      "state": "OTH",
+      "ssl": false,
+      "http": false,
+      "history": "DAd",
+      "duration": 3
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "SF",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 3
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "RSTO",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 0.594669
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "RSTR",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 1.456106
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "S2",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 1.956472
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "S3",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 1.213354
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "S0",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 0.713628
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "REJ",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 0.509626
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "OTH",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 3
+    }
+  ],
+  "proposed": [
+    {
+      "service": "ssl",
+      "requested_state": "SF",
+      "state": "SF",
+      "ssl": true,
+      "http": false,
+      "history": "ShADadfF",
+      "duration": 3.275903
+    },
+    {
+      "service": "ssl",
+      "requested_state": "RSTO",
+      "state": "RSTO",
+      "ssl": false,
+      "http": false,
+      "history": "ShADaR",
+      "duration": 1.012301
+    },
+    {
+      "service": "ssl",
+      "requested_state": "RSTR",
+      "state": "RSTR",
+      "ssl": true,
+      "http": false,
+      "history": "ShADadr",
+      "duration": 0.591829
+    },
+    {
+      "service": "ssl",
+      "requested_state": "S2",
+      "state": "S2",
+      "ssl": true,
+      "http": false,
+      "history": "ShADadF",
+      "duration": 1.218791
+    },
+    {
+      "service": "ssl",
+      "requested_state": "S3",
+      "state": "S3",
+      "ssl": true,
+      "http": false,
+      "history": "ShADadf",
+      "duration": 1.934822
+    },
+    {
+      "service": "ssl",
+      "requested_state": "S0",
+      "state": "S0",
+      "ssl": false,
+      "http": false,
+      "history": "S",
+      "duration": null
+    },
+    {
+      "service": "ssl",
+      "requested_state": "REJ",
+      "state": "REJ",
+      "ssl": false,
+      "http": false,
+      "history": "Sr",
+      "duration": null
+    },
+    {
+      "service": "ssl",
+      "requested_state": "OTH",
+      "state": "OTH",
+      "ssl": false,
+      "http": false,
+      "history": "DAd",
+      "duration": 3
+    },
+    {
+      "service": "http",
+      "requested_state": "SF",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadTtFf",
+      "duration": 3
+    },
+    {
+      "service": "http",
+      "requested_state": "RSTO",
+      "state": "RSTO",
+      "ssl": false,
+      "http": false,
+      "history": "ShADaR",
+      "duration": 0.35913
+    },
+    {
+      "service": "http",
+      "requested_state": "RSTR",
+      "state": "RSTR",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadr",
+      "duration": 1.328433
+    },
+    {
+      "service": "http",
+      "requested_state": "S2",
+      "state": "S2",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadF",
+      "duration": 2.025396
+    },
+    {
+      "service": "http",
+      "requested_state": "S3",
+      "state": "S3",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadf",
+      "duration": 1.115673
+    },
+    {
+      "service": "http",
+      "requested_state": "S0",
+      "state": "S0",
+      "ssl": false,
+      "http": false,
+      "history": "S",
+      "duration": null
+    },
+    {
+      "service": "http",
+      "requested_state": "REJ",
+      "state": "REJ",
+      "ssl": false,
+      "http": false,
+      "history": "Sr",
+      "duration": null
+    },
+    {
+      "service": "http",
+      "requested_state": "OTH",
+      "state": "OTH",
+      "ssl": false,
+      "http": false,
+      "history": "DdA",
+      "duration": 3
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "SF",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 3
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "RSTO",
+      "state": "RSTO",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadR",
+      "duration": 0.594669
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "RSTR",
+      "state": "RSTR",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadr",
+      "duration": 1.456106
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "S2",
+      "state": "S2",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadF",
+      "duration": 1.956472
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "S3",
+      "state": "S3",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadf",
+      "duration": 1.213354
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "S0",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadTtFf",
+      "duration": 0.713628
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "REJ",
+      "state": "SF",
+      "ssl": false,
+      "http": true,
+      "history": "ShADadfF",
+      "duration": 0.509626
+    },
+    {
+      "service": "explicit-http",
+      "requested_state": "OTH",
+      "state": "OTH",
+      "ssl": false,
+      "http": true,
+      "history": "DdA",
+      "duration": 3
+    }
+  ]
+}

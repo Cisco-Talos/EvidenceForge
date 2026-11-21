@@ -1,0 +1,65 @@
+{
+  "scope": "Descriptive visible Linux vmstat child lifetimes. Normal completion waits are not assertions of successful exit: cancellation, session deadlines and observation offsets may produce shorter visible lifetimes. No universal extra source or exit-status requirement.",
+  "visible_instances": 5,
+  "parents": {
+    "/usr/bin/sudo": 4,
+    "/bin/bash": 1
+  },
+  "rows": [
+    {
+      "host": "APP-INT-01",
+      "pid": 3378993,
+      "object_id": "12ae6305-a870-4c2a-85e1-8ec04fded49b",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793625273905,
+      "close_ms": 1793625278528,
+      "observed_seconds": 4.623,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "FILE-LNX-01",
+      "pid": 2803999,
+      "object_id": "0fb74364-b428-4297-99e8-f5ee72184a6a",
+      "command": "vmstat 1 5",
+      "parent_image": "/bin/bash",
+      "start_ms": 1793631608329,
+      "close_ms": 1793631613075,
+      "observed_seconds": 4.746,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "LOG-MON-01",
+      "pid": 743112,
+      "object_id": "cd93b512-e3bc-4c11-826d-74f156c77721",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793624545073,
+      "close_ms": 1793624549854,
+      "observed_seconds": 4.781,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "MAIL-EDGE-01",
+      "pid": 2293508,
+      "object_id": "df51bc19-4d39-4be3-9d16-297083fb5d2a",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793628224869,
+      "close_ms": 1793628229779,
+      "observed_seconds": 4.91,
+      "ordinary_uninterrupted_wait_seconds": 4
+    },
+    {
+      "host": "PROXY-01",
+      "pid": 2623163,
+      "object_id": "c3b83689-db95-4d2b-a7f3-355cd25cc7c8",
+      "command": "/usr/bin/vmstat 1 5",
+      "parent_image": "/usr/bin/sudo",
+      "start_ms": 1793626685697,
+      "close_ms": 1793626690065,
+      "observed_seconds": 4.368,
+      "ordinary_uninterrupted_wait_seconds": 4
+    }
+  ]
+}

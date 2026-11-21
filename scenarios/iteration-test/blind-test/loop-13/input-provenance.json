@@ -1,0 +1,35 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 13,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 546,
+  "behavior_surface_sha256": "dc31408fb28c05429b581266ddf2184ef8162bccbc86ae2234210c5a4d3f1de3",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "canonical file elapsed through sensor clock and full source span reservation"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "central": "126pass(27behavior,5new contract,94existing timing)",
+    "consumers": "136pass network/file/OCSP/PE/TLS",
+    "source_budget": "60pass preparation/detached/cohort/scale",
+    "native_replay": "29slowpassed15deselected331.81s; explicitproxy,WindowsSMB,Macmountedoperations,freshprocess/seed/eval/config/hash replay",
+    "proxy_rng": "23pass; no temporal inventory ceiling growth",
+    "checkpoint": "2pass107.58s15deselected",
+    "config": "105files0issues",
+    "ruff": "check/formatpass1652files",
+    "legacy": "direct-emitterc009 compatibility unchanged",
+    "routine": "No full routine or release gate claimed"
+  }
+}

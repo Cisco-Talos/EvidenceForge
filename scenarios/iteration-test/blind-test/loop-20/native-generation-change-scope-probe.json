@@ -1,0 +1,47 @@
+{
+  "files_compared": 116,
+  "changed_files": [
+    {
+      "file": "MAC-MROSS-01.meridianhcs.local/ecar.json",
+      "changed_leaves": {
+        "properties.pid_version": 71,
+        "properties.previous_pid_version": 71
+      }
+    },
+    {
+      "file": "MAC-MROSS-01.meridianhcs.local/macos_endpoint_security.ndjson",
+      "changed_leaves": {
+        "event.fork.child.audit_token.pidversion": 47,
+        "event.fork.child.responsible_audit_token.pidversion": 47,
+        "process.audit_token.pidversion": 139,
+        "process.responsible_audit_token.pidversion": 139,
+        "event.exec.target.audit_token.pidversion": 54,
+        "event.exec.target.responsible_audit_token.pidversion": 54,
+        "event.fork.child.parent_audit_token.pidversion": 39,
+        "process.parent_audit_token.pidversion": 104,
+        "event.exec.target.parent_audit_token.pidversion": 36
+      }
+    },
+    {
+      "file": "MAC-MROSS-02.meridianhcs.local/ecar.json",
+      "changed_leaves": {
+        "properties.pid_version": 83,
+        "properties.previous_pid_version": 83
+      }
+    },
+    {
+      "file": "MAC-MROSS-02.meridianhcs.local/macos_endpoint_security.ndjson",
+      "changed_leaves": {
+        "event.fork.child.audit_token.pidversion": 56,
+        "event.fork.child.responsible_audit_token.pidversion": 56,
+        "process.audit_token.pidversion": 167,
+        "process.responsible_audit_token.pidversion": 167,
+        "event.exec.target.audit_token.pidversion": 66,
+        "event.exec.target.responsible_audit_token.pidversion": 66,
+        "event.fork.child.parent_audit_token.pidversion": 46,
+        "process.parent_audit_token.pidversion": 125,
+        "event.exec.target.parent_audit_token.pidversion": 44
+      }
+    }
+  ]
+}

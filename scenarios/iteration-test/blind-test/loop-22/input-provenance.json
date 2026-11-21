@@ -1,0 +1,37 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 22,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 559,
+  "behavior_surface_sha256": "030736207347c6b782c54d35316c2f1c75131e2381bcc5908d678671fad5f3a5",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "Canonical Windows process runtime versus source-observation clock headroom",
+    "Linux console getty source-readiness and whole terminal-interval admission"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "owner": "379passed10.30s13deselected; actualuser/systemclose500ms acrosscomplete/enterprise; realactivity/transportholds/sessiondeadlines; sourcecontainment/manifest/POSIX/console siblings",
+    "native_consumers": "98passed259.70s99deselected: exactnativeSysmon/Security/eCARtiming, physicalobservation, sourceagreementincludingproxydenials",
+    "checkpoint": "ExactpublicLinuxconsoleactiveexec1PASS73.68s and default+sof-elkWindows2PASS107.60s fullbundlebytecomparison. Overbroadinitialslowselectioninterrupted130afteritsconsolecase passed; notcounted8passed.",
+    "global_rng": "3PASS7.70s unchangedcensus",
+    "config": "105files0issues",
+    "ruff": "1678filescheck/formatPASS",
+    "before_controls": "4actualWindowsclock-domainfailures; virtual325family+96/98nativeconsumers with2consolefailures. Bothconsolefails reproducedonfrozen558withoutWindowsfix; short400msnewgettyalsofailsbefore. Combinedvirtual352PASS and26proxy+consolePASS.",
+    "fixture_and_stamp_notes": "Newtestinitiallyreadprior_executionsfromimmutableidentity; correctedtoRunningProcess. Firstbehaviorentrysummaryrejectedover240characters beforewrite; gate376PASS3manifestmismatchwhileold558; correctedentry/stamp559, final379PASS. Noengineguardweakened.",
+    "scope": "Two adapters into existing SourceTimingPlanner plus existing pure terminal planner. No physical duration policy/clockrange/quotaincrease/newStatecache. Explicitnativegettyheadroomisadmissionlead, notfakeWindowsphysicalwork. Existing/frozenidlegetty/GDM/SSH identity paths preserved. Generic session teardown distinct actual-source schedule remains separate; no full routine/release gate."
+  },
+  "fix_classification": "adapter_to_family_model",
+  "failed_generation_attempts": []
+}

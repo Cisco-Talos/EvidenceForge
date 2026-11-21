@@ -29,7 +29,12 @@ from evidenceforge.events.contexts import (
     ProcessContext,
     SmbContext,
 )
-from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, ThreadIdentity
+from evidenceforge.events.identity import (
+    EventIdentityPlan,
+    ProcessIdentity,
+    SessionIdentity,
+    ThreadIdentity,
+)
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import NetworkTransactionPlan, NetworkTuple
 from evidenceforge.formats import load_format
@@ -2992,6 +2997,53 @@ def test_ecar_session_process_create_follows_admitted_session_login() -> None:
     assert process_time > login_time
 
 
+@pytest.mark.parametrize(
+    "event_type", ["workstation_locked", "workstation_unlocked", "account_changed"]
+)
+def test_independent_session_observation_does_not_follow_unrelated_later_dependent(
+    event_type: str,
+) -> None:
+    planner = SourceTimingPlanner()
+    start = _base_time()
+    host = _host_context()
+    session = SessionIdentity(
+        hostname=host.hostname,
+        object_id="durable-session-object",
+        logon_id="0x12345",
+        session_id=2,
+        principal="alice",
+        session_kind="interactive",
+        started_at=start,
+        lifecycle_group_id="durable-session-group",
+    )
+    event_time = start + timedelta(minutes=5)
+    later_dependent = start + timedelta(minutes=25)
+    event = OccurrenceBuilder(
+        timestamp=event_time,
+        event_type=event_type,
+        dst_host=host,
+        auth=AuthContext(username="alice", logon_id=session.logon_id, session_id=2),
+        identity_plan=EventIdentityPlan(session=session),
+        lifecycle=ActionLifecycleContext(
+            group_id=session.lifecycle_group_id,
+            canonical_start=start,
+            phase="dependent",
+        ),
+    )
+    key = ("windows_security", session.lifecycle_group_id)
+    planner._latest_session_start_times[key] = start
+    planner._latest_session_dependent_times[key] = later_dependent
+
+    planner.plan_event(event, "windows_event_security")
+
+    assert event.source_timing is not None
+    rendered = event.source_timing.finalized_times[
+        endpoint_event_render_key("windows_security", host.hostname, "base")
+    ]
+    assert abs((rendered - event_time).total_seconds()) < 1
+    assert planner._latest_session_dependent_times[key] == later_dependent
+
+
 def test_process_create_does_not_follow_later_session_dependent() -> None:
     """A retained session frontier cannot move a prerequisite process start later."""
 
@@ -3491,3 +3543,85 @@ def test_migrated_emitters_do_not_use_local_timing_helpers() -> None:
     for path in migrated_files:
         text = path.read_text(encoding="utf-8")
         assert not any(marker in text for marker in forbidden), path
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "process_exec",
+        "process_audit_bind",
+        "process_privilege_drop",
+        "process_service_drop",
+        "process_job_control",
+    ],
+)
+@pytest.mark.parametrize("canonical_gap_ms", [8, 55, 140])
+def test_ecar_process_state_changes_preserve_canonical_elapsed_time(
+    event_type: str, canonical_gap_ms: int
+) -> None:
+    planner = SourceTimingPlanner()
+    host = HostContext(
+        hostname="MAC-TIMING",
+        ip="10.0.0.30",
+        os="macOS 27",
+        os_category="macos",
+        system_type="workstation",
+    )
+    canonical_start = _base_time()
+    before = _process_identity(
+        hostname=host.hostname,
+        pid=42171,
+        parent_pid=42155,
+        started_at=canonical_start,
+        image="/bin/zsh",
+    )
+    changed_at = canonical_start + timedelta(milliseconds=canonical_gap_ms)
+    after = (
+        replace(
+            before,
+            execution_ordinal=1,
+            executed_at=changed_at,
+            lifetime_image=before.image,
+            image="/usr/bin/id",
+        )
+        if event_type == "process_exec"
+        else before
+    )
+    creation = OccurrenceBuilder(
+        timestamp=canonical_start,
+        event_type="process_fork",
+        src_host=host,
+        process=_context_from_identity(before),
+        identity_plan=EventIdentityPlan(subject=before),
+    )
+    transition = OccurrenceBuilder(
+        timestamp=changed_at,
+        event_type=event_type,
+        src_host=host,
+        process=_context_from_identity(after),
+        identity_plan=EventIdentityPlan(subject=after, actor=before),
+    )
+
+    planner.plan_event(creation, "ecar")
+    planner.plan_event(transition, "ecar")
+    observed_start = creation.source_timing.finalized_times[
+        endpoint_event_render_key("ecar", host.hostname, "process_create")
+    ]
+    observed_change = transition.source_timing.finalized_times[
+        endpoint_event_render_key("ecar", host.hostname, "base")
+    ]
+
+    # One coherent collector queue preserves short native intervals. Its smooth
+    # source component and bounded event residual may change elapsed time by a
+    # few milliseconds, rather than forcing every exec to the ordering floor.
+    assert abs((observed_change - observed_start).total_seconds() * 1000 - canonical_gap_ms) < 4
+    assert observed_change > observed_start
+    assert creation.source_timing.canonical_timestamp == canonical_start
+    assert transition.source_timing.canonical_timestamp == changed_at
+
+
+def test_ecar_file_events_retain_their_independent_source_profile() -> None:
+    event = OccurrenceBuilder(timestamp=_base_time(), event_type="file_read")
+    assert SourceTimingPlanner._endpoint_event_source_key(event, "ecar", "base") == (
+        "source.ecar_dependent_after_process_create"
+    )

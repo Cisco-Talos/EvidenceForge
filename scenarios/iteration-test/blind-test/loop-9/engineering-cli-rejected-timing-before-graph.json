@@ -1,0 +1,24 @@
+{
+  "scope": "Rejecting ordinary CLI parent admission; no prepared-planning atomicity is asserted by this API. Existing bootstrap bound computation already records two timing samples, candidate records its lead too. No source rows or desktop process graph are created.",
+  "before": {
+    "pid": 0,
+    "state_digest_unchanged": false,
+    "sample_counts": {
+      "windows.session.desktop_shell_start": 1,
+      "windows.session.user_manager_start": 1
+    },
+    "emitted": false,
+    "desktop_bootstrapped": false
+  },
+  "candidate": {
+    "pid": 0,
+    "state_digest_unchanged": false,
+    "sample_counts": {
+      "windows.cli.parent_before_command": 1,
+      "windows.session.desktop_shell_start": 1,
+      "windows.session.user_manager_start": 1
+    },
+    "emitted": false,
+    "desktop_bootstrapped": false
+  }
+}

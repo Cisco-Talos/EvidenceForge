@@ -89,6 +89,126 @@ def test_user():
     return User(username="john.smith", full_name="John Smith", email="john.smith@corp.com")
 
 
+@pytest.mark.parametrize("username", ["WKS-01$", "WKS-01$@CORP.LOCAL"])
+def test_valid_machine_tgt_is_reused_for_all_implicit_requests(
+    activity_gen: ActivityGenerator, username: str
+) -> None:
+    now = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    activity_gen._remember_kerberos_tgt_cache(
+        username, "10.10.10.50", "DC-01", now, random.Random(22)
+    )
+
+    assert not any(
+        activity_gen._should_emit_visible_kerberos_tgt(
+            username,
+            "::ffff:10.10.10.50",
+            "dc-01.",
+            now + timedelta(minutes=5),
+            random.Random(seed),
+        )
+        for seed in range(100)
+    )
+
+
+def test_expired_machine_tgt_requires_a_new_visible_exchange(
+    activity_gen: ActivityGenerator,
+) -> None:
+    now = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    activity_gen._remember_kerberos_tgt_cache(
+        "WKS-01$", "10.10.10.50", "DC-01", now - timedelta(hours=12), random.Random(22)
+    )
+
+    assert activity_gen._should_emit_visible_kerberos_tgt(
+        "WKS-01$", "10.10.10.50", "DC-01", now, random.Random(3)
+    )
+
+
+@pytest.mark.parametrize("mode,expected_tgt", [("auto", False), ("pair", True), ("tgt", True)])
+def test_cached_machine_tgt_preserves_explicit_exchange_intent(
+    activity_gen: ActivityGenerator,
+    mock_emitters: dict[str, Mock],
+    windows_system: System,
+    dc_system: System,
+    mode: str,
+    expected_tgt: bool,
+) -> None:
+    now = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    activity_gen._ip_to_system = {windows_system.ip: windows_system, dc_system.ip: dc_system}
+    activity_gen._remember_kerberos_tgt_cache(
+        "WKS-01$",
+        windows_system.ip,
+        dc_system.hostname,
+        now - timedelta(minutes=5),
+        random.Random(22),
+    )
+
+    activity_gen.generate_connection(
+        src_ip=windows_system.ip,
+        dst_ip=dc_system.ip,
+        time=now,
+        dst_port=88,
+        proto="tcp",
+        service="kerberos",
+        source_system=windows_system,
+        duration=0.5,
+        kerberos_audit_mode=mode,
+        kerberos_audit_username="WKS-01$",
+    )
+
+    event_types = {
+        call.args[0].event_type
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+    }
+    assert ("kerberos_tgt" in event_types) is expected_tgt
+    assert ("kerberos_service" in event_types) is (mode != "tgt")
+
+
+@pytest.mark.parametrize("modeled_source", [False, True])
+def test_machine_logon_reuses_cached_tgt_before_selecting_transport(
+    activity_gen: ActivityGenerator,
+    mock_emitters: dict[str, Mock],
+    windows_system: System,
+    dc_system: System,
+    modeled_source: bool,
+) -> None:
+    now = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    activity_gen._ip_to_system = {dc_system.ip: dc_system}
+    if modeled_source:
+        activity_gen._ip_to_system[windows_system.ip] = windows_system
+    activity_gen._remember_kerberos_tgt_cache(
+        "WKS-01$",
+        windows_system.ip,
+        dc_system.hostname,
+        now - timedelta(minutes=5),
+        random.Random(22),
+    )
+
+    with patch.object(
+        activity_gen, "generate_connection", wraps=activity_gen.generate_connection
+    ) as connect:
+        activity_gen.generate_machine_account_logon(
+            hostname=windows_system.hostname,
+            machine_username="WKS-01$",
+            dc_hostname=dc_system.hostname,
+            source_ip=windows_system.ip,
+            dc_ip=dc_system.ip,
+            time=now,
+        )
+
+    event_types = {
+        call.args[0].event_type
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+    }
+    assert "kerberos_tgt" not in event_types
+    assert {"kerberos_service", "machine_logon"} <= event_types
+    modes = [
+        call.kwargs["kerberos_audit_mode"]
+        for call in connect.call_args_list
+        if call.kwargs.get("dst_port") == 88
+    ]
+    assert modes == (["tgs"] if modeled_source else [])
+
+
 class TestDCKerberosOnLogon:
     """DC emits 4768 (TGT) and 4769 (service ticket) for domain Kerberos logons."""
 

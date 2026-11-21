@@ -14,6 +14,9 @@ from evidenceforge.events.contexts import AuthContext, ProcessContext
 from evidenceforge.events.dispatcher import EventDispatcher, PreparedDispatchStateIntent
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import ActionLifecycleContext
+from evidenceforge.generation.actions.windows_process_security import (
+    prepare_windows_process_creation_security,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.activity.process_helpers import _SYSTEM_ACCOUNTS as _SYSTEM_ACCOUNTS
 from evidenceforge.generation.activity.process_helpers import (
@@ -1060,6 +1063,9 @@ class ProcessParentResolver:
                     phase="start",
                     parent_group_id=process_identity.parent_lifecycle_group_id or None,
                 ),
+            )
+            prepare_windows_process_creation_security(
+                event, creator=process_plan.parent_identity, sid_for=self.identity.user_sid
             )
             with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
                 prepared_dispatch = self.dispatcher.prepare_builder(

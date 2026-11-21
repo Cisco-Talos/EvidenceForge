@@ -259,6 +259,46 @@ def _tcp_history_consistent_with_payload(
     return "".join(marker for marker in history if marker not in absent_markers)
 
 
+def _tcp_state_supports_application_payload(conn_state: str | None) -> bool:
+    """Return whether TCP can carry application data in the observed state."""
+    return conn_state in {"SF", "S1", "S2", "S3", "RSTO", "RSTR", "OTH"}
+
+
+def _tcp_application_exchange_eligible(
+    proto: str,
+    conn_state: str | None,
+    orig_bytes: int | None,
+    resp_bytes: int | None,
+) -> bool:
+    """Admit automatic exchanges without inventing progress for probes or fragments."""
+    return proto == "tcp" and (
+        conn_state == "SF"
+        or (
+            conn_state in {"S2", "S3", "RSTO", "RSTR"}
+            and (orig_bytes or 0) > 0
+            and (resp_bytes or 0) > 0
+        )
+    )
+
+
+def _tcp_history_with_application_payload(
+    history: str | None, orig_bytes: int | None, resp_bytes: int | None
+) -> str | None:
+    """Retain known application payload before the observed TCP terminal flags."""
+    if not history or history == "-":
+        return history
+    terminal_index = next(
+        (index for index, marker in enumerate(history) if marker in "FfRr"), len(history)
+    )
+    prefix, terminal = history[:terminal_index], history[terminal_index:]
+    if (orig_bytes or 0) > 0 and "D" not in history:
+        index = prefix.index("d") if "d" in prefix else len(prefix)
+        prefix = f"{prefix[:index]}D{prefix[index:]}"
+    if (resp_bytes or 0) > 0 and "d" not in history:
+        prefix += "d"
+    return prefix + terminal
+
+
 def _tcp_service_requires_client_payload_first(service: str | None, dst_port: int) -> bool:
     """Return whether responder payload requires prior originator payload."""
     normalized_service = (service or "").strip().lower()

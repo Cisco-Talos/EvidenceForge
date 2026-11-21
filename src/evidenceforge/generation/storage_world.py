@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import fnmatch
+import math
 import random
 from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,6 +19,11 @@ from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 from evidenceforge.config.provider import _register_trusted_derived_cache
 from evidenceforge.generation.activity.smb_profiles import advertised_filesystem_default
+from evidenceforge.generation.activity.storage_file_sizes import StorageFileSizePolicy
+from evidenceforge.generation.activity.storage_policy_repository import (
+    PolicyRepositoryLayout,
+    policy_repository_files,
+)
 from evidenceforge.models.scenario import (
     Scenario,
     SmbFileSelector,
@@ -459,6 +465,17 @@ class StorageWorldModel:
 class _StorageWorldCompiler:
     def __init__(self, scenario: Scenario) -> None:
         self.scenario = scenario
+        catalog_config = _load_catalog_config()
+        self._file_size_policy: StorageFileSizePolicy | None = (
+            StorageFileSizePolicy.model_validate(catalog_config["file_size_policy"])
+            if "file_size_policy" in catalog_config
+            else None
+        )
+        self._policy_repository: PolicyRepositoryLayout | None = (
+            PolicyRepositoryLayout.model_validate(catalog_config["policy_repository"])
+            if "policy_repository" in catalog_config
+            else None
+        )
         self.config = scenario.environment.storage
         self.systems = {
             system.hostname.casefold(): system for system in scenario.environment.systems
@@ -751,6 +768,24 @@ class _StorageWorldCompiler:
         for share in explicit_shares:
             self.shares.append(self._compile_share(system, share, audit))
 
+    def _policy_repository_role(
+        self, system: System, share_name: str, preset: str
+    ) -> Literal["sysvol", "netlogon"] | None:
+        """Identify native repository purpose only where the world declares it."""
+
+        layout = self._policy_repository
+        if (
+            layout is None
+            or not layout.enabled
+            or not self._is_windows(system)
+            or not self._is_dc(system)
+            or not self.scenario.environment.domain
+            or preset != "dc_policy"
+        ):
+            return None
+        role = share_name.casefold()
+        return role if role in {"sysvol", "netlogon"} else None
+
     def _generated_shares(
         self,
         system: System,
@@ -760,12 +795,20 @@ class _StorageWorldCompiler:
     ) -> list[StorageShareConfig]:
         _ = audit
         if preset == "dc_policy":
+            layout = self._policy_repository
+            domain = self.scenario.environment.domain
+            sysvol_root = "SYSVOL"
+            netlogon_root = "SYSVOL\\scripts"
+            if self._policy_repository_role(system, "SYSVOL", preset) is not None:
+                assert layout is not None and domain is not None
+                sysvol_root = layout.root("sysvol", domain)
+                netlogon_root = layout.root("netlogon", domain)
             return [
                 StorageShareConfig(
                     id="sysvol",
                     name="SYSVOL",
                     volume=volume,
-                    root="SYSVOL",
+                    root=sysvol_root,
                     preset="dc_policy",
                     access=self._default_access(preset),
                 ),
@@ -773,7 +816,7 @@ class _StorageWorldCompiler:
                     id="netlogon",
                     name="NETLOGON",
                     volume=volume,
-                    root="SYSVOL\\scripts",
+                    root=netlogon_root,
                     preset="dc_policy",
                     access=self._default_access(preset),
                 ),
@@ -919,6 +962,9 @@ class _StorageWorldCompiler:
                 share.preset,
                 population,
                 share.seed_files,
+                policy_repository_role=self._policy_repository_role(
+                    system, share.name, share.preset
+                ),
             )
             if requested_count > realizable_count:
                 requested_file_count = requested_count
@@ -1029,7 +1075,13 @@ class _StorageWorldCompiler:
         preset: str,
         population: str,
         seeds: list[StorageSeedFileConfig],
+        *,
+        policy_repository_role: Literal["sysvol", "netlogon"] | None = None,
     ) -> tuple[tuple[CompiledStorageFile, ...], int, int]:
+        if policy_repository_role is not None:
+            return self._compile_policy_catalog(
+                share_ref, population, seeds, role=policy_repository_role
+            )
         data = _load_catalog_config()
         profile = data["profiles"][preset]
         counts = data["population_counts"]
@@ -1136,6 +1188,80 @@ class _StorageWorldCompiler:
             realizable_count,
         )
 
+    def _compile_policy_catalog(
+        self,
+        share_ref: str,
+        population: str,
+        seeds: list[StorageSeedFileConfig],
+        *,
+        role: Literal["sysvol", "netlogon"],
+    ) -> tuple[tuple[CompiledStorageFile, ...], int, int]:
+        """Combine authoritative seeds with one finite purpose-aware population."""
+
+        layout = self._policy_repository
+        domain = self.scenario.environment.domain
+        if layout is None or not layout.enabled or domain is None:
+            raise ValueError("policy catalog compilation requires an enabled domain layout")
+        data = _load_catalog_config()
+        counts = data["population_counts"]
+        configured = int(
+            counts["auto"].get("dc_policy", 64) if population == "auto" else counts[population]
+        )
+        candidates = policy_repository_files(
+            layout, role=role, domain=domain, scope=self.scenario.name
+        )
+        candidate_paths = {file.path.casefold() for file in candidates}
+        external = sum(seed.path.casefold() not in candidate_paths for seed in seeds)
+        realizable = len(candidates) + external
+        requested = max(configured, len(seeds))
+        target = min(requested, realizable)
+        profile = data["profiles"]["dc_policy"]
+        files = [
+            CompiledStorageFile(
+                file_id=self._file_id(share_ref, seed.path),
+                share=share_ref,
+                path=seed.path,
+                size_bytes=seed.size_bytes,
+                mime_type=self._mime_for_path(profile, seed.path),
+                tags=tuple(seed.tags),
+                seed_ref=seed.ref,
+            )
+            for seed in seeds
+        ]
+        used = {seed.path.casefold() for seed in seeds}
+        for file in candidates:
+            if len(files) >= target:
+                break
+            if file.path.casefold() in used:
+                continue
+            path_parts = PureWindowsPath(file.path).parts
+            directories = path_parts[3:-1] if role == "sysvol" else path_parts[:-1]
+            tags = tuple(
+                dict.fromkeys(
+                    (
+                        "dc_policy",
+                        "policy_repository",
+                        role,
+                        "policies" if role == "sysvol" else "scripts",
+                        *(directory.casefold() for directory in directories),
+                    )
+                )
+            )
+            files.append(
+                CompiledStorageFile(
+                    file_id=self._file_id(share_ref, file.path),
+                    share=share_ref,
+                    path=file.path,
+                    size_bytes=file.size_bytes,
+                    mime_type=file.mime_type,
+                    tags=tags,
+                )
+            )
+            used.add(file.path.casefold())
+        if len(files) != target:
+            raise ValueError(f"policy catalog capacity mismatch for {share_ref}")
+        return tuple(sorted(files, key=lambda file: file.path.casefold())), requested, realizable
+
     @staticmethod
     def _directory_variants(profile: dict[str, Any]) -> dict[str, str]:
         """Return case-insensitively unique directory variants in authored order."""
@@ -1216,13 +1342,28 @@ class _StorageWorldCompiler:
                 return str(entry["mime"])
         return "application/octet-stream"
 
-    @staticmethod
-    def _file_size(rng: random.Random, extension: str, preset: str) -> int:
-        if preset == "backup" or extension in {".vhdx", ".bak"}:
-            return int(10 ** rng.uniform(7.0, 9.2))
-        if preset == "software" or extension in {".msi", ".exe", ".cab", ".zip", ".7z"}:
-            return int(10 ** rng.uniform(5.3, 8.2))
-        return int(10 ** rng.uniform(3.0, 7.1))
+    def _file_size(self, rng: random.Random, extension: str, preset: str) -> int:
+        policy = self._file_size_policy
+        if policy is None:
+            # Historical frozen configuration did not declare a sizing policy.
+            # Retain its exact supports and RNG consumption rather than reading
+            # newer package defaults outside that configuration snapshot.
+            if preset == "backup" or extension in {".vhdx", ".bak"}:
+                minimum_log, maximum_log = 7.0, 9.2
+            elif preset == "software" or extension in {".msi", ".exe", ".cab", ".zip", ".7z"}:
+                minimum_log, maximum_log = 5.3, 8.2
+            else:
+                minimum_log, maximum_log = 3.0, 7.1
+            support = None
+        else:
+            support = policy.profile_for(extension=extension, preset=preset)
+            minimum_log = math.log10(support.minimum_bytes)
+            maximum_log = math.log10(support.maximum_bytes)
+        # One existing catalog-scoped draw; uniform log size is nonuniform bytes.
+        size = int(10 ** rng.uniform(minimum_log, maximum_log))
+        if support is not None:
+            return max(support.minimum_bytes, min(support.maximum_bytes, size))
+        return size
 
     @staticmethod
     def _file_id(share_ref: str, path: str) -> str:

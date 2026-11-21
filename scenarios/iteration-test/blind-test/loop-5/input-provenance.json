@@ -1,0 +1,32 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 5,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 538,
+  "behavior_surface_sha256": "044399841629e73f6d7168bfca424efc6e7b93e386288c2e527bff5b651ebcd7",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "canonical application progress independent of TCP teardown"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "canonical_native_projection_and_budgets": "197 passed",
+    "proxy_identity_leases_terminal_ids_siblings": "137 passed, 2 deselected",
+    "native_projection_smoke": "8 TLS/HTTP reset/half-close cases; rows within preserved transport and short-duration bounds",
+    "ruff_check": "PASS",
+    "ruff_format": "PASS",
+    "behavior_surface": "PASS",
+    "routine_suite": "Not completed; no full-suite or release-readiness claim."
+  }
+}

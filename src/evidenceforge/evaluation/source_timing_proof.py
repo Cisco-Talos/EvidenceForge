@@ -124,19 +124,33 @@ def verify_process_timing(
         if row.kind == "process_terminate"
         else "source.ecar_dependent_after_process_create"
     )
+    policies = {policy}
+    if row.kind in {
+        "process_exec",
+        "process_audit_bind",
+        "process_privilege_drop",
+        "process_service_drop",
+        "process_job_control",
+    }:
+        # Process-state observations may share the creation collector queue.
+        # Retain the historical dependent queue for older frozen receipts;
+        # neither choice changes the required phase, identity or predecessors.
+        policies.add("source.ecar_process_create")
     errors = []
     if (
         receipt.phase != row.kind
         or receipt.canonical_time != row.time
         or receipt.object_id != process.get("object_id")
         or receipt.execution_id != process.get("execution_id")
-        or receipt.policy != policy
+        or receipt.policy not in policies
         or expectation.expected_time is None
         # Runtime-owned endpoint receipts name the final visible timestamp,
         # after observation delay and lifecycle constraints have been applied.
         or abs((expectation.expected_time - receipt.native_time).total_seconds()) > 0.000001
     ):
         errors.append("process_timing_identity_disagreement")
+    if receipt.policy in policies:
+        policy = receipt.policy
     rules = load_timing_profiles().get("relationships", {})
     maximum = float(rules.get(policy, {}).get("max_ms", 100)) / 1000 + 0.008
     upper = row.time.timestamp() + 2

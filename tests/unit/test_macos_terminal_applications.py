@@ -183,9 +183,16 @@ def test_assigned_terminal_owns_commands_and_preserves_complete_coverage_boundar
             if row.event.exec.target.audit_token.pid == command.pid
         )
         assert target.audit_token.pid == command.pid
-        assert target.audit_token.pidversion == command.audit_pid_version
+        assert target.audit_token.pidversion == state._macos_audit_identity_intents.resolve(
+            system.hostname, command.audit_pid_version
+        )
         assert target.responsible_audit_token.pid == terminal.pid
-        assert target.responsible_audit_token.pidversion == terminal.audit_pid_version
+        assert (
+            target.responsible_audit_token.pidversion
+            == state._macos_audit_identity_intents.resolve(
+                system.hostname, terminal.audit_pid_version
+            )
+        )
     else:
         assert not records
 

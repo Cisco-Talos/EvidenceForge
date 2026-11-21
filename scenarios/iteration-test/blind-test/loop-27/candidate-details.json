@@ -1,0 +1,16 @@
+{
+  "selected_family": [
+    "Exact Mac SSH descendant close phase allocation within existing transport and receiver anchors"
+  ],
+  "code_change_for_loop": true,
+  "fix_classification": "adapter_to_family_model",
+  "focused_validation": {
+    "before": "Actual exact Mac close-owner control FAIL against564: successive shell/child/receiver gaps(680299,680299)us, while correct postorder/live ownership/fixed receiver constraints pass. Prior24native census2/2equal close chains.",
+    "scope": "Reuse pure bounded phase allocator for exact Mac SSH close only. Conditional positive transition weights use existing configured Mac termination support. Existing continuation freezes times before source publication; transport/receiver/session anchors, postorder and dependency/hold frontiers retained. Linux exact/compatibility behavior unchanged. No new State/cache/quota/retention/RNG site or empirical latency calibration claim.",
+    "central": "129PASS16.74s including real exact close control, all close lost-return/journal/filtered owner, logout/retention/exec siblings, pure allocator and manifest",
+    "native": "3slow public receiver casesPASS11.75s: authored Mac source/full endpoint; Linux source/network-only; Windows source/full endpoint",
+    "rng": "3PASS7.23s unchanged exact census",
+    "config": "105files zero issues; existing Mac termination window reused",
+    "ruff": "check/format1689PASS"
+  }
+}

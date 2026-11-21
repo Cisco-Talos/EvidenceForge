@@ -1,0 +1,55 @@
+{
+  "scope": "Engineering automatic metadata sampler probe on actual compiler, before policy repair; not additional rendered observations or empirical real-file calibration.",
+  "owner": "_StorageWorldCompiler._file_size",
+  "samples": {
+    "dc_policy:.ini": {
+      "count": 500,
+      "minimum": 1002,
+      "median": 86547.0,
+      "maximum": 12316196,
+      "above_1MiB": 115
+    },
+    "dc_policy:.xml": {
+      "count": 500,
+      "minimum": 1002,
+      "median": 86547.0,
+      "maximum": 12316196,
+      "above_1MiB": 115
+    },
+    "dc_policy:.pol": {
+      "count": 500,
+      "minimum": 1002,
+      "median": 86547.0,
+      "maximum": 12316196,
+      "above_1MiB": 115
+    },
+    "software:.ps1": {
+      "count": 500,
+      "minimum": 199890,
+      "median": 4680072.5,
+      "maximum": 156050061,
+      "above_1MiB": 381
+    },
+    "software:.exe": {
+      "count": 500,
+      "minimum": 199890,
+      "median": 4680072.5,
+      "maximum": 156050061,
+      "above_1MiB": 381
+    },
+    "backup:.log": {
+      "count": 500,
+      "minimum": 10013831,
+      "median": 109522071.0,
+      "maximum": 1566353885,
+      "above_1MiB": 500
+    },
+    "backup:.zip": {
+      "count": 500,
+      "minimum": 10013831,
+      "median": 109522071.0,
+      "maximum": 1566353885,
+      "above_1MiB": 500
+    }
+  }
+}

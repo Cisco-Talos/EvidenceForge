@@ -1,0 +1,62 @@
+{
+  "scope": "Engineering-only intent ownership probe using resolved authored campaign source/domain. Sensor observations are not independent physical queries; unrelated TXT can be genuine and is counted descriptively, not automatically treated as a defect.",
+  "campaigns": [
+    {
+      "domain": "ns1.westbridge-services.cloud",
+      "source": "10.10.2.30"
+    }
+  ],
+  "sensors": {
+    "zeek-core": {
+      "sha256": "2614e2a7c2b41dcf3a19924d36e5ba7807bb534f6c847d6fa3f71cc6dd8188aa",
+      "queries_by_type": {
+        "SRV": 102,
+        "A": 2381,
+        "AAAA": 298,
+        "PTR": 162,
+        "SOA": 2,
+        "MX": 7,
+        "NS": 6,
+        "TXT": 207
+      },
+      "campaign_rows_by_source": {
+        "10.10.2.30": 206
+      },
+      "campaign_wrong_source": [],
+      "other_txt_by_source": {
+        "10.10.2.30": 1
+      },
+      "other_txt_hour_bins": {
+        "10.10.2.30": {
+          "498234": 1
+        }
+      }
+    },
+    "zeek-db": {
+      "sha256": "9037d9cf0ccc58bf3fa2211a89acc6e88f5993cdf1f52bce08d014df603ab84d",
+      "queries_by_type": {
+        "A": 32,
+        "PTR": 4,
+        "SRV": 6,
+        "AAAA": 5
+      },
+      "campaign_rows_by_source": {},
+      "campaign_wrong_source": [],
+      "other_txt_by_source": {},
+      "other_txt_hour_bins": {}
+    },
+    "zeek-dmz": {
+      "sha256": "575cfee2d85b90da911bf9460d414986dbc561f5e34913bb5dd262a10c8aeb15",
+      "queries_by_type": {
+        "A": 939,
+        "AAAA": 122,
+        "PTR": 70,
+        "SRV": 9
+      },
+      "campaign_rows_by_source": {},
+      "campaign_wrong_source": [],
+      "other_txt_by_source": {},
+      "other_txt_hour_bins": {}
+    }
+  }
+}

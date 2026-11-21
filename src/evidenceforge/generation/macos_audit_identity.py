@@ -26,6 +26,8 @@ from evidenceforge.utils.time import ensure_utc
 type AuditKey = tuple[str, int]
 type AuditFact = tuple[datetime, str]
 
+_IDENTITY_PAGE_ROWS = 1024
+
 
 def _cleanup_ledger(db: sqlite3.Connection, directory: tempfile.TemporaryDirectory[str]) -> None:
     """Release native handles before removing the private canonical ledger."""
@@ -151,26 +153,64 @@ class MacosAuditIdentityLedger(MutableMapping[AuditKey, AuditFact]):
 
     def drain_before_planning(self) -> None:
         """Bound resident committed history by a buffer plus the current action cohort."""
-        if len(self._pending) >= 1024:
+        if len(self._pending) >= _IDENTITY_PAGE_ROWS:
             self.flush()
 
     def canonical_snapshot(self) -> tuple[tuple[AuditKey, AuditFact], ...]:
         """Return logical facts for expensive offline atomicity diagnostics only."""
         return tuple(sorted(self.items()))
 
-    def seal(self) -> None:
-        """Assign generations from all committed canonical facts exactly once."""
+    def seal(self, *, history_offset: Callable[[str, datetime], int] | None = None) -> None:
+        """Resolve chronological native generations from canonical host history.
+
+        Missing history preserves the legacy dense map. Supplied offsets count
+        hidden births, not source rows, and must be monotone within each host.
+        Resolution commits atomically; a failed view can be retried without a
+        partially published identity namespace.
+        """
         if self._sealed:
             return
+        if history_offset is not None and not callable(history_offset):
+            raise StateError("Native generation history must be a canonical callable view")
         self.flush()
         if self._db is not None:
             with self._db:
                 self._db.execute("BEGIN")
-                self._db.execute(
-                    "CREATE TABLE resolved AS SELECT host, handle, "
-                    "row_number() OVER (PARTITION BY host ORDER BY at, handle) AS version "
-                    "FROM identities"
-                )
+                if history_offset is None:
+                    self._db.execute(
+                        "CREATE TABLE resolved AS SELECT host, handle, "
+                        "row_number() OVER (PARTITION BY host ORDER BY at, handle) AS version "
+                        "FROM identities"
+                    )
+                else:
+                    self._db.execute(
+                        "CREATE TABLE resolved (host TEXT, handle INTEGER, version INTEGER)"
+                    )
+                    cursor = self._db.execute(
+                        "SELECT host, handle, at, "
+                        "row_number() OVER (PARTITION BY host ORDER BY at, handle) "
+                        "FROM identities ORDER BY host, at, handle"
+                    )
+                    last_host: str | None = None
+                    previous_offset = 0
+                    while rows := cursor.fetchmany(_IDENTITY_PAGE_ROWS):
+                        resolved: list[tuple[str, int, int]] = []
+                        for host, handle, at, ordinal in rows:
+                            offset = history_offset(host, datetime.fromisoformat(at))
+                            if host != last_host:
+                                previous_offset = 0
+                                last_host = host
+                            if type(offset) is not int or offset < previous_offset:
+                                raise StateError(
+                                    "Native generation history must be nonnegative integer "
+                                    "and nondecreasing within each host"
+                                )
+                            generation = ordinal + offset
+                            if not 0 < generation < 2**32:
+                                raise StateError("Native macOS process generation is exhausted")
+                            resolved.append((host, handle, generation))
+                            previous_offset = offset
+                        self._db.executemany("INSERT INTO resolved VALUES (?, ?, ?)", resolved)
                 self._db.execute("CREATE UNIQUE INDEX resolved_key ON resolved(host, handle)")
         self._sealed = True
 

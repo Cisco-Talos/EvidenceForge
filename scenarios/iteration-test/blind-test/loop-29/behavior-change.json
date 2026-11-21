@@ -1,0 +1,15 @@
+{
+  "revision": 567,
+  "id": "unknown-source-default-http-client-presentation-profile",
+  "impact": "localized",
+  "domains": [
+    "http-client-presentation",
+    "unknown-source-default-policy"
+  ],
+  "formats": [
+    "zeek_http",
+    "web_access",
+    "proxy"
+  ],
+  "summary": "Select optional generic HTTP client presentations for unknown source hosts through one default pool adapter. Preserve explicit/absent headers, known-host policy and frozen catalogs without the optional profile."
+}

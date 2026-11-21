@@ -4042,7 +4042,13 @@ class TestHttpContextPopulation:
         assert event.network.service == ""
         assert event.protocol.ssl is None
 
-    def test_caller_provided_http_forces_conn_accounting_consistency(self, activity_gen):
+    @pytest.mark.parametrize(
+        "requested_state,expected_state", [("S1", "S1"), ("SF", "SF"), ("S0", "SF")]
+    )
+    def test_caller_provided_http_forces_conn_accounting_consistency(
+        self, activity_gen, requested_state, expected_state
+    ):
+        """HTTP payloads need established TCP, but do not require observed teardown."""
         gen, events = activity_gen
 
         gen.generate_connection(
@@ -4055,7 +4061,7 @@ class TestHttpContextPopulation:
             duration=1.0,
             orig_bytes=0,
             resp_bytes=0,
-            conn_state="S1",
+            conn_state=requested_state,
             http=HttpContext(
                 method="GET",
                 host="example.com",
@@ -4069,7 +4075,7 @@ class TestHttpContextPopulation:
         )
 
         event = events[-1]
-        assert event.network.conn_state == "SF"
+        assert event.network.conn_state == expected_state
         assert event.network.resp_bytes >= event.protocol.http.response_body_len
         assert event.network.resp_pkts > 0
 

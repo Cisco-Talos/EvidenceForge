@@ -112,6 +112,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     complete_native_ssh: bool = False,
     ssh_pty: bool = False,
     native_system_job: bool = False,
+    linux_console: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -494,6 +495,41 @@ def test_short_generation_checkpoint_suspension_and_resume(
         later = {"job-6": "+2h10m", "job-7": "+2h20m", "job-8": "+2h30m", "job-unload": "+2h40m"}
         for entry in scenario_data["storyline"]:
             entry["time"] = later.get(entry["id"], entry["time"])
+    if linux_console:
+        scenario_data["environment"]["systems"][0].update(os="Ubuntu 24.04", type="server")
+        scenario_data["output"]["logs"] = [
+            {"format": "ecar"},
+            {"format": "syslog"},
+            {"format": "zeek"},
+        ]
+        scenario_data["storyline"] = [
+            {
+                "id": name,
+                "time": when,
+                "actor": "test_user",
+                "system": "TEST-01",
+                "activity": "Console lifetime across exact checkpoint recovery",
+                "events": events,
+            }
+            for name, when, events in [
+                ("console-open", "+30m", [{"type": "logon", "logon_type": 2}]),
+                (
+                    "console-after-resume",
+                    "+1h30m",
+                    [
+                        {
+                            "type": "process",
+                            "process_name": "/usr/bin/id",
+                            "command_line": "/usr/bin/id",
+                            "supplementary": "none",
+                        }
+                    ],
+                ),
+                ("console-close", "+1h40m", [{"type": "logoff"}]),
+                ("console-reopen", "+2h10m", [{"type": "logon", "logon_type": 2}]),
+                ("console-final-close", "+2h40m", [{"type": "logoff"}]),
+            ]
+        ]
     scenario = tmp_path / "scenario.yaml"
     scenario.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
     seed = "123" if macos else "42"
@@ -591,6 +627,22 @@ def test_short_generation_checkpoint_suspension_and_resume(
             assert all(len(row) != 32 or row[31] is None for row in head["ssh_lifecycles"]), (
                 "An unauthored continuation must not gain an authored end owner"
             )
+    if linux_console:
+        from evidenceforge.generation.checkpoints.packed import loads
+        from evidenceforge.generation.checkpoints.state_values import decode_state_value
+        from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+        store = IncrementalCheckpointStore(output)
+        recovery = store.recover(read_only=True)
+        head = loads(store.read_head(recovery, "state-manager"))
+        processes = decode_state_value(head["stores"]["_running_processes"])
+        logins = [
+            process
+            for _key, process in processes
+            if process.image == "/bin/login" and process.command_line == "/bin/login -- test_user"
+        ]
+        assert logins and all(process.execution_ordinal == 1 for process in logins)
+        assert all(process.prior_executions[0].image == "/sbin/agetty" for process in logins)
     retained_helpers: set[str] = set()
     if native_system_job:
         from evidenceforge.generation.checkpoints.packed import loads
@@ -893,6 +945,16 @@ def test_short_generation_checkpoint_suspension_and_resume(
             == "/Volumes/team/Reports/plan.txt"
         ]
         assert len(reads) >= 2
+    elif linux_console:
+        assert any(
+            row.get("properties", {}).get("operation") == "exec"
+            and row["properties"].get("image_path") == "/bin/login"
+            for name, content in resumed_files.items()
+            if name.endswith("/ecar.json")
+            for line in content.splitlines()
+            if line
+            for row in (json.loads(line),)
+        )
     elif macos:
         if (
             not denied_launch

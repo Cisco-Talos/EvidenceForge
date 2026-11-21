@@ -23,9 +23,8 @@ def test_every_accepted_ordinary_command_has_one_native_exec(
     tmp_path: Path, scenarios_dir: Path, native: bool, launch: str
 ) -> None:
     expected: list[tuple[ProcessIdentity, tuple[str, ...]]] = []
-    with _engine(
-        tmp_path, scenarios_dir, native=native, chronological=launch == "local"
-    ) as fixture:
+    # Both launch modes publish finalized audit identities, as generation does.
+    with _engine(tmp_path, scenarios_dir, native=native, chronological=True) as fixture:
         engine, target, user, session = fixture
         generator = engine.activity_generator
         terminal: ProcessIdentity | None = None

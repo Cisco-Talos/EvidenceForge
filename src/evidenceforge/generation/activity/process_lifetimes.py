@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Sequence
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
@@ -62,6 +63,7 @@ class LifetimeCondition(BaseModel):
     command_has_all_arguments: tuple[str, ...] = ()
     long_running: bool = False
     interactive_shell: bool = False
+    platforms: tuple[Literal["linux", "macos"], ...] = ()
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -92,9 +94,37 @@ class LifetimeCondition(BaseModel):
             or self.command_has_all_arguments
             or self.long_running
             or self.interactive_shell
+            or self.platforms
         ):
             raise ValueError("a lifetime condition needs at least one predicate")
         return self
+
+
+class IntervalReportSchedule(BaseModel):
+    """Qualified interval/count grammar and completion overhead for finite reports."""
+
+    first_report_immediate: bool
+    options: tuple[str, ...] = ()
+    completion_seconds: LifetimeBounds
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    @field_validator("completion_seconds", mode="before")
+    @classmethod
+    def accept_pair(cls, value: object) -> object:
+        """Accept the compact minimum/maximum range spelling."""
+        return _bounds_from_pair(value)
+
+    @field_validator("options")
+    @classmethod
+    def validate_options(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Only admit distinct literal flags that consume no following operand."""
+        if len(set(values)) != len(values) or any(
+            not value.startswith("-") or any(character.isspace() for character in value)
+            for value in values
+        ):
+            raise ValueError("report options must be unique single-token flags")
+        return values
 
 
 class LifetimeRule(BaseModel):
@@ -102,8 +132,9 @@ class LifetimeRule(BaseModel):
 
     id: str = Field(min_length=1)
     when: tuple[LifetimeCondition, ...] = Field(min_length=1)
-    lifetime: Literal["bounded", "unbounded", "requested-sleep"] = "bounded"
+    lifetime: Literal["bounded", "unbounded", "requested-sleep", "requested-reports"] = "bounded"
     seconds: LifetimeBounds | None = None
+    report_schedule: IntervalReportSchedule | None = None
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -120,6 +151,8 @@ class LifetimeRule(BaseModel):
             raise ValueError(f"rule {self.id!r} is unbounded and must not set seconds")
         if self.lifetime != "unbounded" and self.seconds is None:
             raise ValueError(f"rule {self.id!r} must set seconds")
+        if (self.lifetime == "requested-reports") != (self.report_schedule is not None):
+            raise ValueError("only requested-reports rules require a report_schedule")
         return self
 
 
@@ -311,11 +344,14 @@ def _condition_matches(
     *,
     process_name: str,
     command_line: str,
+    os_category: str | None = None,
 ) -> bool:
     exe_name = executable_basename(process_name)
     command = command_line.lower()
     padded = f" {command} "
     checks: list[bool] = []
+    if condition.platforms:
+        checks.append(os_category in condition.platforms)
     if condition.executables:
         checks.append(exe_name in condition.executables)
     if condition.image_contains:
@@ -336,30 +372,75 @@ def _condition_matches(
     return all(checks)
 
 
-def matching_lifetime_rule(process_name: str, command_line: str) -> LifetimeRule | None:
+def matching_lifetime_rule(
+    process_name: str, command_line: str, *, os_category: str | None = None
+) -> LifetimeRule | None:
     """Return the first rule that classifies a command, if any."""
     for rule in load_process_lifetimes().rules:
         if any(
-            _condition_matches(condition, process_name=process_name, command_line=command_line)
+            _condition_matches(
+                condition,
+                process_name=process_name,
+                command_line=command_line,
+                os_category=os_category,
+            )
             for condition in rule.when
         ):
             return rule
     return None
 
 
-def posix_command_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
+def requested_report_lifetime(
+    process_name: str, command_line: str, *, os_category: str
+) -> tuple[float, float] | None:
+    """Resolve only a qualified literal finite report schedule, without guessing argv."""
+    wrapped = unwrapped_command(process_name, command_line)
+    if wrapped is not None:
+        return requested_report_lifetime(*wrapped, os_category=os_category)
+    rule = matching_lifetime_rule(process_name, command_line, os_category=os_category)
+    if rule is None or rule.report_schedule is None:
+        return None
+    try:
+        argv = shlex.split(command_line)
+    except ValueError:
+        return None
+    if not argv or executable_basename(argv[0]) != executable_basename(process_name):
+        return None
+    operands = argv[1:]
+    while operands and operands[0] in rule.report_schedule.options:
+        operands = operands[1:]
+    if len(operands) != 2 or any(
+        re.fullmatch(r"[1-9][0-9]*", operand) is None for operand in operands
+    ):
+        return None
+    interval, count = (Decimal(operand) for operand in operands)
+    waits = count - int(rule.report_schedule.first_report_immediate)
+    elapsed = interval * waits
+    overhead = rule.report_schedule.completion_seconds
+    if elapsed > timedelta.max.total_seconds() - overhead.maximum:
+        return None
+    return (float(elapsed) + overhead.minimum, float(elapsed) + overhead.maximum)
+
+
+def posix_command_lifetime(
+    process_name: str, command_line: str, *, os_category: str | None = None
+) -> tuple[float, float] | None:
     """Return a POSIX foreground command's lifetime range, or ``None`` when unbounded."""
     wrapped = unwrapped_command(process_name, command_line)
     if wrapped is not None:
-        return posix_command_lifetime(*wrapped)
+        return posix_command_lifetime(*wrapped, os_category=os_category)
     table = load_process_lifetimes()
-    rule = matching_lifetime_rule(process_name, command_line)
+    rule = matching_lifetime_rule(process_name, command_line, os_category=os_category)
     if rule is None:
         return table.default_seconds.as_tuple()
     if rule.lifetime == "unbounded":
         return None
     if rule.lifetime == "requested-sleep":
         requested = _requested_sleep_lifetime(command_line)
+        if requested is not None:
+            return requested
+    if rule.lifetime == "requested-reports" and os_category is not None:
+        requested = requested_report_lifetime(process_name, command_line, os_category=os_category)
         if requested is not None:
             return requested
     if rule.seconds is None:
@@ -369,6 +450,7 @@ def posix_command_lifetime(process_name: str, command_line: str) -> tuple[float,
 
 __all__ = [
     "InteractiveShells",
+    "IntervalReportSchedule",
     "LifetimeBounds",
     "LifetimeCondition",
     "LifetimeRule",
@@ -381,5 +463,6 @@ __all__ = [
     "matching_lifetime_rule",
     "numeric_sleep_seconds",
     "posix_command_lifetime",
+    "requested_report_lifetime",
     "unwrapped_command",
 ]

@@ -327,6 +327,25 @@ def handle_process(
                 process_name,
                 process_command_line,
             )
+        if reserved_start_time is None and explicit_parent is None:
+            prepare_owner = getattr(
+                type(self.activity_generator), "_prepare_linux_authored_foreground_owner", None
+            )
+            prepared_owner = (
+                prepare_owner(
+                    self.activity_generator,
+                    system=system,
+                    user=process_actor,
+                    logon_id=process_logon_id,
+                    time=time,
+                    process_name=process_name,
+                    command_line=process_command_line,
+                )
+                if callable(prepare_owner)
+                else None
+            )
+            if prepared_owner is not None:
+                parent_pid, reserved_start_time = prepared_owner
         if reserved_start_time is None:
             malicious_event["process_name"] = process_name
             malicious_event["command_line"] = command_line

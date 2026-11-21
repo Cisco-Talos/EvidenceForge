@@ -1857,7 +1857,8 @@ class TestDnsTunnelEventSpec:
         )
 
         assert any(item["dns"].query.endswith("tunnel.example.test") for item in captured)
-        assert any(not item["dns"].query.endswith("tunnel.example.test") for item in captured)
+        assert all(item["dns"].query.endswith("tunnel.example.test") for item in captured)
+        assert {item["src_ip"] for item in captured} == {source.ip}
         assert all(item["time"] >= start for item in captured)
         assert all(item["time"] < fence for item in captured)
 
@@ -2030,7 +2031,7 @@ class TestDnsTunnelEventSpec:
         assert event["total_queries"] > 0
         assert emitted
         assert any(item.dns.query.endswith("tunnel.example.test") for item in emitted)
-        assert any(not item.dns.query.endswith("tunnel.example.test") for item in emitted)
+        assert all(item.dns.query.endswith("tunnel.example.test") for item in emitted)
         connections = state_manager.list_open_connections()
         assert len(connections) == len(emitted)
         assert all(
@@ -2093,7 +2094,7 @@ class TestDnsTunnelEventSpec:
         assert len(label_lengths) > 1
         assert len(label_depths) > 1
 
-    def test_dns_tunnel_generation_adds_benign_txt_collisions_from_other_hosts(self):
+    def test_dns_tunnel_generation_does_not_invent_other_hosts_txt_activity(self):
         engine = object.__new__(StorylineMixin)
         captured = []
 
@@ -2136,11 +2137,9 @@ class TestDnsTunnelEventSpec:
             if item["dns"].query_type == "TXT"
             and not item["dns"].query.endswith("tunnel.example.test")
         ]
-        benign_sources = {item["src_ip"] for item in benign_txt}
-
-        assert len(benign_txt) >= 12
-        assert benign_sources <= {peer.ip for peer in peers}
-        assert len(benign_sources) > 1
+        assert not benign_txt
+        assert captured
+        assert {item["src_ip"] for item in captured} == {source.ip}
 
     def test_dns_tunnel_generation_skews_ttls_and_expands_answer_vocabulary(self):
         engine = object.__new__(StorylineMixin)

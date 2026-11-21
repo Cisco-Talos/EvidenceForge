@@ -311,9 +311,34 @@ class ObservationPolicy:
             and not event.process.concurrency_group_id
         ):
             return self._coherent_process_delay(event, source, min_ms, max_ms)
-        seed = _stable_seed(f"observation.delay|{self.profile_name}|{source}|{identity}")
-        delay_ms = random.Random(seed).randint(min_ms, max_ms)
-        return timedelta(milliseconds=delay_ms)
+        if min_ms == max_ms:
+            return timedelta(milliseconds=min_ms)
+        from evidenceforge.generation.timing import (
+            TimingSampler,
+            TimingScope,
+            TriangularDistribution,
+        )
+        from evidenceforge.utils.rng import current_generation_seed
+
+        # Profile units specify bounds, not source timestamp resolution.
+        # Preserve continuous collection delay when canonical events happen
+        # on whole seconds, and keep lifecycle/exact-source identity coherent.
+        minimum_us = min_ms * 1_000
+        maximum_us = max_ms * 1_000
+        return TimingSampler(
+            namespace="source-observation", generation_seed=current_generation_seed()
+        ).sample_timedelta(
+            TriangularDistribution(
+                minimum=minimum_us,
+                mode=minimum_us + (maximum_us - minimum_us) * 0.35,
+                maximum=maximum_us,
+            ),
+            relationship_key=f"observation.{self.profile_name}.delay",
+            scope=TimingScope(
+                stable_id=identity, host=self._host_key_for_event(event), source=source
+            ),
+            sample_key="delay",
+        )
 
     @staticmethod
     def _coherent_process_delay(

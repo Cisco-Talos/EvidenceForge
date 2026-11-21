@@ -55,6 +55,7 @@ from evidenceforge.generation.activity.shell_history_effects import bash_history
 from evidenceforge.generation.command_derivation import step as derivation_step
 
 if TYPE_CHECKING:
+    from evidenceforge.config.schemas import LinuxConsolePolicy
     from evidenceforge.generation.actions.process_execution_service import (
         ProcessExecutionService,
         ProcessTerminationService,
@@ -287,6 +288,9 @@ from evidenceforge.generation.actions.scanner_probe import (
     nmap_probe_application_semantics,
 )
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
+from evidenceforge.generation.actions.windows_process_security import (
+    prepare_windows_process_creation_security,
+)
 from evidenceforge.generation.activity.direct_exec import catalog_direct_exec_arguments
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
@@ -337,6 +341,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     remote_auth_transport_max_duration_seconds,
     special_privilege_profile,
     special_privileges_config,
+    success_ntlm_validation_config,
 )
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
@@ -528,6 +533,9 @@ from .network_http import (
 )
 from .network_http import (
     _is_tool_http_user_agent as _is_tool_http_user_agent,
+)
+from .network_http import (
+    _literal_http_process_owns_request,
 )
 from .network_http import (
     _normalize_http_context_for_source_native_response as _normalize_http_context_for_source_native_response,
@@ -7316,7 +7324,7 @@ class ActivityGenerator:
         """Remember that a client has a reusable TGT beyond this visible moment."""
         key = self._kerberos_tgt_cache_key(username, source_ip, dc_hostname)
         base_ttl = rng.randint(45 * 60, 8 * 60 * 60)
-        if username.endswith("$"):
+        if self._kerberos_principal_key(username).endswith("$"):
             base_ttl = rng.randint(60 * 60, 10 * 60 * 60)
         expires_at = ensure_utc(time) + timedelta(seconds=base_ttl)
         current = self._kerberos_tgt_cache_until.get(key)
@@ -7336,13 +7344,18 @@ class ActivityGenerator:
         key = self._kerberos_tgt_cache_key(username, source_ip, dc_hostname)
         current_time = ensure_utc(time)
         cached_until = self._kerberos_tgt_cache_until.get(key)
+        machine_principal = self._kerberos_principal_key(username).endswith("$")
         if cached_until is not None and cached_until > current_time:
+            if machine_principal:
+                return False
             return rng.random() < 0.08
+        if cached_until is not None and machine_principal:
+            return True
 
         if self._visible_account_created_before(username, current_time):
             return True
 
-        pre_window_cache_probability = 0.55 if username.endswith("$") else 0.35
+        pre_window_cache_probability = 0.55 if machine_principal else 0.35
         if rng.random() < pre_window_cache_probability:
             self._remember_kerberos_tgt_cache(username, source_ip, dc_hostname, time, rng)
             return False
@@ -9115,10 +9128,48 @@ class ActivityGenerator:
         )
         shell_command = ntpath.basename(shell_image)
         session_floor = ensure_utc(session.start_time) + timedelta(milliseconds=100)
-        lead_ms = 1200 + shell_seed % 4801
-        shell_time = max(session_floor, ensure_utc(child_time) - timedelta(milliseconds=lead_ms))
-        if shell_time >= ensure_utc(child_time):
-            shell_time = ensure_utc(child_time) - timedelta(milliseconds=100)
+        invocation_id = (
+            f"windows-user-cli-parent:{system.hostname}:{user.username}:"
+            f"{session.logon_id}:{ensure_utc(child_time).isoformat()}:{child_command_line}"
+        )
+        child_anchor = ensure_utc(child_time)
+        latest_shell_time = child_anchor - timedelta(milliseconds=100)
+        if session_floor > latest_shell_time:
+            return 0
+        if source_visible_by is not None and ensure_utc(source_visible_by) <= session_floor:
+            return 0
+        lead_seconds = self._activity_timing_planner.right_skew_seconds(
+            relationship_key="windows.cli.parent_before_command",
+            stable_id=invocation_id,
+            minimum=1.2,
+            median=2.8,
+            maximum=6.0,
+            sigma=0.55,
+            host=system.hostname,
+            lifecycle_id=session.logon_id,
+            sample_key="shell_preparation",
+        )
+        graph = TemporalConstraintGraph(
+            timing_runtime=self._activity_timing_planner.runtime,
+            scope=TimingScope(
+                stable_id=invocation_id,
+                host=system.hostname,
+                source="activity",
+                lifecycle_id=session.logon_id,
+            ),
+            relationship_key="windows.cli.parent_placement",
+        )
+        graph.add_node(
+            "shell_start",
+            child_anchor - timedelta(seconds=lead_seconds),
+            not_before=session_floor,
+            not_after=latest_shell_time,
+        )
+        graph.add_node(
+            "command_start", child_anchor, not_before=child_anchor, not_after=child_anchor
+        )
+        graph.constrain_after("command_start", "shell_start", min_gap=timedelta(milliseconds=100))
+        shell_time = graph.resolved_time("shell_start")
         shell_deadline = (
             min(ensure_utc(source_visible_by), ensure_utc(child_time) - timedelta(milliseconds=1))
             if source_visible_by is not None
@@ -9936,6 +9987,8 @@ class ActivityGenerator:
         dst_port: int,
         proxy_sys: System,
         source_system: System | None = None,
+        uri: str = "/",
+        method: str = "GET",
     ) -> tuple[str, str] | None:
         """Map user-owned proxy User-Agents to the process that owns the socket."""
         os_category = _get_os_category(source_system.os) if source_system is not None else "windows"
@@ -9953,7 +10006,9 @@ class ActivityGenerator:
         if not ua:
             return None
 
-        target_url = self._http_target_url(hostname=hostname, uri="/", dst_port=dst_port)
+        target_url = self._http_target_url(hostname=hostname, uri=uri, dst_port=dst_port)
+        curl_method = "" if method in {"GET", "CONNECT"} else f" --request {method}"
+        wget_method = "" if method in {"GET", "CONNECT"} else f" --method={method}"
         proxy_url = (
             f"http://{self._proxy_fqdn(proxy_sys)}:{getattr(self, '_proxy_listener_port', 8080)}"
         )
@@ -9968,11 +10023,11 @@ class ActivityGenerator:
                 return package_hint
             if server_like_source:
                 if ua.startswith("curl/") or " curl/" in ua:
-                    return "/usr/bin/curl", f"curl --proxy {proxy_url} {target_url}"
+                    return "/usr/bin/curl", f"curl{curl_method} --proxy {proxy_url} {target_url}"
                 if ua.startswith("wget/") or " wget/" in ua:
                     return (
                         "/usr/bin/wget",
-                        f"wget -e use_proxy=yes -e http_proxy={proxy_url} {target_url}",
+                        f"wget{wget_method} -e use_proxy=yes -e http_proxy={proxy_url} {target_url}",
                     )
                 if ua.startswith("python-requests/"):
                     return (
@@ -9998,11 +10053,11 @@ class ActivityGenerator:
             if "chrome/" in ua and "google update" not in ua:
                 return "/usr/bin/google-chrome", f"google-chrome {target_url}"
             if ua.startswith("curl/") or " curl/" in ua:
-                return "/usr/bin/curl", f"curl --proxy {proxy_url} {target_url}"
+                return "/usr/bin/curl", f"curl{curl_method} --proxy {proxy_url} {target_url}"
             if ua.startswith("wget/") or " wget/" in ua:
                 return (
                     "/usr/bin/wget",
-                    f"wget -e use_proxy=yes -e http_proxy={proxy_url} {target_url}",
+                    f"wget{wget_method} -e use_proxy=yes -e http_proxy={proxy_url} {target_url}",
                 )
             if ua.startswith("python-requests/"):
                 return None
@@ -10029,10 +10084,13 @@ class ActivityGenerator:
 
         if ua.startswith("curl/") or " curl/" in ua:
             image = r"C:\Windows\System32\curl.exe"
-            return image, f'curl.exe --proxy {proxy_url} "{target_url}"'
+            return image, f'curl.exe{curl_method} --proxy {proxy_url} "{target_url}"'
         if ua.startswith("wget/") or " wget/" in ua:
             image = r"C:\Program Files\GnuWin32\bin\wget.exe"
-            return image, f'wget.exe -e use_proxy=yes -e http_proxy={proxy_url} "{target_url}"'
+            return (
+                image,
+                f'wget.exe{wget_method} -e use_proxy=yes -e http_proxy={proxy_url} "{target_url}"',
+            )
         if ua.startswith("python-requests/"):
             image = r"C:\Python311\python.exe"
             return image, f"python.exe -c \"import requests; requests.get('{target_url}')\""
@@ -10493,6 +10551,12 @@ class ActivityGenerator:
             dst_port=dst_port,
             proxy_sys=proxy_sys,
             source_system=source_system,
+            uri=(
+                _origin_form_uri_from_proxy_url(proxy_context.url)
+                if proxy_context.method != "CONNECT"
+                else "/"
+            ),
+            method=proxy_context.method,
         )
         if hint is None:
             return -1, None
@@ -10704,15 +10768,74 @@ class ActivityGenerator:
         command_line: str,
         source_visible_by: datetime | None = None,
     ) -> tuple[int, datetime] | None:
-        """Choose an available shell for an anchored Linux foreground client.
+        """Adapt a transport-anchored owner to the common foreground action planner."""
+        return self._prepare_linux_foreground_action_owner(
+            system=system,
+            user=user,
+            session=session,
+            process_time=process_time,
+            activity_time=activity_time,
+            process_name=process_name,
+            command_line=command_line,
+            source_visible_by=source_visible_by,
+        )
+
+    def _prepare_linux_authored_foreground_owner(
+        self,
+        *,
+        system: System,
+        user: User,
+        logon_id: str,
+        time: datetime,
+        process_name: str,
+        command_line: str,
+    ) -> tuple[int, datetime] | None:
+        """Use another modeled GUI terminal shell without interrupting foreground work."""
+        if _get_os_category(system.os) != "linux":
+            return None
+        session = self.state_manager.get_session_at(logon_id, time)
+        if session is None or session.session_kind != "interactive":
+            return None
+        parent_pid = self._linux_non_shell_session_parent_pid(
+            system=system, time=time, logon_id=logon_id
+        )
+        parent = self.state_manager.get_process(system.hostname, parent_pid) if parent_pid else None
+        if parent is None or parent.image.rsplit("/", 1)[-1] != "gnome-terminal-server":
+            return None
+        return self._prepare_linux_foreground_action_owner(
+            system=system,
+            user=user,
+            session=session,
+            process_time=time,
+            activity_time=None,
+            process_name=process_name,
+            command_line=command_line,
+        )
+
+    def _prepare_linux_foreground_action_owner(
+        self,
+        *,
+        system: System,
+        user: User,
+        session: ActiveSession,
+        process_time: datetime,
+        activity_time: datetime | None,
+        process_name: str,
+        command_line: str,
+        source_visible_by: datetime | None = None,
+    ) -> tuple[int, datetime] | None:
+        """Choose an available shell within an optional external source deadline.
 
         Connection owners must already be visible when their transport opens, so a
         busy shell cannot simply move the command past that anchor.  Interactive
         terminals and SSH connections can own more than one shell/channel; create a
         sibling shell when every existing shell is reserved by foreground work.
+        A qualified local authored action has no transport deadline, but still
+        consumes the same shell startup, source visibility and foreground rules.
         """
         process_time = ensure_utc(process_time)
-        deadline = ensure_utc(source_visible_by or activity_time)
+        external_deadline = source_visible_by or activity_time
+        deadline = ensure_utc(external_deadline) if external_deadline is not None else None
         if not _linux_shell_process_reserves_foreground(process_name, command_line):
             parent_pid = self._linux_non_shell_session_parent_pid(
                 system=system,
@@ -10745,7 +10868,7 @@ class ActivityGenerator:
                 requested_time=process_time,
                 seed_text=command_line,
             )
-            if reserved_time is not None and reserved_time < deadline:
+            if reserved_time is not None and (deadline is None or reserved_time < deadline):
                 return shell.pid, reserved_time
 
         non_shell_parent = self._linux_non_shell_session_parent_pid(
@@ -10772,7 +10895,9 @@ class ActivityGenerator:
             shell_time = process_time - timedelta(milliseconds=100)
         if shell_time <= ensure_utc(session.start_time):
             return None
-        shell_deadline = min(deadline, process_time - timedelta(milliseconds=1))
+        shell_deadline = process_time - timedelta(milliseconds=1)
+        if deadline is not None:
+            shell_deadline = min(deadline, shell_deadline)
         parent_source_time = self._process_source_frontier_or_bound(
             system=system,
             pid=non_shell_parent,
@@ -10796,10 +10921,11 @@ class ActivityGenerator:
             parent_source_time=shell_source_bound,
             session_source_time=session_source_time,
         )
-        if (
-            shell_source_bound > shell_deadline
-            or prospective_process_time >= deadline
-            or prospective_process_source_bound > deadline
+        if shell_source_bound > shell_deadline or (
+            deadline is not None
+            and (
+                prospective_process_time >= deadline or prospective_process_source_bound > deadline
+            )
         ):
             return None
         shell_pid = self.generate_process(
@@ -10826,7 +10952,7 @@ class ActivityGenerator:
             requested_time=process_time,
             seed_text=command_line,
         )
-        if reserved_time is None or reserved_time >= deadline:
+        if reserved_time is None or (deadline is not None and reserved_time >= deadline):
             return None
         return shell_pid, reserved_time
 
@@ -11239,12 +11365,39 @@ class ActivityGenerator:
         if owns_multipart_request:
             return candidate_image
 
+        request_method = http.method if http is not None else proxy_context.method
+        request_uri = (
+            http.uri
+            if http is not None
+            else _origin_form_uri_from_proxy_url(proxy_context.url)
+            if proxy_context.method != "CONNECT"
+            else None
+        )
+        if _literal_http_process_owns_request(
+            image=candidate_image,
+            command_line=running.command_line,
+            hostname=proxy_context.host,
+            dst_port=dst_port,
+            method=request_method,
+            uri=request_uri,
+            request_body_len=(
+                http.request_body_len if http is not None else proxy_context.request_body_bytes
+            ),
+        ):
+            return candidate_image
+
         hint = self._explicit_proxy_client_process_hint(
             user_agent=proxy_context.user_agent,
             hostname=proxy_context.host,
             dst_port=dst_port,
             proxy_sys=proxy_sys,
             source_system=source_system,
+            uri=(
+                _origin_form_uri_from_proxy_url(proxy_context.url)
+                if proxy_context.method != "CONNECT"
+                else "/"
+            ),
+            method=proxy_context.method,
         )
         if hint is None:
             os_category = _get_os_category(source_system.os)
@@ -12898,14 +13051,24 @@ class ActivityGenerator:
             src_ip=dc_source_ip,
             os_category=_get_os_category(system.os),
         )
-        if (
-            auth_package_name == "NTLM"
-            and logon_type in (3, 10)
-            and _get_os_category(system.os) == "windows"
-            and source_ip
-            and source_ip != "-"
+        if auth_package_name == "NTLM" and (
+            os_cat == "windows" or (os_cat == "linux" and session_kind == "smb")
         ):
-            self._emit_dc_ntlm_for_logon(user, system, time, source_ip)
+            assert event.auth is not None
+            primary = (
+                remote_authentication_plan.primary_transport
+                if remote_authentication_plan is not None
+                else None
+            )
+            validation = self._prepare_successful_ntlm_validation(
+                auth=event.auth,
+                system=system,
+                time=time,
+                stable_id=f"ntlm:{system.hostname}:{logon_id}:{time.isoformat()}",
+                transport_start=primary.started_at if primary is not None else None,
+            )
+            if validation is not None:
+                self.dispatcher.dispatch_builder(validation)
 
         if os_cat == "windows" and logon_type == 3 and auth_source_ip not in {"", "-", system.ip}:
             if remote_source_ready_delta is None:
@@ -13039,26 +13202,39 @@ class ActivityGenerator:
         pam_actor = "LOGIN(uid=0)" if pam_service == "login" else "gdm(uid=0)"
         pam_time = logind_time - timedelta(milliseconds=rng.randint(3000, 8000))
         if pam_service == "login":
+            from evidenceforge.generation.activity.system_processes import linux_console_policy
+
             login_start_time = pam_time - timedelta(milliseconds=rng.randint(2500, 4500))
-            root_parent_pid = self._linux_local_login_parent_pid(
-                system,
-                login_start_time,
-                seed=_stable_seed(
-                    f"linux_local_login_parent:{system.hostname}:{user.username}:{logon_id}"
-                ),
-            )
-            pam_pid = self.generate_process(
-                user=self._user_model_for_username("root"),
-                system=system,
-                time=login_start_time,
-                logon_id="0x3e7",
-                process_name="/bin/login",
-                command_line=f"login -- {user.username}",
-                parent_pid=root_parent_pid,
-                suppress_command_file_effect=True,
-                lifecycle_group_id=session.lifecycle_group_id,
-                source_visible_by=pam_time,
-            )
+            console_policy = linux_console_policy()
+            if console_policy is not None:
+                pam_pid = self._execute_linux_console_login(
+                    system=system,
+                    user=user,
+                    session=session,
+                    at=login_start_time,
+                    policy=console_policy,
+                    source_visible_by=pam_time,
+                )
+            else:
+                root_parent_pid = self._linux_local_login_parent_pid(
+                    system,
+                    login_start_time,
+                    seed=_stable_seed(
+                        f"linux_local_login_parent:{system.hostname}:{user.username}:{logon_id}"
+                    ),
+                )
+                pam_pid = self.generate_process(
+                    user=self._user_model_for_username("root"),
+                    system=system,
+                    time=login_start_time,
+                    logon_id="0x3e7",
+                    process_name="/bin/login",
+                    command_line=f"login -- {user.username}",
+                    parent_pid=root_parent_pid,
+                    suppress_command_file_effect=True,
+                    lifecycle_group_id=session.lifecycle_group_id,
+                    source_visible_by=pam_time,
+                )
             if pam_pid > 0:
                 session.process_tree_root = pam_pid
                 pam_time = self._clamp_after_visible_linux_process_create(
@@ -13148,33 +13324,91 @@ class ActivityGenerator:
         self.state_manager.update_session_metadata(logon_id, session_id=session_id)
         return session_id
 
-    def _emit_dc_ntlm_for_logon(
+    def _ntlm_validation_authority(
+        self, *, username: str, system: System, auth_protocol: str
+    ) -> System | None:
+        """Resolve modeled credential authority without allocating state or timing."""
+        if auth_protocol.casefold() not in {"ntlm", "ntlmssp"}:
+            return None
+        directory = self.identity_directory
+        if directory is None:
+            # Legacy direct generators have no account-scope proof. Manual
+            # validation requests remain available without invented authority.
+            return None
+        account = directory.windows_account(username, system.hostname)
+        if account is None or account.scope == "well_known":
+            return None
+        if account.scope == "local":
+            return system if _get_os_category(system.os) == "windows" else None
+        if not directory.has_windows_domain or not account.domain:
+            return None
+        candidates = [
+            target
+            for name in sorted(getattr(self, "_dc_hostnames", []), key=str.casefold)
+            if (target := self._system_for_hostname(name)) is not None
+            and _get_os_category(target.os) == "windows"
+        ]
+        if not candidates:
+            return None
+        # A DC can validate its own incoming network authentication. Other
+        # members keep a stable authority instead of randomly flipping per row.
+        for target in candidates:
+            if target.hostname.casefold() == system.hostname.casefold():
+                return target
+        index = _stable_seed(f"ntlm-authority:{system.hostname}:{account.domain}") % len(candidates)
+        return candidates[index]
+
+    def _prepare_successful_ntlm_validation(
         self,
-        user: User,
+        *,
+        auth: AuthContext,
         system: System,
         time: datetime,
-        source_ip: str,
-    ) -> None:
-        """Emit DC-side 4776 validation for successful domain NTLM logons."""
-        if _get_os_category(system.os) != "windows":
-            return
-
-        dc_hostnames = getattr(self, "_dc_hostnames", [])
-        dc_ips = getattr(self, "_dc_ips", [])
-        if not dc_hostnames:
-            return
-        if system.hostname in dc_hostnames or system.ip in dc_ips:
-            return
-
-        rng = _get_rng()
-        dc_hostname = dc_hostnames[rng.randint(0, len(dc_hostnames) - 1)]
-        workstation = self._workstation_name_for_source(source_ip)
-        self.generate_ntlm_validation(
-            username=user.username,
-            workstation=workstation,
-            dc_hostname=dc_hostname,
-            time=time - timedelta(milliseconds=rng.randint(8, 120)),
-            status="0x0",
+        stable_id: str,
+        transport_start: datetime | None = None,
+    ) -> OccurrenceBuilder | None:
+        """Plan one remote success through the shared auth family before rendering."""
+        if (
+            auth.auth_package.casefold() != "ntlm"
+            or auth.logon_type not in {3, 10}
+            or auth.source_ip in {"", "-", system.ip}
+        ):
+            return None
+        authority = self._ntlm_validation_authority(
+            username=auth.username, system=system, auth_protocol="ntlm"
+        )
+        if authority is None:
+            return None
+        window = success_ntlm_validation_config()
+        maximum_ms = window.maximum_ms
+        if transport_start is not None:
+            available_ms = (ensure_utc(time) - ensure_utc(transport_start)).total_seconds() * 1000
+            if available_ms <= 0:
+                raise StateError("NTLM validation requires transport before authentication")
+            maximum_ms = min(maximum_ms, available_ms * 0.9)
+        gap = self._sample_activity_gap(
+            relationship_key="windows.ntlm.validation_lead",
+            stable_id=stable_id,
+            host=authority.hostname,
+            source="auth-session",
+            minimum_ms=min(window.minimum_ms, maximum_ms * 0.5),
+            maximum_ms=maximum_ms,
+        )
+        graph = TemporalConstraintGraph()
+        graph.add_node("validation", ensure_utc(time) - gap, not_before=transport_start)
+        graph.add_node("authentication", ensure_utc(time), not_before=time, not_after=time)
+        graph.constrain_after("authentication", "validation", min_gap=gap)
+        workstation = auth.workstation_name
+        if not workstation or workstation == "-":
+            workstation = self._workstation_name_for_source(auth.source_ip)
+        return self._build_ntlm_validation_occurrence(
+            NtlmValidationRequest(
+                username=auth.username,
+                workstation=workstation,
+                dc_hostname=authority.hostname,
+                time=graph.resolved_time("validation"),
+                source="remote-ntlm-success",
+            )
         )
 
     def _emit_dc_kerberos_for_logon(
@@ -13303,7 +13537,13 @@ class ActivityGenerator:
                 resp_bytes=rng.randint(1800, 5200),
                 source_system=source_system,
                 emit_dns=False,
-                kerberos_audit_mode="pair",
+                kerberos_audit_mode=(
+                    "pair"
+                    if self._should_emit_visible_kerberos_tgt(
+                        user.username, source_ip, dc_hostname, tgt_time, rng
+                    )
+                    else "tgs"
+                ),
                 kerberos_audit_username=user.username,
                 kerberos_audit_service_name=service_name,
             )
@@ -15177,6 +15417,8 @@ class ActivityGenerator:
     ) -> tuple[_LinuxSudoProcessClosePlan, ...]:
         """Freeze one children-first local process schedule without mutating State."""
 
+        from evidenceforge.generation.actions.linux_console import console_session_root_matches
+
         termination_span = (
             timedelta(milliseconds=min(3000, max(250, 100 * (len(processes) + 1))))
             if authoritative_end_plan is not None
@@ -15261,7 +15503,9 @@ class ActivityGenerator:
             identity = self.state_manager.get_process_identity(session.system, process.pid)
             if identity is None or identity.object_id != process.ecar_object_id:
                 raise StateError("Linux sudo logoff process identity drifted before preparation")
-            if identity.logon_id != session.logon_id:
+            if identity.logon_id != session.logon_id and not console_session_root_matches(
+                identity, session
+            ):
                 raise StateError("Linux sudo logoff process crossed its exact session owner")
             terminate_at = max(
                 ensure_utc(terminate_at),
@@ -16607,6 +16851,27 @@ class ActivityGenerator:
             ):
                 remember_linux_session_close = True
             session_processes = list(frozen_session_processes)
+            if _get_os_category(system.os) == "linux" and not is_ssh_session:
+                from evidenceforge.generation.actions.linux_console import (
+                    console_session_root_matches,
+                )
+
+                console_root = (
+                    self.state_manager.get_process(session.system, session.process_tree_root)
+                    if session.process_tree_root is not None
+                    else None
+                )
+                console_identity = (
+                    self.state_manager.get_process_identity(session.system, console_root.pid)
+                    if console_root is not None
+                    else None
+                )
+                if (
+                    console_identity is not None
+                    and console_session_root_matches(console_identity, session)
+                    and all(process.pid != console_root.pid for process in session_processes)
+                ):
+                    session_processes.append(console_root)
             # Per-session winlogon is a SYSTEM-token process, so its immutable
             # process LogonID is 0x3e7 rather than the human session LUID.  The
             # explicit session pointer owns teardown membership across that
@@ -20337,6 +20602,25 @@ class ActivityGenerator:
         )
         return SmbActivityActionBundle(self, request).execute()
 
+    def automatic_smb_task_spec(
+        self,
+        *,
+        spec: SmbActivityEventSpec,
+        actor: User,
+        parent_system: System,
+        time: datetime,
+    ) -> SmbActivityEventSpec | None:
+        """Admit an ordinary baseline task using the execution owner's file policy."""
+
+        request = SmbActivityRequest(
+            spec=spec,
+            actor=actor,
+            parent_system=parent_system,
+            time=time,
+            activity_source="baseline",
+        )
+        return SmbActivityActionBundle(self, request).automatic_task_spec()
+
     def prepare_smb_activity(
         self,
         *,
@@ -20909,6 +21193,8 @@ class ActivityGenerator:
             time=request.time,
             port=port,
         )
+        needs_dovecot = protocol == "imaps" and self._is_linux_mail_server(request.server)
+        capture = NetworkConnectionIdentityCapture() if needs_dovecot else None
         uid = self.generate_connection(
             src_ip=request.system.ip,
             dst_ip=request.server.ip,
@@ -20927,8 +21213,12 @@ class ActivityGenerator:
             process_image=resolved_process_image or process_image,
             suppress_source_pid_inference=process_pid <= 0,
             responding_pid=responding_pid,
+            identity_capture=capture,
         )
-        if protocol == "imaps" and self._is_linux_mail_server(request.server):
+        if capture is not None:
+            transport = capture.transaction
+            if transport is None or (uid and transport.zeek_uid != uid):
+                raise StateError("IMAPS transport did not publish its exact canonical identity")
             self._emit_dovecot_imap_syslog(
                 user=request.user,
                 client_system=request.system,
@@ -20939,6 +21229,7 @@ class ActivityGenerator:
                 resp_bytes=resp_bytes,
                 message_ids=request.message_ids,
                 master_pid=responding_pid,
+                transport=transport,
             )
         return uid
 
@@ -20954,8 +21245,27 @@ class ActivityGenerator:
         resp_bytes: int,
         message_ids: tuple[str, ...],
         master_pid: int,
+        transport: NetworkTransactionPlan,
     ) -> None:
         """Emit Dovecot auth/session companions for an observed IMAPS read."""
+        destination_ip = transport.dst_ip
+        if destination_ip != server.ip:
+            visibility = getattr(getattr(self, "dispatcher", None), "visibility_engine", None)
+            if visibility is not None:
+                destination_ip = visibility.resolve_endpoint_ip(destination_ip)
+        if (
+            transport.src_ip != client_system.ip
+            or destination_ip != server.ip
+            or transport.dst_port != 993
+            or transport.protocol != "tcp"
+            or not 1 <= transport.src_port <= 65535
+            or transport.outcome != "success"
+            or transport.closed_at is None
+            or transport.closed_at <= transport.started_at
+        ):
+            raise StateError("Dovecot session requires its successful canonical IMAPS transport")
+        time = transport.started_at
+        duration = (transport.closed_at - transport.started_at).total_seconds()
         seed = _stable_seed(
             "dovecot_imap:"
             f"{server.hostname}:{client_system.hostname}:{user.username}:{time.isoformat()}"
@@ -20966,14 +21276,22 @@ class ActivityGenerator:
             time + timedelta(milliseconds=rng.randint(35, 140)),
             release_time=time + timedelta(seconds=duration + 1.0),
         )
-        session_token = self._dovecot_session_token(seed)
         message_count = max(1, len(message_ids) or rng.randint(1, 6))
         hdr_count = max(message_count, rng.randint(message_count, message_count + 4))
         body_count = rng.randint(0, message_count)
         hdr_bytes = min(resp_bytes, hdr_count * rng.randint(650, 2200))
         body_bytes = max(0, resp_bytes - hdr_bytes - rng.randint(1200, 9000))
+        if body_bytes > 0 and body_count == 0:
+            # Condition the existing mail-count support on actually sent body
+            # data; empty fetches may still have a count without data bytes.
+            body_count = rng.randint(1, message_count)
         login_time = self._smtp_lifecycle_time(time, duration, rng.uniform(0.03, 0.12))
         logout_time = self._smtp_lifecycle_time(time, duration, rng.uniform(0.84, 0.98))
+        session_token = self._dovecot_session_token(
+            time=login_time,
+            client_ip=transport.src_ip,
+            remote_port=transport.src_port,
+        )
         login_pid = master_pid if master_pid > 0 else None
 
         self.generate_syslog_event(
@@ -21001,16 +21319,18 @@ class ActivityGenerator:
             pid=worker_pid,
         )
 
-    def _dovecot_session_token(self, seed: int) -> str:
-        """Return a compact deterministic Dovecot-style session token."""
-        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        value = seed
-        chars: list[str] = []
-        while value and len(chars) < 11:
-            value, remainder = divmod(value, len(alphabet))
-            chars.append(alphabet[remainder])
-        token = "".join(reversed(chars)).rjust(10, "A")
-        return token[-11:]
+    def _dovecot_session_token(self, *, time: datetime, client_ip: str, remote_port: int) -> str:
+        """Encode the native low-48-bit microsecond, little-endian port and IP payload."""
+        if not 1 <= remote_port <= 65535:
+            raise ValueError("Dovecot session remote port must be between 1 and 65535")
+        elapsed = ensure_utc(time) - datetime(1970, 1, 1, tzinfo=UTC)
+        microseconds = (elapsed.days * 86400 + elapsed.seconds) * 1_000_000 + elapsed.microseconds
+        payload = (
+            (microseconds % (1 << 48)).to_bytes(6, "little")
+            + remote_port.to_bytes(2, "little")
+            + ipaddress.ip_address(client_ip).packed
+        )
+        return base64.b64encode(payload).decode("ascii")
 
     def _macos_email_assignment(
         self,
@@ -27516,12 +27836,8 @@ class ActivityGenerator:
         )
         if parent_pid not in (0, pid):
             self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
-        time = self._clamp_after_visible_process_create(
-            system,
-            pid,
-            time,
-            "windows.process_exit_after_visible_create",
-        )
+        # Preserve physical close time; native source lifecycle containment is
+        # owned by SourceTimingPlanner rather than observer admission headroom.
         sid = self.sid_registry.get(username, "S-1-5-18") if self.sid_registry else "S-1-5-18"
         self.state_manager.get_process_object_id(system.hostname, pid)
         event = OccurrenceBuilder(
@@ -30237,6 +30553,9 @@ class ActivityGenerator:
                 type="domain_controller",
             )
         source_system = self._ip_to_system.get(source_ip)
+        needs_tgt = self._should_emit_visible_kerberos_tgt(
+            machine_username, source_ip, dc_hostname, tgt_time, rng
+        )
         if source_system is not None:
             transport_start = tgt_time - timedelta(milliseconds=20)
             self.generate_connection(
@@ -30251,17 +30570,18 @@ class ActivityGenerator:
                 resp_bytes=rng.randint(1800, 5200),
                 source_system=source_system,
                 emit_dns=False,
-                kerberos_audit_mode="pair",
+                kerberos_audit_mode="pair" if needs_tgt else "tgs",
                 kerberos_audit_username=machine_username,
                 kerberos_audit_service_name=service_name,
             )
         else:
-            self.generate_kerberos_tgt(
-                username=machine_username,
-                source_ip=source_ip,
-                dc_hostname=dc_hostname,
-                time=tgt_time,
-            )
+            if needs_tgt:
+                self.generate_kerberos_tgt(
+                    username=machine_username,
+                    source_ip=source_ip,
+                    dc_hostname=dc_hostname,
+                    time=tgt_time,
+                )
             self.generate_kerberos_service_ticket(
                 username=machine_username,
                 service_name=service_name,
@@ -30728,20 +31048,29 @@ class ActivityGenerator:
         )
         NtlmValidationActionBundle(self, request).execute()
 
-    def _execute_ntlm_validation_bundle(self, request: NtlmValidationRequest) -> None:
-        """Generate NTLM credential validation event (4776) on the DC."""
-        event = OccurrenceBuilder(
+    def _build_ntlm_validation_occurrence(
+        self, request: NtlmValidationRequest
+    ) -> OccurrenceBuilder:
+        """Build canonical validation using the actual modeled authority facts."""
+        authority = self._system_for_hostname(request.dc_hostname)
+        return OccurrenceBuilder(
             timestamp=request.time,
             event_type="ntlm_validation",
-            dst_host=self._build_dc_host_context(request.dc_hostname),
+            dst_host=(
+                self._build_host_context(authority)
+                if authority is not None
+                else self._build_dc_host_context(request.dc_hostname)
+            ),
             auth=AuthContext(
                 username=request.username,
-                source_ip=request.workstation,  # SourceWorkstation stored in source_ip
+                source_ip=request.workstation,  # Existing source-native Workstation contract.
                 failure_status=request.status,
             ),
         )
 
-        self.dispatcher.dispatch_builder(event)
+    def _execute_ntlm_validation_bundle(self, request: NtlmValidationRequest) -> None:
+        """Publish an explicit success or failure through the shared factory."""
+        self.dispatcher.dispatch_builder(self._build_ntlm_validation_occurrence(request))
 
     def generate_explicit_credentials(
         self,
@@ -36881,6 +37210,65 @@ class ActivityGenerator:
         """Forward to the shared process parents owner."""
         return self._process_parents()._linux_anchor_pid(system, time)
 
+    def _execute_linux_console_login(
+        self,
+        *,
+        system: System,
+        user: User,
+        session: ActiveSession,
+        at: datetime,
+        policy: "LinuxConsolePolicy",
+        source_visible_by: datetime,
+    ) -> int:
+        """Consume a free console getty using the shared image-replacement owner."""
+        from evidenceforge.generation.actions.linux_console import plan_linux_console_login
+
+        admission = plan_linux_console_login(self.state_manager, system, at, policy)
+        before = admission.existing_getty
+        if before is None:
+            terminal = admission.terminal
+            lead = self._sample_profile_activity_gap(
+                "linux.console.getty_before_login",
+                stable_id=session.ecar_object_id,
+                host=system.hostname,
+                source="console",
+                lifecycle_id=session.lifecycle_group_id,
+            )
+            getty_time = (
+                at
+                - lead
+                - self._source_timing_planner.process_create_positive_headroom(at, "linux")
+            )
+            if self._process_create_source_bound(system=system, canonical_time=getty_time) > at:
+                raise StateError("Console getty creation cannot meet its login readiness")
+            admission = plan_linux_console_login(
+                self.state_manager, system, at, policy, occupied_since=getty_time
+            )
+            terminal = admission.terminal
+            pid = self.generate_system_process(
+                system,
+                getty_time,
+                policy.getty_image,
+                f"{policy.getty_image} --noclear {terminal} linux",
+                parent_pid=self._linux_anchor_pid(system, getty_time),
+                username="root",
+                emit_linux_syslog=False,
+                source_visible_by=at,
+            )
+            before = self.state_manager.get_process_identity(system.hostname, pid)
+            if before is None:
+                raise StateError("Local console getty could not be prepared before login")
+        after = self._process_execution_service().execute_existing_posix(
+            system=system,
+            before=before,
+            image=policy.login_image,
+            arguments=(policy.login_image, "--", user.username),
+            at=at,
+            source_visible_by=source_visible_by,
+        )
+        session.process_tree_root = after.pid
+        return after.pid
+
     def _linux_local_login_parent_pid(
         self,
         system: System,
@@ -37086,6 +37474,13 @@ class ActivityGenerator:
                     logon_type=session.logon_type,
                 ),
             ),
+        )
+        prepare_windows_process_creation_security(
+            event,
+            creator=self.state_manager.get_process_identity(
+                system.hostname, running_proc.parent_pid
+            ),
+            sid_for=self._get_sid,
         )
         self._record_process_source_create_time(
             system.hostname,

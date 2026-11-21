@@ -1,0 +1,44 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 25,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 563,
+  "behavior_surface_sha256": "2a97e04459ce47e3d43c1340fe8357e98f61d3179637d701f279ec277a3ec12b",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "Canonical ordinary Windows process creator and child target token"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "before": "3FAIL1PASS16deselect against562 for SYSTEM-to-service, bootstrap user and same-user Type9 creator/target facts",
+    "central": "22PASS13.59s native XML/Sysmon/eCAR, same-context, bootstrap, service and existing LUID contracts; final owner/sibling logs separately retained",
+    "rng": "3PASS7.51s unchanged census",
+    "config": "105files zero issues",
+    "ruff": "check and format1683PASS",
+    "scope": "Known ordinary canonical actor only; explicit target contexts, unknown/null SID or creator, raw compatibility preserved. No inference of arbitrary Windows impersonated thread token, no new State/cache/pools/RNG. No full routine or release gate.",
+    "final_owners": "307PASS29deselect45.45s including 8new integration cases, LUID owners, SMB prepared retries, process lifetimes, native emitters and manifest",
+    "source_timing": "34PASS87deselect2.62s",
+    "exact_projection": "87slowPASS17.24s exact Windows/source-preparation gates"
+  },
+  "fix_classification": "family_level",
+  "rendered_verification": {
+    "security_process_creates": 931,
+    "populated_alternate_target_subjects": 37,
+    "unique_sysmon_child_joins": 927,
+    "child_effective_logon_mismatches": 0,
+    "data_files": 115,
+    "changed_files_from24": 10,
+    "change_scope": "Only ten Windows Security XML files changed; remaining105data files byte-identical, source-isolation-probe.json"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "purpose": "Experimental realism-assessment candidate; not a replacement for the canonical benchmark",
+  "source": "scenarios/iteration-test",
+  "source_commit": "b1c78393",
+  "copied_on": "2026-11-20",
+  "source_sha256": {
+    "scenario.yaml": "7866034d7bf502b0797a3e19749dde828a03f6f68bb2d566f4ec8cb89ce61d85",
+    "environment.yaml": "0d303660bc5c069b2fbe0236520aa33025b7d15c6b4a132fd727c2feb33a0121",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002",
+    "ENVIRONMENT.md": "3bb4fd26d7e860d9c500a46eb84be91be2a843b2c0e754464cac8a5d50ed6e88"
+  },
+  "approved_changes": [
+    "cross-platform download-execute-follow-up",
+    "Mac VS Code",
+    "replace three repetitive Mac query groups",
+    "explicit Mac mounted-share read/save"
+  ],
+  "preserved": [
+    "launch-item lifecycles",
+    "reviewer instructions and method",
+    "time window",
+    "seed",
+    "baseline shaping",
+    "source formats",
+    "industry pack"
+  ]
+}

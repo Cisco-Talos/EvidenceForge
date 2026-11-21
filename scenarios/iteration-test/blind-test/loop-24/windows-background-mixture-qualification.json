@@ -1,0 +1,767 @@
+{
+  "DC-01": {
+    "counts": [
+      [
+        "conhost.exe",
+        32
+      ],
+      [
+        "dllhost.exe",
+        32
+      ],
+      [
+        "WmiPrvSE.exe",
+        32
+      ],
+      [
+        "taskhostw.exe",
+        29
+      ],
+      [
+        "cmd.exe",
+        7
+      ],
+      [
+        "powershell.exe",
+        6
+      ],
+      [
+        "svchost.exe",
+        3
+      ],
+      [
+        "net.exe",
+        3
+      ],
+      [
+        "Veeam.Backup.Service.exe",
+        2
+      ],
+      [
+        "smss.exe",
+        2
+      ],
+      [
+        "winlogon.exe",
+        2
+      ],
+      [
+        "userinit.exe",
+        2
+      ]
+    ],
+    "image_parent_counts": [
+      {
+        "image": "conhost.exe",
+        "parent": "csrss.exe",
+        "count": 32
+      },
+      {
+        "image": "dllhost.exe",
+        "parent": "svchost.exe",
+        "count": 32
+      },
+      {
+        "image": "WmiPrvSE.exe",
+        "parent": "svchost.exe",
+        "count": 32
+      },
+      {
+        "image": "taskhostw.exe",
+        "parent": "svchost.exe",
+        "count": 29
+      },
+      {
+        "image": "cmd.exe",
+        "parent": "WmiPrvSE.exe",
+        "count": 6
+      },
+      {
+        "image": "svchost.exe",
+        "parent": "services.exe",
+        "count": 3
+      },
+      {
+        "image": "powershell.exe",
+        "parent": "taskeng.exe",
+        "count": 3
+      },
+      {
+        "image": "net.exe",
+        "parent": "cmd.exe",
+        "count": 3
+      },
+      {
+        "image": "Veeam.Backup.Service.exe",
+        "parent": "services.exe",
+        "count": 2
+      },
+      {
+        "image": "smss.exe",
+        "parent": "smss.exe",
+        "count": 2
+      },
+      {
+        "image": "winlogon.exe",
+        "parent": "smss.exe",
+        "count": 2
+      },
+      {
+        "image": "userinit.exe",
+        "parent": "winlogon.exe",
+        "count": 2
+      },
+      {
+        "image": "explorer.exe",
+        "parent": "userinit.exe",
+        "count": 2
+      },
+      {
+        "image": "powershell.exe",
+        "parent": "explorer.exe",
+        "count": 2
+      },
+      {
+        "image": "MpCmdRun.exe",
+        "parent": "services.exe",
+        "count": 1
+      }
+    ],
+    "examples": [
+      {
+        "UtcTime": "2026-11-02 13:02:00.991",
+        "ProcessId": "3816",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe /Run",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2352"
+      },
+      {
+        "UtcTime": "2026-11-02 13:07:47.958",
+        "ProcessId": "3648",
+        "Image": "C:\\Windows\\System32\\conhost.exe",
+        "CommandLine": "conhost.exe 0x4",
+        "ParentImage": "C:\\Windows\\System32\\csrss.exe",
+        "ParentProcessId": "2252"
+      },
+      {
+        "UtcTime": "2026-11-02 13:11:41.170",
+        "ProcessId": "3652",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2340"
+      },
+      {
+        "UtcTime": "2026-11-02 13:12:35.252",
+        "ProcessId": "3704",
+        "Image": "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe",
+        "CommandLine": "WmiPrvSE.exe -Embedding",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2340"
+      },
+      {
+        "UtcTime": "2026-11-02 13:12:54.810",
+        "ProcessId": "3476",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{73E709EA-5D93-4B2E-BBB0-99B7938DA9E4}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2340"
+      },
+      {
+        "UtcTime": "2026-11-02 13:18:14.427",
+        "ProcessId": "3864",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2352"
+      },
+      {
+        "UtcTime": "2026-11-02 13:20:07.059",
+        "ProcessId": "3612",
+        "Image": "C:\\Windows\\System32\\conhost.exe",
+        "CommandLine": "conhost.exe 0x4",
+        "ParentImage": "C:\\Windows\\System32\\csrss.exe",
+        "ParentProcessId": "2252"
+      },
+      {
+        "UtcTime": "2026-11-02 13:20:56.616",
+        "ProcessId": "3656",
+        "Image": "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe",
+        "CommandLine": "WmiPrvSE.exe -Embedding",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2340"
+      }
+    ]
+  },
+  "DC-02": {
+    "counts": [
+      [
+        "dllhost.exe",
+        40
+      ],
+      [
+        "taskhostw.exe",
+        34
+      ],
+      [
+        "conhost.exe",
+        31
+      ],
+      [
+        "WmiPrvSE.exe",
+        25
+      ],
+      [
+        "svchost.exe",
+        2
+      ],
+      [
+        "cmd.exe",
+        2
+      ],
+      [
+        "sc.exe",
+        2
+      ],
+      [
+        "dfsr.exe",
+        1
+      ],
+      [
+        "smss.exe",
+        1
+      ],
+      [
+        "winlogon.exe",
+        1
+      ],
+      [
+        "userinit.exe",
+        1
+      ],
+      [
+        "explorer.exe",
+        1
+      ]
+    ],
+    "image_parent_counts": [
+      {
+        "image": "dllhost.exe",
+        "parent": "svchost.exe",
+        "count": 40
+      },
+      {
+        "image": "taskhostw.exe",
+        "parent": "svchost.exe",
+        "count": 34
+      },
+      {
+        "image": "conhost.exe",
+        "parent": "csrss.exe",
+        "count": 31
+      },
+      {
+        "image": "WmiPrvSE.exe",
+        "parent": "svchost.exe",
+        "count": 25
+      },
+      {
+        "image": "svchost.exe",
+        "parent": "services.exe",
+        "count": 2
+      },
+      {
+        "image": "cmd.exe",
+        "parent": "WmiPrvSE.exe",
+        "count": 2
+      },
+      {
+        "image": "sc.exe",
+        "parent": "cmd.exe",
+        "count": 2
+      },
+      {
+        "image": "dfsr.exe",
+        "parent": "services.exe",
+        "count": 1
+      },
+      {
+        "image": "smss.exe",
+        "parent": "smss.exe",
+        "count": 1
+      },
+      {
+        "image": "winlogon.exe",
+        "parent": "smss.exe",
+        "count": 1
+      },
+      {
+        "image": "userinit.exe",
+        "parent": "winlogon.exe",
+        "count": 1
+      },
+      {
+        "image": "explorer.exe",
+        "parent": "userinit.exe",
+        "count": 1
+      },
+      {
+        "image": "MpCmdRun.exe",
+        "parent": "services.exe",
+        "count": 1
+      },
+      {
+        "image": "spoolsv.exe",
+        "parent": "services.exe",
+        "count": 1
+      },
+      {
+        "image": "ismserv.exe",
+        "parent": "services.exe",
+        "count": 1
+      }
+    ],
+    "examples": [
+      {
+        "UtcTime": "2026-11-02 13:04:02.165",
+        "ProcessId": "6908",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{73E709EA-5D93-4B2E-BBB0-99B7938DA9E4}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "5116"
+      },
+      {
+        "UtcTime": "2026-11-02 13:04:36.170",
+        "ProcessId": "7256",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "5128"
+      },
+      {
+        "UtcTime": "2026-11-02 13:10:55.342",
+        "ProcessId": "6944",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{3EB3C877-1F16-487C-9050-104DBCD66683}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "5116"
+      },
+      {
+        "UtcTime": "2026-11-02 13:13:07.632",
+        "ProcessId": "6880",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{3EB3C877-1F16-487C-9050-104DBCD66683}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "5116"
+      },
+      {
+        "UtcTime": "2026-11-02 13:13:58.821",
+        "ProcessId": "7208",
+        "Image": "C:\\Windows\\System32\\conhost.exe",
+        "CommandLine": "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1",
+        "ParentImage": "C:\\Windows\\System32\\csrss.exe",
+        "ParentProcessId": "5080"
+      },
+      {
+        "UtcTime": "2026-11-02 13:14:39.935",
+        "ProcessId": "7216",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "5116"
+      },
+      {
+        "UtcTime": "2026-11-02 13:17:16.422",
+        "ProcessId": "7200",
+        "Image": "C:\\Windows\\System32\\conhost.exe",
+        "CommandLine": "conhost.exe 0x4",
+        "ParentImage": "C:\\Windows\\System32\\csrss.exe",
+        "ParentProcessId": "5080"
+      },
+      {
+        "UtcTime": "2026-11-02 13:18:47.010",
+        "ProcessId": "7164",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "5116"
+      }
+    ]
+  },
+  "FILE-SRV-01": {
+    "counts": [
+      [
+        "taskhostw.exe",
+        31
+      ],
+      [
+        "WmiPrvSE.exe",
+        22
+      ],
+      [
+        "conhost.exe",
+        21
+      ],
+      [
+        "dllhost.exe",
+        13
+      ],
+      [
+        "smss.exe",
+        3
+      ],
+      [
+        "winlogon.exe",
+        3
+      ],
+      [
+        "userinit.exe",
+        3
+      ],
+      [
+        "explorer.exe",
+        3
+      ],
+      [
+        "svchost.exe",
+        2
+      ],
+      [
+        "MpCmdRun.exe",
+        1
+      ],
+      [
+        "msdtc.exe",
+        1
+      ],
+      [
+        "spoolsv.exe",
+        1
+      ]
+    ],
+    "image_parent_counts": [
+      {
+        "image": "taskhostw.exe",
+        "parent": "svchost.exe",
+        "count": 31
+      },
+      {
+        "image": "WmiPrvSE.exe",
+        "parent": "svchost.exe",
+        "count": 22
+      },
+      {
+        "image": "conhost.exe",
+        "parent": "csrss.exe",
+        "count": 21
+      },
+      {
+        "image": "dllhost.exe",
+        "parent": "svchost.exe",
+        "count": 13
+      },
+      {
+        "image": "smss.exe",
+        "parent": "smss.exe",
+        "count": 3
+      },
+      {
+        "image": "winlogon.exe",
+        "parent": "smss.exe",
+        "count": 3
+      },
+      {
+        "image": "userinit.exe",
+        "parent": "winlogon.exe",
+        "count": 3
+      },
+      {
+        "image": "explorer.exe",
+        "parent": "userinit.exe",
+        "count": 3
+      },
+      {
+        "image": "svchost.exe",
+        "parent": "services.exe",
+        "count": 2
+      },
+      {
+        "image": "MpCmdRun.exe",
+        "parent": "services.exe",
+        "count": 1
+      },
+      {
+        "image": "msdtc.exe",
+        "parent": "services.exe",
+        "count": 1
+      },
+      {
+        "image": "spoolsv.exe",
+        "parent": "services.exe",
+        "count": 1
+      }
+    ],
+    "examples": [
+      {
+        "UtcTime": "2026-11-02 13:03:49.873",
+        "ProcessId": "4808",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe /Run",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "3368"
+      },
+      {
+        "UtcTime": "2026-11-02 13:06:16.162",
+        "ProcessId": "4824",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe /Run",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "3368"
+      },
+      {
+        "UtcTime": "2026-11-02 13:15:22.957",
+        "ProcessId": "4844",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe /Run",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "3368"
+      },
+      {
+        "UtcTime": "2026-11-02 13:21:23.535",
+        "ProcessId": "4856",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe /Run",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "3368"
+      },
+      {
+        "UtcTime": "2026-11-02 13:26:50.543",
+        "ProcessId": "4788",
+        "Image": "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe",
+        "CommandLine": "WmiPrvSE.exe -secured -Embedding",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "3364"
+      },
+      {
+        "UtcTime": "2026-11-02 13:30:26.632",
+        "ProcessId": "4864",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe /Run",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "3368"
+      },
+      {
+        "UtcTime": "2026-11-02 13:35:28.834",
+        "ProcessId": "4728",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{3EB3C877-1F16-487C-9050-104DBCD66683}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "3364"
+      },
+      {
+        "UtcTime": "2026-11-02 13:36:07.599",
+        "ProcessId": "4868",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe /Run",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "3368"
+      }
+    ]
+  },
+  "MAIL-FIN-01": {
+    "counts": [
+      [
+        "conhost.exe",
+        14
+      ],
+      [
+        "taskhostw.exe",
+        14
+      ],
+      [
+        "WmiPrvSE.exe",
+        14
+      ],
+      [
+        "dllhost.exe",
+        12
+      ],
+      [
+        "smss.exe",
+        4
+      ],
+      [
+        "winlogon.exe",
+        4
+      ],
+      [
+        "userinit.exe",
+        4
+      ],
+      [
+        "explorer.exe",
+        4
+      ],
+      [
+        "svchost.exe",
+        3
+      ],
+      [
+        "msdtc.exe",
+        2
+      ],
+      [
+        "Veeam.Backup.Service.exe",
+        2
+      ],
+      [
+        "TiWorker.exe",
+        1
+      ]
+    ],
+    "image_parent_counts": [
+      {
+        "image": "conhost.exe",
+        "parent": "csrss.exe",
+        "count": 14
+      },
+      {
+        "image": "taskhostw.exe",
+        "parent": "svchost.exe",
+        "count": 14
+      },
+      {
+        "image": "WmiPrvSE.exe",
+        "parent": "svchost.exe",
+        "count": 14
+      },
+      {
+        "image": "dllhost.exe",
+        "parent": "svchost.exe",
+        "count": 12
+      },
+      {
+        "image": "smss.exe",
+        "parent": "smss.exe",
+        "count": 4
+      },
+      {
+        "image": "winlogon.exe",
+        "parent": "smss.exe",
+        "count": 4
+      },
+      {
+        "image": "userinit.exe",
+        "parent": "winlogon.exe",
+        "count": 4
+      },
+      {
+        "image": "explorer.exe",
+        "parent": "userinit.exe",
+        "count": 4
+      },
+      {
+        "image": "svchost.exe",
+        "parent": "services.exe",
+        "count": 3
+      },
+      {
+        "image": "msdtc.exe",
+        "parent": "services.exe",
+        "count": 2
+      },
+      {
+        "image": "Veeam.Backup.Service.exe",
+        "parent": "services.exe",
+        "count": 2
+      },
+      {
+        "image": "TiWorker.exe",
+        "parent": "svchost.exe",
+        "count": 1
+      },
+      {
+        "image": "w3wp.exe",
+        "parent": "svchost.exe",
+        "count": 1
+      },
+      {
+        "image": "spoolsv.exe",
+        "parent": "services.exe",
+        "count": 1
+      },
+      {
+        "image": "MpCmdRun.exe",
+        "parent": "services.exe",
+        "count": 1
+      }
+    ],
+    "examples": [
+      {
+        "UtcTime": "2026-11-02 13:03:18.286",
+        "ProcessId": "3520",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2408"
+      },
+      {
+        "UtcTime": "2026-11-02 13:23:08.772",
+        "ProcessId": "3588",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{73E709EA-5D93-4B2E-BBB0-99B7938DA9E4}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2408"
+      },
+      {
+        "UtcTime": "2026-11-02 13:33:21.585",
+        "ProcessId": "3416",
+        "Image": "C:\\Windows\\System32\\conhost.exe",
+        "CommandLine": "conhost.exe 0x4",
+        "ParentImage": "C:\\Windows\\System32\\csrss.exe",
+        "ParentProcessId": "2352"
+      },
+      {
+        "UtcTime": "2026-11-02 13:34:20.955",
+        "ProcessId": "3516",
+        "Image": "C:\\Windows\\System32\\conhost.exe",
+        "CommandLine": "conhost.exe 0x4",
+        "ParentImage": "C:\\Windows\\System32\\csrss.exe",
+        "ParentProcessId": "2352"
+      },
+      {
+        "UtcTime": "2026-11-02 13:40:13.110",
+        "ProcessId": "3452",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2408"
+      },
+      {
+        "UtcTime": "2026-11-02 13:42:15.575",
+        "ProcessId": "3660",
+        "Image": "C:\\Windows\\System32\\taskhostw.exe",
+        "CommandLine": "taskhostw.exe /Run",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2432"
+      },
+      {
+        "UtcTime": "2026-11-02 13:47:51.058",
+        "ProcessId": "3496",
+        "Image": "C:\\Windows\\System32\\dllhost.exe",
+        "CommandLine": "dllhost.exe /Processid:{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}",
+        "ParentImage": "C:\\Windows\\System32\\svchost.exe",
+        "ParentProcessId": "2408"
+      },
+      {
+        "UtcTime": "2026-11-02 13:49:11.775",
+        "ProcessId": "3448",
+        "Image": "C:\\Windows\\System32\\conhost.exe",
+        "CommandLine": "conhost.exe 0x4",
+        "ParentImage": "C:\\Windows\\System32\\csrss.exe",
+        "ParentProcessId": "2352"
+      }
+    ]
+  }
+}

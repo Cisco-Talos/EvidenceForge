@@ -1,0 +1,151 @@
+{
+  "scope": "Engineering-only intent ownership probe using resolved authored campaign source/domain. Sensor observations are not independent physical queries; unrelated TXT can be genuine and is counted descriptively, not automatically treated as a defect.",
+  "campaigns": [
+    {
+      "domain": "ns1.westbridge-services.cloud",
+      "source": "10.10.2.30"
+    }
+  ],
+  "sensors": {
+    "zeek-core": {
+      "sha256": "8d57228929cc9607b5279e08a8c2bf62a82b50ec2dc8636694679b54f7a43854",
+      "queries_by_type": {
+        "SRV": 103,
+        "A": 2344,
+        "AAAA": 299,
+        "PTR": 160,
+        "SOA": 2,
+        "MX": 4,
+        "NS": 6,
+        "TXT": 265
+      },
+      "campaign_rows_by_source": {
+        "10.10.2.30": 228
+      },
+      "campaign_wrong_source": [],
+      "other_txt_by_source": {
+        "10.10.1.41": 2,
+        "10.10.1.34": 2,
+        "10.10.1.99": 3,
+        "10.10.2.25": 1,
+        "10.10.1.33": 4,
+        "10.10.1.31": 1,
+        "10.10.2.20": 2,
+        "10.10.2.21": 1,
+        "10.10.1.21": 5,
+        "10.10.1.35": 2,
+        "10.10.1.36": 3,
+        "10.10.4.10": 2,
+        "10.10.1.32": 2,
+        "10.10.1.42": 1,
+        "10.10.2.27": 1,
+        "10.10.3.10": 1,
+        "10.10.2.10": 2,
+        "10.10.2.26": 1,
+        "10.10.2.30": 1
+      },
+      "other_txt_hour_bins": {
+        "10.10.1.41": {
+          "498233": 2
+        },
+        "10.10.1.34": {
+          "498233": 2
+        },
+        "10.10.1.99": {
+          "498233": 3
+        },
+        "10.10.2.25": {
+          "498233": 1
+        },
+        "10.10.1.33": {
+          "498233": 4
+        },
+        "10.10.1.31": {
+          "498233": 1
+        },
+        "10.10.2.20": {
+          "498233": 2
+        },
+        "10.10.2.21": {
+          "498233": 1
+        },
+        "10.10.1.21": {
+          "498233": 4,
+          "498234": 1
+        },
+        "10.10.1.35": {
+          "498233": 2
+        },
+        "10.10.1.36": {
+          "498233": 1,
+          "498234": 2
+        },
+        "10.10.4.10": {
+          "498233": 2
+        },
+        "10.10.1.32": {
+          "498233": 2
+        },
+        "10.10.1.42": {
+          "498233": 1
+        },
+        "10.10.2.27": {
+          "498233": 1
+        },
+        "10.10.3.10": {
+          "498233": 1
+        },
+        "10.10.2.10": {
+          "498233": 1,
+          "498234": 1
+        },
+        "10.10.2.26": {
+          "498233": 1
+        },
+        "10.10.2.30": {
+          "498234": 1
+        }
+      }
+    },
+    "zeek-db": {
+      "sha256": "979b83bc18616273c399e40121eee1d1b0efa242bb1adf026c75f295b4c7a6bf",
+      "queries_by_type": {
+        "A": 26,
+        "PTR": 2,
+        "SRV": 6,
+        "AAAA": 4,
+        "TXT": 2
+      },
+      "campaign_rows_by_source": {},
+      "campaign_wrong_source": [],
+      "other_txt_by_source": {
+        "10.10.4.10": 2
+      },
+      "other_txt_hour_bins": {
+        "10.10.4.10": {
+          "498233": 2
+        }
+      }
+    },
+    "zeek-dmz": {
+      "sha256": "38ea5db72a8a2dc39d9db254adfd7ff7f27de01e55bd772193719662966777e1",
+      "queries_by_type": {
+        "A": 929,
+        "AAAA": 125,
+        "PTR": 75,
+        "SRV": 9,
+        "TXT": 1
+      },
+      "campaign_rows_by_source": {},
+      "campaign_wrong_source": [],
+      "other_txt_by_source": {
+        "10.10.3.10": 1
+      },
+      "other_txt_hour_bins": {
+        "10.10.3.10": {
+          "498233": 1
+        }
+      }
+    }
+  }
+}

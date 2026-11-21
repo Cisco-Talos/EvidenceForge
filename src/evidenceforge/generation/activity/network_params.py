@@ -19,6 +19,8 @@ from evidenceforge.config.schemas import (
     HttpTransportFloorSlackConfig,
     NmapCommandProbeConfig,
     ProtocolConfirmationConfig,
+    RdpPayloadBounds,
+    TlsDetectionPhaseConfig,
 )
 from evidenceforge.utils.rng import _stable_seed
 
@@ -94,6 +96,22 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
     for family in ("transport_histories", "ssl_histories"):
         if isinstance(overlay.get(family), dict):
             result[family] = {**default.get(family, {}), **overlay[family]}
+    if "rdp_payload_bounds" in overlay:
+        incoming = overlay["rdp_payload_bounds"]
+        existing = default.get("rdp_payload_bounds", {})
+        result["rdp_payload_bounds"] = (
+            {**existing, **incoming}
+            if isinstance(existing, dict) and isinstance(incoming, dict)
+            else incoming
+        )
+    if "tls_detection_phase" in overlay:
+        incoming = overlay["tls_detection_phase"]
+        existing = default.get("tls_detection_phase", {})
+        result["tls_detection_phase"] = (
+            {**existing, **incoming}
+            if isinstance(existing, dict) and isinstance(incoming, dict)
+            else incoming
+        )
     if isinstance(overlay.get("http_request_phase"), dict):
         result["http_request_phase"] = {
             **default.get("http_request_phase", {}),
@@ -222,6 +240,39 @@ def protocol_confirmation_config() -> ProtocolConfirmationConfig:
     return ProtocolConfirmationConfig.model_validate(
         load_network_params().get("protocol_confirmation", {})
     )
+
+
+def rdp_payload_bounds() -> RdpPayloadBounds:
+    """Return shared traffic bounds, preserving the historical frozen support."""
+
+    config = load_network_params()
+    if "rdp_payload_bounds" not in config:
+        # Compatibility with snapshots predating the data-driven traffic support.
+        return RdpPayloadBounds(
+            initiator_minimum_bytes=50_000,
+            initiator_maximum_bytes=500_000,
+            responder_minimum_bytes=100_000,
+            responder_maximum_bytes=2_000_000,
+        )
+    return RdpPayloadBounds.model_validate(config["rdp_payload_bounds"])
+
+
+def sample_rdp_payload_bytes(rng: random.Random) -> tuple[int, int]:
+    """Sample the same two discrete draws used by every RDP transport entry."""
+
+    profile = rdp_payload_bounds()
+    return (
+        rng.randint(profile.initiator_minimum_bytes, profile.initiator_maximum_bytes),
+        rng.randint(profile.responder_minimum_bytes, profile.responder_maximum_bytes),
+    )
+
+
+def tls_detection_phase_config() -> TlsDetectionPhaseConfig | None:
+    """Read typed TLS policy, preserving legacy behavior when absent in frozen config."""
+    config = load_network_params()
+    if "tls_detection_phase" not in config:
+        return None
+    return TlsDetectionPhaseConfig.model_validate(config["tls_detection_phase"])
 
 
 def http_request_phase_config() -> HttpRequestPhaseConfig:

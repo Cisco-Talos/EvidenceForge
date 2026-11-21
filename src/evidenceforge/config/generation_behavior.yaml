@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 533
+current_revision: 568
 history_start_revision: 1
-behavior_surface_sha256: d7a9cfd2d0d0ea44c720348ceee86e900b94eccaa95e8b9258b4bc3a71342ed3
+behavior_surface_sha256: fc245f4f08b674ae6fdbedc49e50016fd42465ae87c50bd0495db0d6f4c2fee9
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6133,3 +6133,451 @@ changes:
   summary: Add a content identity for resolved scenarios that ignores lifecycle metadata and
     pack provenance, used by Studio to compare runs with the current scenario. Generated output
     is unchanged.
+- revision: 534
+  id: noninteractive-macos-shell-lifetimes
+  impact: localized
+  domains:
+  - process-lifetimes
+  - foreground-shell-ownership
+  formats:
+  - ecar
+  - macos_endpoint_security
+  - zsh_history
+  - bash_history
+  summary: Noninteractive macOS shell invocations use the shared POSIX command lifetime
+    policy instead of inheriting their interactive shell's long-lived catalog profile.
+    Bare shells and explicit keep-alive commands remain unbounded.
+- revision: 535
+  id: reusable-machine-tgt-and-valid-rsa-public-material
+  impact: material
+  domains:
+  - kerberos-ticket-cache
+  - implicit-domain-authentication
+  - cryptographic-public-material
+  formats:
+  - windows_event_security
+  - zeek_conn
+  - zeek_dns
+  - zeek_x509
+  - zeek_files
+  - ecar
+  - cisco_asa
+  summary: Implicit machine authentication reuses valid TGTs before planning AS
+    transport. Shared DKIM/certificate RSA keys use independently scoped large primes;
+    explicit ticket requests remain intact.
+- revision: 536
+  id: independent-session-observations-and-scoped-rsa-memo
+  impact: material
+  domains:
+  - auth-session-source-timing
+  - cryptographic-public-material
+  formats:
+  - windows_event_security
+  - ecar
+  - zeek_dns
+  - zeek_x509
+  - zeek_files
+  summary: Independent durable-session observations retain occurrence times and
+    login/closure bounds. RSA derivation preserves full identity width and reuses
+    bounded immutable public-modulus computations.
+- revision: 537
+  id: coherent-endpoint-process-transition-collector
+  impact: localized
+  domains:
+  - source-timing
+  - process-lifecycle
+  formats:
+  - ecar
+  summary: Process exec, audit, credential and job-control transitions share the
+    process-start collector queue, preserving short canonical elapsed intervals
+    while retaining independent residuals and lifecycle ordering bounds.
+- revision: 538
+  id: application-progress-independent-of-tcp-teardown
+  impact: localized
+  domains:
+  - network-protocol-progress
+  - network-payload-accounting
+  - network-close-admission
+  formats:
+  - zeek
+  - ecar
+  - cisco_asa
+  - windows_event_security
+  - windows_event_sysmon
+  - proxy_access
+  - web_access
+  summary: Application evidence follows protocol progress across TCP reset and
+    half-close outcomes. Shared payload, history and close bounds stay coherent;
+    explicit HTTP retains valid teardown and failed TLS remains partial.
+- revision: 539
+  id: continuous-source-observation-delay-precision
+  impact: localized
+  domains:
+  - source-observation-delay
+  - source-timing
+  formats: []
+  summary: Nonconstant observation delays use scoped continuous microsecond
+    sampling within configured bounds. Fixed and zero delays, missingness,
+    lifecycle coherence and the eCAR process curve remain intact.
+- revision: 540
+  id: proxy-cli-semantic-request-ownership
+  impact: localized
+  domains:
+  - proxy-process-ownership
+  - command-http-intent
+  - proxy-origin-failure
+  formats:
+  - ecar
+  - windows_event_security
+  - windows_event_sysmon
+  - proxy_access
+  - zeek
+  summary: Literal curl/wget request intent preserves live caller ownership and
+    known resource paths across proxy transport. Gateway-only failed origin
+    attempts retain control traffic without inferred application exchanges.
+- revision: 541
+  id: posix-pid-workload-capacity-support
+  impact: localized
+  domains:
+  - posix-process-identity
+  - pid-workload-texture
+  - process-materialization
+  formats:
+  - ecar
+  - syslog
+  - macos_endpoint_security
+  - macos_unified_log
+  summary: Shared POSIX hidden PID consumption samples nonuniform integer counts
+    inside safe reorder capacity instead of clipping quiet workload draws into
+    a shared floor. Preview, live allocation, wrap and reservation contracts remain.
+- revision: 542
+  id: invocation-scoped-windows-cli-parent-placement
+  impact: localized
+  domains:
+  - windows-cli-parent-timing
+  - process-session-readiness
+  - typed-temporal-placement
+  formats:
+  - ecar
+  - windows_event_security
+  - windows_event_sysmon
+  summary: Fresh Windows CLI parent preparation is scoped to each invocation
+    with bounded typed timing and explicit parent/command constraints. Impossible
+    session or source windows reject before inventing an early parent.
+- revision: 543
+  id: rdp-target-readiness-and-startup-work
+  impact: localized
+  domains:
+  - rdp-session-bootstrap
+  - temporal-admission
+  - windows-process-lifecycle
+  formats:
+  - ecar
+  - windows_event_security
+  - windows_event_sysmon
+  summary: RDP startup separates transport and source readiness from scoped
+    negotiation and target phase work. Shared configured support bounds admission
+    before actors are allocated; native projections retain canonical phase times.
+- revision: 544
+  id: dns-tunnel-campaign-source-ownership
+  impact: localized
+  domains:
+  - dns-campaign-intent
+  - baseline-activity-ownership
+  formats:
+  - zeek
+  - ecar
+  - firewall
+  summary: Typed DNS tunnels emit only their own campaign traffic and required
+    companions. They no longer manufacture unrelated fleet TXT lookups around
+    the attack; ordinary DNS and explicit authored lookups retain their owners.
+- revision: 545
+  id: canonical-storage-purpose-type-size-policy
+  impact: localized
+  domains:
+  - storage-catalog-metadata
+  - file-content-size
+  - smb-transfer-accounting
+  formats:
+  - ecar
+  - zeek
+  - windows_event_security
+  - syslog
+  - macos_endpoint_security
+  summary: Automatic file sizes follow typed purpose/type supports. Explicit sizes
+    stay authoritative; frozen configurations without the policy keep legacy
+    supports and RNG consumption.
+- revision: 546
+  id: canonical-file-elapsed-sensor-clock-projection
+  impact: localized
+  domains:
+  - network-source-file-timing
+  - canonical-transfer-elapsed
+  - source-clock-projection
+  formats:
+  - zeek
+  summary: File analysis preserves canonical elapsed through sensor clocks.
+    Source phase placement reserves the full interval before transport close,
+    replacing independent sensor-local duration sampling.
+- revision: 547
+  id: native-dovecot-canonical-session-identities
+  impact: localized
+  domains:
+  - source-native-mail-identities
+  - email-access-transport-links
+  formats:
+  - syslog
+  summary: Dovecot session IDs encode canonical login microseconds, remote port and address
+    once for login/logout reuse. IMAPS companion timing consumes the committed transport interval.
+- revision: 548
+  id: dovecot-static-nat-target-binding
+  impact: localized
+  domains:
+  - mail-imaps-static-nat-validation
+  - network-endpoint-topology
+  formats:
+  - syslog
+  summary: IMAPS server validation accepts its configured static-NAT public address through
+    the shared topology endpoint resolver, preserving the canonical wire tuple and rejecting
+    unrelated targets.
+- revision: 549
+  id: canonical-tls-detection-and-share-audit-version
+  impact: localized
+  domains:
+  - canonical-tls-phase
+  - network-source-clock-projection
+  - windows-share-audit-schema
+  formats:
+  - zeek
+  - windows_event_security
+  summary: TLS first detection is owned once by the canonical transport and projected through
+    sensor clocks. Modern share-access XML declares version1 for its supported access-mask/list
+    payload.
+- revision: 550
+  id: automatic-smb-task-file-eligibility
+  impact: localized
+  domains:
+  - baseline-smb-task-selection
+  - smb-client-operation-profiles
+  formats:
+  - ecar
+  - macos_es
+  - zeek
+  - windows_event_security
+  - syslog
+  summary: Automatic SMB tasks intersect operation-profile file types before share choice.
+    Explicit operations and old profiles remain unrestricted.
+- revision: 551
+  id: native-windows-policy-repository-layout
+  impact: localized
+  domains:
+  - storage-world-policy-repository
+  - automatic-domain-file-metadata
+  formats:
+  - ecar
+  - zeek
+  - windows_event_security
+  summary: Known-domain Windows DC policy shares use bounded GUID-based SYSVOL and script
+    NETLOGON catalogs. Explicit files, custom roots and old frozen catalogs remain authoritative.
+- revision: 552
+  id: rdp-logical-traffic-envelope-provisioning
+  impact: localized
+  domains:
+  - rdp-logical-session-provisioning
+  - shared-rdp-traffic-support
+  formats:
+  - ecar
+  - zeek
+  - windows_event_security
+  summary: Logical RDP byte quotas cover the shared physical traffic support instead of a
+    small first random draw. Existing operation and manager admission guards remain enforced.
+- revision: 553
+  id: canonical-remote-ntlm-credential-validation
+  impact: localized
+  domains:
+  - authentication-authority
+  - persistent-smb-source-cohorts
+  - session-guid-availability
+  formats:
+  - windows_event_security
+  - ecar
+  - syslog
+  summary: Known remote NTLM successes share authority planning across Windows/Samba. Prepared
+    SMB validation joins exact recovery; session GUID availability follows the resolved authentication
+    mechanism.
+- revision: 554
+  id: modeled-apfs-presented-root-identity
+  impact: localized
+  domains:
+  - macos-directory-metadata
+  - installed-filesystem-conflict-guard
+  formats:
+  - macos_endpoint_security
+  - ecar
+  summary: An optional qualified policy gives the presented APFS root its reserved inode while
+    preserving ordinary directory allocation, host namespaces and legacy frozen profiles.
+- revision: 555
+  id: macos-native-generation-host-history
+  impact: localized
+  domains:
+  - macos-canonical-generation-resolution
+  - posix-hidden-birth-history
+  formats:
+  - macos_endpoint_security
+  - ecar
+  summary: Native process generations include existing host-wide hidden birth history before
+    source filtering. Chronological resolution preserves canonical reservation handles and
+    one shared native/eCAR reference map.
+- revision: 556
+  id: linux-console-getty-login-execution-owner
+  impact: localized
+  domains:
+  - linux-console-process-lifecycle
+  - auth-session-parent-ownership
+  formats:
+  - syslog
+  - ecar
+  summary: Ordinary console logins consume a free getty with same-lifetime POSIX exec. Exact
+    session root owns shell parentage and root-principal teardown; optional frozen terminal
+    inventory preserves the legacy adapter when absent.
+- revision: 557
+  id: linux-console-root-exact-session-close-role
+  impact: localized
+  domains:
+  - linux-console-process-lifecycle
+  - exact-sudo-session-close
+  formats:
+  - ecar
+  summary: Exact sudo session teardown authenticates its qualified getty/login root role without
+    rewriting the root token or accepting foreign process ownership. Retains exact source,
+    activity and retry bindings.
+- revision: 558
+  id: authored-rdp-exact-completion-acknowledgement
+  impact: localized
+  domains:
+  - authored-intent-reconciliation
+  - rdp-session-lifecycle
+  formats: []
+  summary: The authored close adapter acknowledges an already completed RDP session only after
+    matching exact retained host, principal, session kind, authoritative end plan and close
+    time. Does not duplicate source rows or relax intent fulfillment.
+- revision: 559
+  id: canonical-process-close-and-console-admission-clock-domains
+  impact: localized
+  domains:
+  - process-lifecycle
+  - source-timing-admission
+  - linux-console-process-lifecycle
+  formats:
+  - ecar
+  - windows_event_security
+  - windows_event_sysmon
+  - syslog
+  summary: Windows close preserves canonical runtime while SourceTimingPlanner contains native
+    rows. New console getties reserve source headroom and protect the full birth-to-login
+    terminal interval.
+- revision: 560
+  id: cups-discovery-correlated-endpoint-parameter
+  impact: localized
+  domains:
+  - source-local-syslog-parameters
+  formats:
+  - syslog
+  summary: CUPS discovery location uses a named printer-correlated IPP endpoint through shared
+    template rendering, preserving explicit endpoint overrides and frozen legacy numeric message
+    definitions.
+- revision: 561
+  id: linux-finite-report-runtime-policy
+  impact: localized
+  domains:
+  - linux-command-runtime
+  - process-lifecycle
+  formats:
+  - ecar
+  - syslog
+  - bash_history
+  summary: Linux finite report commands share typed interval/count completion policy across
+    direct and sudo paths. Platform-qualified config preserves Mac and frozen legacy lifetimes;
+    existing sampler sites consume the bounds.
+- revision: 562
+  id: authored-linux-gui-foreground-owner-adapter
+  impact: localized
+  domains:
+  - linux-foreground-ownership
+  - process-lifecycle
+  formats:
+  - ecar
+  - syslog
+  - bash_history
+  summary: An implicit local GUI authored command can reuse or create a canonical terminal
+    sibling when another shell has unbounded work. Explicit parents, console/SSH restrictions
+    and existing transport deadlines remain intact.
+- revision: 563
+  id: windows-canonical-process-creator-and-target-token
+  impact: localized
+  domains:
+  - windows-process-identity
+  - process-creation-security
+  formats:
+  - windows_event_security
+  summary: Resolve known ordinary Windows creator and child tokens before source preparation.
+    Render 4688 Creator/Target Subject separately; preserve child identity in Sysmon/eCAR/termination
+    and explicit or unknown compatibility contexts.
+- revision: 564
+  id: canonical-finder-weighted-transition-allocation
+  impact: localized
+  domains:
+  - macos-finder-lifecycle
+  - canonical-phase-timing
+  formats:
+  - macos_endpoint_security
+  - ecar
+  summary: Allocate Finder interior canonical phases using separately scoped positive transition
+    weights within unchanged first/final readiness anchors. Preserve exact retained source
+    retries and native clock projection.
+- revision: 565
+  id: canonical-macos-ssh-descendant-close-transition-allocation
+  impact: localized
+  domains:
+  - macos-ssh-lifecycle
+  - canonical-phase-timing
+  formats:
+  - macos_endpoint_security
+  - ecar
+  summary: Allocate exact Mac SSH descendant close phases from scoped transition weights within
+    existing transport/receiver anchors. Retain postorder, dependency frontiers and continuation-owned
+    exact retry; Linux behavior is unchanged.
+- revision: 566
+  id: installed-macos-os-files-consume-canonical-boot-facts
+  impact: localized
+  domains:
+  - macos-installed-provisioning
+  - host-boot-chronology
+  formats:
+  - macos_endpoint_security
+  summary: Condition selected machine OS file installation ages on existing canonical host
+    boot facts before lazy provisioning. Keep finite age/release support, shared binary facts,
+    unknown/legacy compatibility and third-party placement.
+- revision: 567
+  id: unknown-source-default-http-client-presentation-profile
+  impact: localized
+  domains:
+  - http-client-presentation
+  - unknown-source-default-policy
+  formats:
+  - zeek_http
+  - web_access
+  - proxy
+  summary: Select optional generic HTTP client presentations for unknown source hosts through
+    one default pool adapter. Preserve explicit/absent headers, known-host policy and frozen
+    catalogs without the optional profile.
+- revision: 568
+  id: dovecot-native-body-fetch-count-positive-for-sent-data
+  impact: localized
+  domains:
+  - dovecot-native-fetch-summary
+  formats:
+  - syslog
+  summary: Condition native Dovecot fetched-message counts on positive body data while allowing
+    counted empty fetches. Preserve committed transport, byte budgets, worker identity and
+    session codec.

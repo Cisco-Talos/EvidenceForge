@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from functools import partial
 from typing import Any, Literal
 
+from evidenceforge.config.schemas import SmbClientProfile, SmbProcessProfile
 from evidenceforge.events.authentication import (
     RemoteAuthenticationPlan,
     RemoteAuthenticationTransportPlan,
@@ -61,6 +62,9 @@ from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionIdentityCapture,
     PersistentSmbApplicationIntent,
     PersistentSmbRootIntent,
+)
+from evidenceforge.generation.actions.windows_process_security import (
+    prepare_windows_process_creation_security,
 )
 from evidenceforge.generation.activity.direct_exec import literal_shell_child_arguments
 from evidenceforge.generation.activity.smb_profiles import (
@@ -139,6 +143,7 @@ from evidenceforge.models.exceptions import EventContractError, SmbActivityWindo
 from evidenceforge.models.scenario import (
     SmbActivityEventSpec,
     SmbClientLocation,
+    SmbFileSelector,
     SmbShareLocation,
     System,
     User,
@@ -150,7 +155,7 @@ from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc, parse_duration
 
 _MAX_PERSISTENT_SMB_OPERATIONS = MAX_PERSISTENT_SMB_OPERATIONS
-_MAX_PERSISTENT_SMB_SOURCE_MEMBERS = 6 + 3 * _MAX_PERSISTENT_SMB_OPERATIONS
+_MAX_PERSISTENT_SMB_SOURCE_MEMBERS = 7 + 3 * _MAX_PERSISTENT_SMB_OPERATIONS
 _SMB_FILE_ANALYZERS = ("MIME", "MD5", "SHA1", "SHA256")
 # An operation-lived client helper exits this long after its SMB operation completes.
 _SMB_OPERATION_CLIENT_CLOSE_MIN_MS = 250
@@ -674,9 +679,18 @@ class SmbActivityActionBundle:
                     client_system=client_system,
                     auth_protocol=auth_protocol or "ntlm",
                 )
+            validation_member_count = int(
+                self.executor._ntlm_validation_authority(
+                    username=self.smb_principal,
+                    system=server,
+                    auth_protocol=auth_protocol or "ntlm",
+                )
+                is not None
+            )
             operation_member_count = 3 if self.outcome == "success" else 1
             member_budget = (
                 5
+                + validation_member_count
                 + len(selected) * operation_member_count
                 + int(client_process_preparation.disposition == "materialize")
             )
@@ -729,6 +743,7 @@ class SmbActivityActionBundle:
                         )
                         member_budget = (
                             5
+                            + validation_member_count
                             + len(selected) * operation_member_count
                             + int(client_process_preparation.disposition == "materialize")
                         )
@@ -1578,26 +1593,23 @@ class SmbActivityActionBundle:
             return False
         return True
 
-    def _prepare_persistent_client_process(
+    def _client_operation_profile(
         self,
         *,
         share: CompiledStorageShare,
-        selected: tuple[CompiledStorageFile, ...],
         server: System,
-        client_system: System | None,
-        auth_protocol: str,
-    ) -> PersistentSmbClientProcessPreparation:
-        """Freeze one SMB client actor without mutating State or source output."""
+        client_system: System,
+        client_access: str,
+    ) -> tuple[SmbClientProfile, SmbProcessProfile | None]:
+        """Resolve the same immutable operation actor for admission and execution."""
 
-        if client_system is None:
-            return PersistentSmbClientProcessPreparation.none()
         os_category = self._endpoint_platform(client_system)
         access_mode = {
             "windows_native": "explorer",
             "cifs_mount": "mounted",
             "macos_mount": "mounted",
             "smbclient": "direct",
-        }.get(self.client_access)
+        }.get(client_access)
         profile = select_client_profile(
             os_category,
             client_system.services or (),
@@ -1616,10 +1628,77 @@ class SmbActivityActionBundle:
                 transfer_direction = "download"
             else:
                 transfer_direction = "remote"
-        process_profile = client_process_for_operation(
+        return profile, client_process_for_operation(
             profile,
             self.request.spec.operation,
             transfer_direction=transfer_direction,
+        )
+
+    def automatic_task_spec(self) -> SmbActivityEventSpec | None:
+        """Refine ordinary baseline selection before any runtime preparation."""
+
+        spec = self.request.spec
+        location = spec.target
+        if (
+            self.request.activity_source != "baseline"
+            or self.request.files_override
+            or spec.batch is not None
+            or spec.operation not in {"read", "update", "browse"}
+            or not isinstance(location, SmbShareLocation)
+            or location.path is not None
+            or location.file_ref is not None
+        ):
+            return spec
+        share = self.world.share(location.share)
+        server = self._system(share.system)
+        client, _ip = self._client(server)
+        if client is None:
+            return spec
+        self.mapping, _principal = self._resolve_share_leg(share)
+        _client_profile, profile = self._client_operation_profile(
+            share=share,
+            server=server,
+            client_system=client,
+            client_access=self._resolve_client_access(client),
+        )
+        extensions = profile.automatic_file_extensions if profile is not None else None
+        if extensions is None:
+            return spec
+        selector_data = location.selector.model_dump() if location.selector is not None else {}
+        existing = selector_data.get("extensions", [])
+        eligible = [extension for extension in extensions if not existing or extension in existing]
+        if not eligible:
+            return None
+        selector_data["extensions"] = eligible
+        refined_location = location.model_copy(
+            update={"selector": SmbFileSelector.model_validate(selector_data)}
+        )
+        if not any(
+            self.executor.state_manager.smb_file_is_available(file)
+            for file in self.world.select(location.share, selector=refined_location.selector)
+        ):
+            return None
+        return spec.model_copy(update={"target": refined_location})
+
+    def _prepare_persistent_client_process(
+        self,
+        *,
+        share: CompiledStorageShare,
+        selected: tuple[CompiledStorageFile, ...],
+        server: System,
+        client_system: System | None,
+        auth_protocol: str,
+    ) -> PersistentSmbClientProcessPreparation:
+        """Freeze one SMB client actor without mutating State or source output."""
+
+        if client_system is None:
+            return PersistentSmbClientProcessPreparation.none()
+        os_category = self._endpoint_platform(client_system)
+        profile, process_profile = self._client_operation_profile(
+            share=share,
+            server=server,
+            client_system=client_system,
+            client_access=self.client_access,
         )
         if self.request.client_logon_id:
             session = self.executor.state_manager.get_session(self.request.client_logon_id)
@@ -2556,6 +2635,9 @@ class SmbActivityActionBundle:
                     parent_group_id=client_identity.parent_lifecycle_group_id or None,
                 ),
             )
+            prepare_windows_process_creation_security(
+                process_create_event, creator=parent_identity, sid_for=self.executor._get_sid
+            )
         transport_process = (
             client_process_context
             if client_process_preparation.transport_attribution == "process"
@@ -2627,6 +2709,15 @@ class SmbActivityActionBundle:
                 ),
             ]
         )
+        validation = self.executor._prepare_successful_ntlm_validation(
+            auth=auth,
+            system=server,
+            time=auth_time,
+            stable_id=self.anchor.stable_id,
+            transport_start=final_transaction.started_at,
+        )
+        if validation is not None:
+            events.append(validation)
         for event in operation_events:
             event.network = application_network
             events.append(event)
@@ -2699,7 +2790,12 @@ class SmbActivityActionBundle:
             (events[transport_index], PersistentSmbProjectionPhase.TRANSPORT),
             (events[transport_index + 1], PersistentSmbProjectionPhase.TYPE3_LOGON),
             *(
-                (event, PersistentSmbProjectionPhase.TREE_OR_FILE)
+                (
+                    event,
+                    PersistentSmbProjectionPhase.CREDENTIAL_VALIDATION
+                    if event.event_type == "ntlm_validation"
+                    else PersistentSmbProjectionPhase.TREE_OR_FILE,
+                )
                 for event in events[transport_index + 2 : -1]
             ),
         )

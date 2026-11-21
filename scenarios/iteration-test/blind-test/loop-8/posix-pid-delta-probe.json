@@ -1,0 +1,3419 @@
+{
+  "scope": "Descriptive PID differences in every repeated visible Linux process command (at least3 creations). Nonpositive differences are retained as possible wrap/out-of-order rather than declared impossible.",
+  "combined_most_common_deltas": [
+    [
+      999,
+      6
+    ],
+    [
+      1130,
+      6
+    ],
+    [
+      1060,
+      6
+    ],
+    [
+      1118,
+      6
+    ],
+    [
+      1040,
+      6
+    ],
+    [
+      1279,
+      6
+    ],
+    [
+      1024,
+      6
+    ],
+    [
+      1167,
+      5
+    ],
+    [
+      1691,
+      4
+    ],
+    [
+      1066,
+      4
+    ],
+    [
+      1083,
+      4
+    ],
+    [
+      1186,
+      4
+    ],
+    [
+      1735,
+      4
+    ],
+    [
+      1224,
+      4
+    ],
+    [
+      1009,
+      4
+    ]
+  ],
+  "hosts": {
+    "APP-INT-01.meridianhcs.local": {
+      "ecar_sha256": "60f953a30c6b649b173e01137b3702e16c446f6b5f358c9f89798ad0e6797d87",
+      "syslog_sha256": "50714c401ce94427a7b36e48c1325b92b939ca84949b3883c388139d8f50aafe",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/bash",
+          "command": "-bash",
+          "count": 10,
+          "min_delta": 31,
+          "max_delta": 22983,
+          "mode_deltas": [
+            [
+              423,
+              1
+            ],
+            [
+              22983,
+              1
+            ],
+            [
+              9772,
+              1
+            ],
+            [
+              1179,
+              1
+            ],
+            [
+              3005,
+              1
+            ],
+            [
+              10957,
+              1
+            ],
+            [
+              8699,
+              1
+            ],
+            [
+              31,
+              1
+            ]
+          ],
+          "all_deltas": [
+            423,
+            22983,
+            9772,
+            1179,
+            3005,
+            10957,
+            8699,
+            31,
+            1483
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624591516,
+              "pid": 3374833,
+              "line": 7
+            },
+            {
+              "timestamp_ms": 1793624685461,
+              "pid": 3375256,
+              "line": 11
+            },
+            {
+              "timestamp_ms": 1793629070731,
+              "pid": 3398239,
+              "line": 142
+            },
+            {
+              "timestamp_ms": 1793632010037,
+              "pid": 3408011,
+              "line": 252
+            }
+          ]
+        },
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 990,
+          "max_delta": 3831,
+          "mode_deltas": [
+            [
+              1066,
+              2
+            ],
+            [
+              3817,
+              1
+            ],
+            [
+              3377,
+              1
+            ],
+            [
+              3195,
+              1
+            ],
+            [
+              3831,
+              1
+            ],
+            [
+              3573,
+              1
+            ],
+            [
+              2613,
+              1
+            ],
+            [
+              1691,
+              1
+            ]
+          ],
+          "all_deltas": [
+            3817,
+            3377,
+            3195,
+            3831,
+            3573,
+            2613,
+            1691,
+            2170,
+            2530,
+            1947,
+            2329,
+            1410,
+            1356,
+            1066,
+            1047,
+            1066,
+            1083,
+            1186,
+            1389,
+            1585,
+            1735,
+            1405,
+            1533,
+            1147,
+            999,
+            1015,
+            990,
+            1013,
+            1005,
+            1868,
+            1130,
+            1161,
+            1151,
+            1224,
+            1162
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624701196,
+              "pid": 3375330,
+              "line": 12
+            },
+            {
+              "timestamp_ms": 1793625301540,
+              "pid": 3379147,
+              "line": 45
+            },
+            {
+              "timestamp_ms": 1793625901167,
+              "pid": 3382524,
+              "line": 81
+            },
+            {
+              "timestamp_ms": 1793626501029,
+              "pid": 3385719,
+              "line": 91
+            }
+          ]
+        },
+        {
+          "image": "/usr/bin/tail",
+          "command": "tail -20",
+          "count": 4,
+          "min_delta": 302,
+          "max_delta": 30658,
+          "mode_deltas": [
+            [
+              2772,
+              1
+            ],
+            [
+              30658,
+              1
+            ],
+            [
+              302,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2772,
+            30658,
+            302
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793629541420,
+              "pid": 3399888,
+              "line": 155
+            },
+            {
+              "timestamp_ms": 1793630258545,
+              "pid": 3402660,
+              "line": 188
+            },
+            {
+              "timestamp_ms": 1793644291806,
+              "pid": 3433318,
+              "line": 829
+            },
+            {
+              "timestamp_ms": 1793644442167,
+              "pid": 3433620,
+              "line": 840
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 990,
+          "max_delta": 3831,
+          "mode_deltas": [
+            [
+              1066,
+              2
+            ],
+            [
+              3817,
+              1
+            ],
+            [
+              3377,
+              1
+            ],
+            [
+              3195,
+              1
+            ],
+            [
+              3831,
+              1
+            ],
+            [
+              3573,
+              1
+            ],
+            [
+              2613,
+              1
+            ],
+            [
+              1691,
+              1
+            ]
+          ],
+          "all_deltas": [
+            3817,
+            3377,
+            3195,
+            3831,
+            3573,
+            2613,
+            1691,
+            2170,
+            2530,
+            1947,
+            2329,
+            1410,
+            1356,
+            1066,
+            1047,
+            1066,
+            1083,
+            1186,
+            1389,
+            1585,
+            1735,
+            1405,
+            1533,
+            1147,
+            999,
+            1015,
+            990,
+            1013,
+            1005,
+            1868,
+            1130,
+            1161,
+            1151,
+            1224,
+            1162
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624701488,
+              "pid": 3375331,
+              "line": 13
+            },
+            {
+              "timestamp_ms": 1793625301850,
+              "pid": 3379148,
+              "line": 46
+            },
+            {
+              "timestamp_ms": 1793625901281,
+              "pid": 3382525,
+              "line": 82
+            },
+            {
+              "timestamp_ms": 1793626501271,
+              "pid": 3385720,
+              "line": 92
+            }
+          ]
+        }
+      ]
+    },
+    "DB-PROD-01.meridianhcs.local": {
+      "ecar_sha256": "716fdbfec4633018085d3678c2d775908d4c5eeb04ad0f7c74b0a155ddb35779",
+      "syslog_sha256": "f65f3279205828d6e9a8771a00ee50d0e40131ff8134d5e0fba0e5c6b662fc59",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/bash",
+          "command": "-bash",
+          "count": 9,
+          "min_delta": 664,
+          "max_delta": 25420,
+          "mode_deltas": [
+            [
+              664,
+              1
+            ],
+            [
+              4785,
+              1
+            ],
+            [
+              2223,
+              1
+            ],
+            [
+              6966,
+              1
+            ],
+            [
+              3297,
+              1
+            ],
+            [
+              1563,
+              1
+            ],
+            [
+              6537,
+              1
+            ],
+            [
+              25420,
+              1
+            ]
+          ],
+          "all_deltas": [
+            664,
+            4785,
+            2223,
+            6966,
+            3297,
+            1563,
+            6537,
+            25420
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624582895,
+              "pid": 1366640,
+              "line": 3
+            },
+            {
+              "timestamp_ms": 1793624909705,
+              "pid": 1367304,
+              "line": 11
+            },
+            {
+              "timestamp_ms": 1793627037877,
+              "pid": 1372089,
+              "line": 92
+            },
+            {
+              "timestamp_ms": 1793628064888,
+              "pid": 1374312,
+              "line": 143
+            }
+          ]
+        },
+        {
+          "image": "/usr/bin/head",
+          "command": "head -20",
+          "count": 3,
+          "min_delta": 2582,
+          "max_delta": 12640,
+          "mode_deltas": [
+            [
+              2582,
+              1
+            ],
+            [
+              12640,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2582,
+            12640
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793627930195,
+              "pid": 1373974,
+              "line": 135
+            },
+            {
+              "timestamp_ms": 1793628898808,
+              "pid": 1376556,
+              "line": 172
+            },
+            {
+              "timestamp_ms": 1793634153236,
+              "pid": 1389196,
+              "line": 360
+            }
+          ]
+        }
+      ]
+    },
+    "FILE-LNX-01.meridianhcs.local": {
+      "ecar_sha256": "8c781237cd4bdc9c0023a68fe0b4a45c9aba5a04ae98f233018ff4c6f3ecd770",
+      "syslog_sha256": "3f263276375a289a5159d0d3ba25f9705169f1f9799c93890c87a3db15eddbdb",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/bash",
+          "command": "-bash",
+          "count": 8,
+          "min_delta": 907,
+          "max_delta": 13401,
+          "mode_deltas": [
+            [
+              13401,
+              1
+            ],
+            [
+              6621,
+              1
+            ],
+            [
+              5290,
+              1
+            ],
+            [
+              907,
+              1
+            ],
+            [
+              10340,
+              1
+            ],
+            [
+              11722,
+              1
+            ],
+            [
+              8827,
+              1
+            ]
+          ],
+          "all_deltas": [
+            13401,
+            6621,
+            5290,
+            907,
+            10340,
+            11722,
+            8827
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624437506,
+              "pid": 2767969,
+              "line": 3
+            },
+            {
+              "timestamp_ms": 1793626375252,
+              "pid": 2781370,
+              "line": 194
+            },
+            {
+              "timestamp_ms": 1793627251424,
+              "pid": 2787991,
+              "line": 263
+            },
+            {
+              "timestamp_ms": 1793628068284,
+              "pid": 2793281,
+              "line": 306
+            }
+          ]
+        },
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 1009,
+          "max_delta": 4657,
+          "mode_deltas": [
+            [
+              3848,
+              1
+            ],
+            [
+              4090,
+              1
+            ],
+            [
+              4328,
+              1
+            ],
+            [
+              4657,
+              1
+            ],
+            [
+              4156,
+              1
+            ],
+            [
+              2769,
+              1
+            ],
+            [
+              1814,
+              1
+            ],
+            [
+              1885,
+              1
+            ]
+          ],
+          "all_deltas": [
+            3848,
+            4090,
+            4328,
+            4657,
+            4156,
+            2769,
+            1814,
+            1885,
+            1582,
+            2019,
+            1711,
+            1285,
+            1167,
+            1444,
+            1009,
+            1387,
+            1029,
+            1505,
+            1364,
+            1086,
+            1117,
+            1114,
+            1084,
+            1137,
+            1318,
+            1292,
+            1804,
+            1366,
+            1716,
+            2143,
+            2392,
+            2240,
+            2279,
+            3189,
+            2716
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624761654,
+              "pid": 2770448,
+              "line": 43
+            },
+            {
+              "timestamp_ms": 1793625361806,
+              "pid": 2774296,
+              "line": 100
+            },
+            {
+              "timestamp_ms": 1793625961845,
+              "pid": 2778386,
+              "line": 160
+            },
+            {
+              "timestamp_ms": 1793626561879,
+              "pid": 2782714,
+              "line": 201
+            }
+          ]
+        },
+        {
+          "image": "/usr/bin/tail",
+          "command": "tail -20",
+          "count": 3,
+          "min_delta": 2316,
+          "max_delta": 11105,
+          "mode_deltas": [
+            [
+              2316,
+              1
+            ],
+            [
+              11105,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2316,
+            11105
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793631459478,
+              "pid": 2803597,
+              "line": 507
+            },
+            {
+              "timestamp_ms": 1793632653084,
+              "pid": 2805913,
+              "line": 599
+            },
+            {
+              "timestamp_ms": 1793638076927,
+              "pid": 2817018,
+              "line": 967
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 1009,
+          "max_delta": 4657,
+          "mode_deltas": [
+            [
+              3848,
+              1
+            ],
+            [
+              4090,
+              1
+            ],
+            [
+              4328,
+              1
+            ],
+            [
+              4657,
+              1
+            ],
+            [
+              4156,
+              1
+            ],
+            [
+              2769,
+              1
+            ],
+            [
+              1814,
+              1
+            ],
+            [
+              1885,
+              1
+            ]
+          ],
+          "all_deltas": [
+            3848,
+            4090,
+            4328,
+            4657,
+            4156,
+            2769,
+            1814,
+            1885,
+            1582,
+            2019,
+            1711,
+            1285,
+            1167,
+            1444,
+            1009,
+            1387,
+            1029,
+            1505,
+            1364,
+            1086,
+            1117,
+            1114,
+            1084,
+            1137,
+            1318,
+            1292,
+            1804,
+            1366,
+            1716,
+            2143,
+            2392,
+            2240,
+            2279,
+            3189,
+            2716
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624761817,
+              "pid": 2770449,
+              "line": 44
+            },
+            {
+              "timestamp_ms": 1793625362061,
+              "pid": 2774297,
+              "line": 101
+            },
+            {
+              "timestamp_ms": 1793625962187,
+              "pid": 2778387,
+              "line": 161
+            },
+            {
+              "timestamp_ms": 1793626562001,
+              "pid": 2782715,
+              "line": 202
+            }
+          ]
+        },
+        {
+          "image": "/usr/sbin/smbd",
+          "command": "/usr/sbin/smbd --foreground --no-process-group",
+          "count": 89,
+          "min_delta": 6,
+          "max_delta": 4701,
+          "mode_deltas": [
+            [
+              97,
+              2
+            ],
+            [
+              1538,
+              1
+            ],
+            [
+              3835,
+              1
+            ],
+            [
+              244,
+              1
+            ],
+            [
+              400,
+              1
+            ],
+            [
+              254,
+              1
+            ],
+            [
+              679,
+              1
+            ],
+            [
+              1377,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1538,
+            3835,
+            244,
+            400,
+            254,
+            679,
+            1377,
+            462,
+            442,
+            2579,
+            611,
+            1541,
+            881,
+            3741,
+            145,
+            4302,
+            1099,
+            122,
+            3050,
+            2934,
+            63,
+            4701,
+            1446,
+            97,
+            216,
+            60,
+            1617,
+            40,
+            78,
+            12,
+            172,
+            90,
+            504,
+            59,
+            189,
+            300,
+            1343,
+            879,
+            194,
+            1075,
+            97,
+            1054,
+            230,
+            691,
+            896,
+            512,
+            413,
+            58,
+            45,
+            182,
+            1265,
+            98,
+            6,
+            552,
+            217,
+            160,
+            33,
+            1127,
+            385,
+            860,
+            336,
+            501,
+            192,
+            123,
+            1491,
+            198,
+            482,
+            346,
+            227,
+            181,
+            233,
+            1167,
+            121,
+            401,
+            763,
+            13,
+            18,
+            24,
+            2704,
+            495,
+            804,
+            2079,
+            3332,
+            1199,
+            186,
+            450,
+            1545,
+            1632
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624507756,
+              "pid": 2768653,
+              "line": 9
+            },
+            {
+              "timestamp_ms": 1793624706834,
+              "pid": 2770191,
+              "line": 37
+            },
+            {
+              "timestamp_ms": 1793625301584,
+              "pid": 2774026,
+              "line": 86
+            },
+            {
+              "timestamp_ms": 1793625356445,
+              "pid": 2774270,
+              "line": 99
+            }
+          ]
+        }
+      ]
+    },
+    "LOG-MON-01.meridianhcs.local": {
+      "ecar_sha256": "5ed8788fe536e8cabfb01c018c340658db3755016a2df2a899d8083b100e2ad2",
+      "syslog_sha256": "7538ebf213ad7825a1aacb59e6ed19ae7181e7dd1236efa14025a669abf2b2e0",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/bash",
+          "command": "-bash",
+          "count": 6,
+          "min_delta": 526,
+          "max_delta": 22393,
+          "mode_deltas": [
+            [
+              13888,
+              1
+            ],
+            [
+              5611,
+              1
+            ],
+            [
+              22393,
+              1
+            ],
+            [
+              526,
+              1
+            ],
+            [
+              11141,
+              1
+            ]
+          ],
+          "all_deltas": [
+            13888,
+            5611,
+            22393,
+            526,
+            11141
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624545045,
+              "pid": 743111,
+              "line": 14
+            },
+            {
+              "timestamp_ms": 1793627567013,
+              "pid": 756999,
+              "line": 189
+            },
+            {
+              "timestamp_ms": 1793629260623,
+              "pid": 762610,
+              "line": 250
+            },
+            {
+              "timestamp_ms": 1793640061223,
+              "pid": 785003,
+              "line": 691
+            }
+          ]
+        },
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 984,
+          "max_delta": 3185,
+          "mode_deltas": [
+            [
+              3185,
+              1
+            ],
+            [
+              2739,
+              1
+            ],
+            [
+              2679,
+              1
+            ],
+            [
+              2396,
+              1
+            ],
+            [
+              3055,
+              1
+            ],
+            [
+              2139,
+              1
+            ],
+            [
+              1725,
+              1
+            ],
+            [
+              1601,
+              1
+            ]
+          ],
+          "all_deltas": [
+            3185,
+            2739,
+            2679,
+            2396,
+            3055,
+            2139,
+            1725,
+            1601,
+            1416,
+            1513,
+            1934,
+            1317,
+            1266,
+            1045,
+            1060,
+            1062,
+            1036,
+            1136,
+            1459,
+            1069,
+            1122,
+            1540,
+            1068,
+            1043,
+            984,
+            1003,
+            995,
+            991,
+            996,
+            1118,
+            1957,
+            1233,
+            1255,
+            1143,
+            1170
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624759332,
+              "pid": 743910,
+              "line": 32
+            },
+            {
+              "timestamp_ms": 1793625359433,
+              "pid": 747095,
+              "line": 83
+            },
+            {
+              "timestamp_ms": 1793625959496,
+              "pid": 749834,
+              "line": 138
+            },
+            {
+              "timestamp_ms": 1793626559496,
+              "pid": 752513,
+              "line": 151
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 984,
+          "max_delta": 3185,
+          "mode_deltas": [
+            [
+              3185,
+              1
+            ],
+            [
+              2739,
+              1
+            ],
+            [
+              2679,
+              1
+            ],
+            [
+              2396,
+              1
+            ],
+            [
+              3055,
+              1
+            ],
+            [
+              2139,
+              1
+            ],
+            [
+              1725,
+              1
+            ],
+            [
+              1601,
+              1
+            ]
+          ],
+          "all_deltas": [
+            3185,
+            2739,
+            2679,
+            2396,
+            3055,
+            2139,
+            1725,
+            1601,
+            1416,
+            1513,
+            1934,
+            1317,
+            1266,
+            1045,
+            1060,
+            1062,
+            1036,
+            1136,
+            1459,
+            1069,
+            1122,
+            1540,
+            1068,
+            1043,
+            984,
+            1003,
+            995,
+            991,
+            996,
+            1118,
+            1957,
+            1233,
+            1255,
+            1143,
+            1170
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624759551,
+              "pid": 743911,
+              "line": 33
+            },
+            {
+              "timestamp_ms": 1793625359708,
+              "pid": 747096,
+              "line": 84
+            },
+            {
+              "timestamp_ms": 1793625959607,
+              "pid": 749835,
+              "line": 139
+            },
+            {
+              "timestamp_ms": 1793626559642,
+              "pid": 752514,
+              "line": 152
+            }
+          ]
+        }
+      ]
+    },
+    "LT-MRIVERA-02.meridianhcs.local": {
+      "ecar_sha256": "4e82ebce5cbd79d9f5258f86849c304d49cab58636ee85eac414071380883e09",
+      "syslog_sha256": "72972e513b306272f6d05f461e91da22eb1f560b32fae921ff3a2175e8dff65e",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 970,
+          "max_delta": 2533,
+          "mode_deltas": [
+            [
+              2086,
+              1
+            ],
+            [
+              2533,
+              1
+            ],
+            [
+              2177,
+              1
+            ],
+            [
+              2479,
+              1
+            ],
+            [
+              2370,
+              1
+            ],
+            [
+              1658,
+              1
+            ],
+            [
+              1180,
+              1
+            ],
+            [
+              1186,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2086,
+            2533,
+            2177,
+            2479,
+            2370,
+            1658,
+            1180,
+            1186,
+            1863,
+            1188,
+            1152,
+            1598,
+            1492,
+            1395,
+            1453,
+            1643,
+            1441,
+            1163,
+            992,
+            986,
+            984,
+            970,
+            982,
+            1610,
+            1421,
+            1112,
+            1427,
+            1116,
+            1120,
+            1503,
+            1031,
+            1438,
+            1130,
+            1187,
+            1202
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624700340,
+              "pid": 3411897,
+              "line": 8
+            },
+            {
+              "timestamp_ms": 1793625300221,
+              "pid": 3413983,
+              "line": 21
+            },
+            {
+              "timestamp_ms": 1793625900288,
+              "pid": 3416516,
+              "line": 31
+            },
+            {
+              "timestamp_ms": 1793626500275,
+              "pid": 3418693,
+              "line": 38
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 970,
+          "max_delta": 2533,
+          "mode_deltas": [
+            [
+              2086,
+              1
+            ],
+            [
+              2533,
+              1
+            ],
+            [
+              2177,
+              1
+            ],
+            [
+              2479,
+              1
+            ],
+            [
+              2370,
+              1
+            ],
+            [
+              1658,
+              1
+            ],
+            [
+              1180,
+              1
+            ],
+            [
+              1186,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2086,
+            2533,
+            2177,
+            2479,
+            2370,
+            1658,
+            1180,
+            1186,
+            1863,
+            1188,
+            1152,
+            1598,
+            1492,
+            1395,
+            1453,
+            1643,
+            1441,
+            1163,
+            992,
+            986,
+            984,
+            970,
+            982,
+            1610,
+            1421,
+            1112,
+            1427,
+            1116,
+            1120,
+            1503,
+            1031,
+            1438,
+            1130,
+            1187,
+            1202
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624700467,
+              "pid": 3411898,
+              "line": 9
+            },
+            {
+              "timestamp_ms": 1793625300291,
+              "pid": 3413984,
+              "line": 22
+            },
+            {
+              "timestamp_ms": 1793625900464,
+              "pid": 3416517,
+              "line": 32
+            },
+            {
+              "timestamp_ms": 1793626500421,
+              "pid": 3418694,
+              "line": 39
+            }
+          ]
+        }
+      ]
+    },
+    "MAIL-CLIN-01.meridianhcs.local": {
+      "ecar_sha256": "8979544fc8a61917d12c800e32b7a6cbf261d44aecfea5b87d88a097918d5591",
+      "syslog_sha256": "26f93003f322580ae090790db59dce1e549d50bfedb564df22df62d5cb3ecb34",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/bash",
+          "command": "-bash",
+          "count": 4,
+          "min_delta": 7606,
+          "max_delta": 24218,
+          "mode_deltas": [
+            [
+              23409,
+              1
+            ],
+            [
+              24218,
+              1
+            ],
+            [
+              7606,
+              1
+            ]
+          ],
+          "all_deltas": [
+            23409,
+            24218,
+            7606
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624696290,
+              "pid": 694993,
+              "line": 4
+            },
+            {
+              "timestamp_ms": 1793633102740,
+              "pid": 718402,
+              "line": 252
+            },
+            {
+              "timestamp_ms": 1793638421701,
+              "pid": 742620,
+              "line": 416
+            },
+            {
+              "timestamp_ms": 1793641824544,
+              "pid": 750226,
+              "line": 500
+            }
+          ]
+        },
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 1008,
+          "max_delta": 4170,
+          "mode_deltas": [
+            [
+              1030,
+              1
+            ],
+            [
+              1408,
+              1
+            ],
+            [
+              1040,
+              1
+            ],
+            [
+              1545,
+              1
+            ],
+            [
+              1008,
+              1
+            ],
+            [
+              1042,
+              1
+            ],
+            [
+              1215,
+              1
+            ],
+            [
+              1530,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1030,
+            1408,
+            1040,
+            1545,
+            1008,
+            1042,
+            1215,
+            1530,
+            1426,
+            1108,
+            1073,
+            2294,
+            3705,
+            3960,
+            3841,
+            4170,
+            4147,
+            3484,
+            1560,
+            1827,
+            2042,
+            1520,
+            1856,
+            1307,
+            1391,
+            1290,
+            1414,
+            1279,
+            1315,
+            1713,
+            2422,
+            2174,
+            2291,
+            2175,
+            2402
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624700488,
+              "pid": 695005,
+              "line": 5
+            },
+            {
+              "timestamp_ms": 1793625300103,
+              "pid": 696035,
+              "line": 22
+            },
+            {
+              "timestamp_ms": 1793625900258,
+              "pid": 697443,
+              "line": 35
+            },
+            {
+              "timestamp_ms": 1793626500444,
+              "pid": 698483,
+              "line": 53
+            }
+          ]
+        },
+        {
+          "image": "/usr/bin/tail",
+          "command": "tail -20",
+          "count": 3,
+          "min_delta": 37,
+          "max_delta": 3280,
+          "mode_deltas": [
+            [
+              37,
+              1
+            ],
+            [
+              3280,
+              1
+            ]
+          ],
+          "all_deltas": [
+            37,
+            3280
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793642131823,
+              "pid": 750901,
+              "line": 510
+            },
+            {
+              "timestamp_ms": 1793642148647,
+              "pid": 750938,
+              "line": 518
+            },
+            {
+              "timestamp_ms": 1793643072984,
+              "pid": 754218,
+              "line": 547
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 1008,
+          "max_delta": 4170,
+          "mode_deltas": [
+            [
+              1030,
+              1
+            ],
+            [
+              1408,
+              1
+            ],
+            [
+              1040,
+              1
+            ],
+            [
+              1545,
+              1
+            ],
+            [
+              1008,
+              1
+            ],
+            [
+              1042,
+              1
+            ],
+            [
+              1215,
+              1
+            ],
+            [
+              1530,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1030,
+            1408,
+            1040,
+            1545,
+            1008,
+            1042,
+            1215,
+            1530,
+            1426,
+            1108,
+            1073,
+            2294,
+            3705,
+            3960,
+            3841,
+            4170,
+            4147,
+            3484,
+            1560,
+            1827,
+            2042,
+            1520,
+            1856,
+            1307,
+            1391,
+            1290,
+            1414,
+            1279,
+            1315,
+            1713,
+            2422,
+            2174,
+            2291,
+            2175,
+            2402
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624700575,
+              "pid": 695006,
+              "line": 6
+            },
+            {
+              "timestamp_ms": 1793625300298,
+              "pid": 696036,
+              "line": 23
+            },
+            {
+              "timestamp_ms": 1793625900609,
+              "pid": 697444,
+              "line": 36
+            },
+            {
+              "timestamp_ms": 1793626500527,
+              "pid": 698484,
+              "line": 54
+            }
+          ]
+        },
+        {
+          "image": "/usr/sbin/sshd",
+          "command": "sshd: marcus.chen [priv]",
+          "count": 4,
+          "min_delta": 3717,
+          "max_delta": 24262,
+          "mode_deltas": [
+            [
+              24262,
+              1
+            ],
+            [
+              3883,
+              1
+            ],
+            [
+              3717,
+              1
+            ]
+          ],
+          "all_deltas": [
+            24262,
+            3883,
+            3717
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793633092190,
+              "pid": 718338,
+              "line": 246
+            },
+            {
+              "timestamp_ms": 1793638410506,
+              "pid": 742600,
+              "line": 414
+            },
+            {
+              "timestamp_ms": 1793640130887,
+              "pid": 746483,
+              "line": 461
+            },
+            {
+              "timestamp_ms": 1793641813831,
+              "pid": 750200,
+              "line": 498
+            }
+          ]
+        }
+      ]
+    },
+    "MAIL-EDGE-01.meridianhcs.local": {
+      "ecar_sha256": "e1d0cbc4cc6d5e96410e31cc86d481b51b0520e1376f5fde946a05c5cbecc817",
+      "syslog_sha256": "23198fc6c2384c50d55fbf77095d76ef9d9eba3bd40e18f4df528a15daca31f8",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/bash",
+          "command": "-bash",
+          "count": 4,
+          "min_delta": 2275,
+          "max_delta": 23223,
+          "mode_deltas": [
+            [
+              2275,
+              1
+            ],
+            [
+              2330,
+              1
+            ],
+            [
+              23223,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2275,
+            2330,
+            23223
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793625977495,
+              "pid": 2287848,
+              "line": 63
+            },
+            {
+              "timestamp_ms": 1793626868469,
+              "pid": 2290123,
+              "line": 100
+            },
+            {
+              "timestamp_ms": 1793627882049,
+              "pid": 2292453,
+              "line": 156
+            },
+            {
+              "timestamp_ms": 1793636551456,
+              "pid": 2315676,
+              "line": 389
+            }
+          ]
+        },
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 1018,
+          "max_delta": 5290,
+          "mode_deltas": [
+            [
+              1024,
+              3
+            ],
+            [
+              1452,
+              1
+            ],
+            [
+              1575,
+              1
+            ],
+            [
+              1695,
+              1
+            ],
+            [
+              1234,
+              1
+            ],
+            [
+              1414,
+              1
+            ],
+            [
+              1865,
+              1
+            ],
+            [
+              1018,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1452,
+            1575,
+            1695,
+            1234,
+            1414,
+            1865,
+            1018,
+            1385,
+            1024,
+            1024,
+            1024,
+            1771,
+            1791,
+            1645,
+            1845,
+            1555,
+            1648,
+            1976,
+            2380,
+            2456,
+            2788,
+            2434,
+            2705,
+            2043,
+            1124,
+            1220,
+            1829,
+            1149,
+            1072,
+            3495,
+            5290,
+            4414,
+            3904,
+            4094,
+            4358
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624700058,
+              "pid": 2284663,
+              "line": 4
+            },
+            {
+              "timestamp_ms": 1793625300072,
+              "pid": 2286115,
+              "line": 44
+            },
+            {
+              "timestamp_ms": 1793625900180,
+              "pid": 2287690,
+              "line": 56
+            },
+            {
+              "timestamp_ms": 1793626500181,
+              "pid": 2289385,
+              "line": 73
+            }
+          ]
+        },
+        {
+          "image": "/usr/bin/head",
+          "command": "head",
+          "count": 3,
+          "min_delta": 1247,
+          "max_delta": 25275,
+          "mode_deltas": [
+            [
+              1247,
+              1
+            ],
+            [
+              25275,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1247,
+            25275
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793626792292,
+              "pid": 2289956,
+              "line": 88
+            },
+            {
+              "timestamp_ms": 1793627355383,
+              "pid": 2291203,
+              "line": 130
+            },
+            {
+              "timestamp_ms": 1793636711620,
+              "pid": 2316478,
+              "line": 403
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 1018,
+          "max_delta": 5290,
+          "mode_deltas": [
+            [
+              1024,
+              3
+            ],
+            [
+              1452,
+              1
+            ],
+            [
+              1575,
+              1
+            ],
+            [
+              1695,
+              1
+            ],
+            [
+              1234,
+              1
+            ],
+            [
+              1414,
+              1
+            ],
+            [
+              1865,
+              1
+            ],
+            [
+              1018,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1452,
+            1575,
+            1695,
+            1234,
+            1414,
+            1865,
+            1018,
+            1385,
+            1024,
+            1024,
+            1024,
+            1771,
+            1791,
+            1645,
+            1845,
+            1555,
+            1648,
+            1976,
+            2380,
+            2456,
+            2788,
+            2434,
+            2705,
+            2043,
+            1124,
+            1220,
+            1829,
+            1149,
+            1072,
+            3495,
+            5290,
+            4414,
+            3904,
+            4094,
+            4358
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624700372,
+              "pid": 2284664,
+              "line": 6
+            },
+            {
+              "timestamp_ms": 1793625300158,
+              "pid": 2286116,
+              "line": 45
+            },
+            {
+              "timestamp_ms": 1793625900436,
+              "pid": 2287691,
+              "line": 57
+            },
+            {
+              "timestamp_ms": 1793626500488,
+              "pid": 2289386,
+              "line": 74
+            }
+          ]
+        }
+      ]
+    },
+    "PROXY-01.meridianhcs.local": {
+      "ecar_sha256": "8c971927843056ac6c3194dcfd26a15fd46297f1d9f048f4c6a7efdd7d757db5",
+      "syslog_sha256": "506dc060712c490b7e31686b580a0d65a4323b0b410667959ccdaba90526c749",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/bash",
+          "command": "-bash",
+          "count": 5,
+          "min_delta": 2949,
+          "max_delta": 32023,
+          "mode_deltas": [
+            [
+              2991,
+              1
+            ],
+            [
+              6894,
+              1
+            ],
+            [
+              32023,
+              1
+            ],
+            [
+              2949,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2991,
+            6894,
+            32023,
+            2949
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624603849,
+              "pid": 2617453,
+              "line": 20
+            },
+            {
+              "timestamp_ms": 1793625751528,
+              "pid": 2620444,
+              "line": 212
+            },
+            {
+              "timestamp_ms": 1793627883335,
+              "pid": 2627338,
+              "line": 875
+            },
+            {
+              "timestamp_ms": 1793634518357,
+              "pid": 2659361,
+              "line": 2972
+            }
+          ]
+        },
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 1007,
+          "max_delta": 4656,
+          "mode_deltas": [
+            [
+              1648,
+              1
+            ],
+            [
+              1476,
+              1
+            ],
+            [
+              1750,
+              1
+            ],
+            [
+              1683,
+              1
+            ],
+            [
+              1734,
+              1
+            ],
+            [
+              3803,
+              1
+            ],
+            [
+              4356,
+              1
+            ],
+            [
+              4656,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1648,
+            1476,
+            1750,
+            1683,
+            1734,
+            3803,
+            4356,
+            4656,
+            4323,
+            4119,
+            4571,
+            2695,
+            1028,
+            1007,
+            1009,
+            1404,
+            1014,
+            1075,
+            1119,
+            1427,
+            1360,
+            1575,
+            1557,
+            1199,
+            1552,
+            1753,
+            1271,
+            1277,
+            1278,
+            2171,
+            2289,
+            2172,
+            2392,
+            2200,
+            2228
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624699890,
+              "pid": 2617734,
+              "line": 44
+            },
+            {
+              "timestamp_ms": 1793625299723,
+              "pid": 2619382,
+              "line": 166
+            },
+            {
+              "timestamp_ms": 1793625899709,
+              "pid": 2620858,
+              "line": 231
+            },
+            {
+              "timestamp_ms": 1793626499724,
+              "pid": 2622608,
+              "line": 380
+            }
+          ]
+        },
+        {
+          "image": "/usr/bin/head",
+          "command": "head",
+          "count": 4,
+          "min_delta": 3411,
+          "max_delta": 38439,
+          "mode_deltas": [
+            [
+              3411,
+              1
+            ],
+            [
+              38439,
+              1
+            ],
+            [
+              3898,
+              1
+            ]
+          ],
+          "all_deltas": [
+            3411,
+            38439,
+            3898
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624815121,
+              "pid": 2618043,
+              "line": 56
+            },
+            {
+              "timestamp_ms": 1793626136112,
+              "pid": 2621454,
+              "line": 270
+            },
+            {
+              "timestamp_ms": 1793634834919,
+              "pid": 2659893,
+              "line": 3048
+            },
+            {
+              "timestamp_ms": 1793636783840,
+              "pid": 2663791,
+              "line": 3796
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 1007,
+          "max_delta": 4656,
+          "mode_deltas": [
+            [
+              1648,
+              1
+            ],
+            [
+              1476,
+              1
+            ],
+            [
+              1750,
+              1
+            ],
+            [
+              1683,
+              1
+            ],
+            [
+              1734,
+              1
+            ],
+            [
+              3803,
+              1
+            ],
+            [
+              4356,
+              1
+            ],
+            [
+              4656,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1648,
+            1476,
+            1750,
+            1683,
+            1734,
+            3803,
+            4356,
+            4656,
+            4323,
+            4119,
+            4571,
+            2695,
+            1028,
+            1007,
+            1009,
+            1404,
+            1014,
+            1075,
+            1119,
+            1427,
+            1360,
+            1575,
+            1557,
+            1199,
+            1552,
+            1753,
+            1271,
+            1277,
+            1278,
+            2171,
+            2289,
+            2172,
+            2392,
+            2200,
+            2228
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624700015,
+              "pid": 2617735,
+              "line": 45
+            },
+            {
+              "timestamp_ms": 1793625299996,
+              "pid": 2619383,
+              "line": 167
+            },
+            {
+              "timestamp_ms": 1793625899770,
+              "pid": 2620859,
+              "line": 232
+            },
+            {
+              "timestamp_ms": 1793626499923,
+              "pid": 2622609,
+              "line": 381
+            }
+          ]
+        },
+        {
+          "image": "/usr/sbin/sssd",
+          "command": "/usr/sbin/sssd -i --logger=files",
+          "count": 3,
+          "min_delta": 4186,
+          "max_delta": 5778,
+          "mode_deltas": [
+            [
+              4186,
+              1
+            ],
+            [
+              5778,
+              1
+            ]
+          ],
+          "all_deltas": [
+            4186,
+            5778
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793629516133,
+              "pid": 2638984,
+              "line": 1273
+            },
+            {
+              "timestamp_ms": 1793630100946,
+              "pid": 2643170,
+              "line": 1436
+            },
+            {
+              "timestamp_ms": 1793630937122,
+              "pid": 2648948,
+              "line": 1837
+            }
+          ]
+        }
+      ]
+    },
+    "WEB-EXT-01.meridianhcs.local": {
+      "ecar_sha256": "b0db0ffda9089ccc03ffe4ed41ddb3b1189fb16d493ccd7263a0efc7f0d797c6",
+      "syslog_sha256": "e3e6afb7af8689bc80599e02d12f24efefe76f61f2ddb0c2d313e390bbe9d614",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/bash",
+          "command": "-bash",
+          "count": 9,
+          "min_delta": 279,
+          "max_delta": 17141,
+          "mode_deltas": [
+            [
+              438,
+              1
+            ],
+            [
+              11134,
+              1
+            ],
+            [
+              4150,
+              1
+            ],
+            [
+              3413,
+              1
+            ],
+            [
+              17141,
+              1
+            ],
+            [
+              3192,
+              1
+            ],
+            [
+              12464,
+              1
+            ],
+            [
+              279,
+              1
+            ]
+          ],
+          "all_deltas": [
+            438,
+            11134,
+            4150,
+            3413,
+            17141,
+            3192,
+            12464,
+            279
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624507283,
+              "pid": 3030930,
+              "line": 18
+            },
+            {
+              "timestamp_ms": 1793624747560,
+              "pid": 3031368,
+              "line": 51
+            },
+            {
+              "timestamp_ms": 1793628902364,
+              "pid": 3042502,
+              "line": 856
+            },
+            {
+              "timestamp_ms": 1793629651214,
+              "pid": 3046652,
+              "line": 1005
+            }
+          ]
+        },
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 999,
+          "max_delta": 3386,
+          "mode_deltas": [
+            [
+              1130,
+              1
+            ],
+            [
+              1087,
+              1
+            ],
+            [
+              1218,
+              1
+            ],
+            [
+              1156,
+              1
+            ],
+            [
+              1167,
+              1
+            ],
+            [
+              2248,
+              1
+            ],
+            [
+              3386,
+              1
+            ],
+            [
+              3344,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1130,
+            1087,
+            1218,
+            1156,
+            1167,
+            2248,
+            3386,
+            3344,
+            2831,
+            2852,
+            2949,
+            2305,
+            1528,
+            1691,
+            1973,
+            1789,
+            1679,
+            1497,
+            1279,
+            1060,
+            1514,
+            1040,
+            1379,
+            1418,
+            1231,
+            1682,
+            1452,
+            1631,
+            1435,
+            1226,
+            1085,
+            1173,
+            1215,
+            1306,
+            999
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624759649,
+              "pid": 3031389,
+              "line": 53
+            },
+            {
+              "timestamp_ms": 1793625359673,
+              "pid": 3032519,
+              "line": 146
+            },
+            {
+              "timestamp_ms": 1793625959714,
+              "pid": 3033606,
+              "line": 234
+            },
+            {
+              "timestamp_ms": 1793626559834,
+              "pid": 3034824,
+              "line": 400
+            }
+          ]
+        },
+        {
+          "image": "/usr/bin/head",
+          "command": "head",
+          "count": 5,
+          "min_delta": 1407,
+          "max_delta": 20347,
+          "mode_deltas": [
+            [
+              16039,
+              1
+            ],
+            [
+              1407,
+              1
+            ],
+            [
+              20347,
+              1
+            ],
+            [
+              15229,
+              1
+            ]
+          ],
+          "all_deltas": [
+            16039,
+            1407,
+            20347,
+            15229
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624779445,
+              "pid": 3031427,
+              "line": 59
+            },
+            {
+              "timestamp_ms": 1793629860172,
+              "pid": 3047466,
+              "line": 1032
+            },
+            {
+              "timestamp_ms": 1793630144628,
+              "pid": 3048873,
+              "line": 1084
+            },
+            {
+              "timestamp_ms": 1793636567479,
+              "pid": 3069220,
+              "line": 3164
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/php/sessionclean",
+          "command": "/usr/lib/php/sessionclean",
+          "count": 9,
+          "min_delta": 3450,
+          "max_delta": 11993,
+          "mode_deltas": [
+            [
+              3450,
+              1
+            ],
+            [
+              4445,
+              1
+            ],
+            [
+              9823,
+              1
+            ],
+            [
+              7862,
+              1
+            ],
+            [
+              5242,
+              1
+            ],
+            [
+              5058,
+              1
+            ],
+            [
+              11993,
+              1
+            ],
+            [
+              7876,
+              1
+            ]
+          ],
+          "all_deltas": [
+            3450,
+            4445,
+            9823,
+            7862,
+            5242,
+            5058,
+            11993,
+            7876
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624668613,
+              "pid": 3031222,
+              "line": 44
+            },
+            {
+              "timestamp_ms": 1793626479679,
+              "pid": 3034672,
+              "line": 357
+            },
+            {
+              "timestamp_ms": 1793628315423,
+              "pid": 3039117,
+              "line": 810
+            },
+            {
+              "timestamp_ms": 1793630157066,
+              "pid": 3048940,
+              "line": 1087
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 999,
+          "max_delta": 3386,
+          "mode_deltas": [
+            [
+              1130,
+              1
+            ],
+            [
+              1087,
+              1
+            ],
+            [
+              1218,
+              1
+            ],
+            [
+              1156,
+              1
+            ],
+            [
+              1167,
+              1
+            ],
+            [
+              2248,
+              1
+            ],
+            [
+              3386,
+              1
+            ],
+            [
+              3344,
+              1
+            ]
+          ],
+          "all_deltas": [
+            1130,
+            1087,
+            1218,
+            1156,
+            1167,
+            2248,
+            3386,
+            3344,
+            2831,
+            2852,
+            2949,
+            2305,
+            1528,
+            1691,
+            1973,
+            1789,
+            1679,
+            1497,
+            1279,
+            1060,
+            1514,
+            1040,
+            1379,
+            1418,
+            1231,
+            1682,
+            1452,
+            1631,
+            1435,
+            1226,
+            1085,
+            1173,
+            1215,
+            1306,
+            999
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624759778,
+              "pid": 3031390,
+              "line": 54
+            },
+            {
+              "timestamp_ms": 1793625359886,
+              "pid": 3032520,
+              "line": 147
+            },
+            {
+              "timestamp_ms": 1793625959830,
+              "pid": 3033607,
+              "line": 235
+            },
+            {
+              "timestamp_ms": 1793626560124,
+              "pid": 3034825,
+              "line": 401
+            }
+          ]
+        },
+        {
+          "image": "/usr/sbin/sshd",
+          "command": "sshd: marcus.chen [priv]",
+          "count": 3,
+          "min_delta": 12462,
+          "max_delta": 27928,
+          "mode_deltas": [
+            [
+              27928,
+              1
+            ],
+            [
+              12462,
+              1
+            ]
+          ],
+          "all_deltas": [
+            27928,
+            12462
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793628892202,
+              "pid": 3042452,
+              "line": 853
+            },
+            {
+              "timestamp_ms": 1793636962383,
+              "pid": 3070380,
+              "line": 3221
+            },
+            {
+              "timestamp_ms": 1793642393651,
+              "pid": 3082842,
+              "line": 3757
+            }
+          ]
+        }
+      ]
+    },
+    "WS-LNGUYEN-01.meridianhcs.local": {
+      "ecar_sha256": "893cfe15211edca1abe833a84a849ac4fa190cda2b3ff01bedae8cc44b09d0b4",
+      "syslog_sha256": "e92ec466878e276679cf6859e6c098cdbeb9e36f46ef5a80203013bbc6e0234e",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/bash",
+          "command": "-bash",
+          "count": 6,
+          "min_delta": 509,
+          "max_delta": 12714,
+          "mode_deltas": [
+            [
+              12714,
+              1
+            ],
+            [
+              3238,
+              1
+            ],
+            [
+              509,
+              1
+            ],
+            [
+              7277,
+              1
+            ],
+            [
+              673,
+              1
+            ]
+          ],
+          "all_deltas": [
+            12714,
+            3238,
+            509,
+            7277,
+            673
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624854292,
+              "pid": 3225919,
+              "line": 18
+            },
+            {
+              "timestamp_ms": 1793627374945,
+              "pid": 3238633,
+              "line": 72
+            },
+            {
+              "timestamp_ms": 1793628181299,
+              "pid": 3241871,
+              "line": 149
+            },
+            {
+              "timestamp_ms": 1793628467680,
+              "pid": 3242380,
+              "line": 157
+            }
+          ]
+        },
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 998,
+          "max_delta": 3477,
+          "mode_deltas": [
+            [
+              2552,
+              1
+            ],
+            [
+              3192,
+              1
+            ],
+            [
+              2875,
+              1
+            ],
+            [
+              3477,
+              1
+            ],
+            [
+              2696,
+              1
+            ],
+            [
+              1881,
+              1
+            ],
+            [
+              1054,
+              1
+            ],
+            [
+              1040,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2552,
+            3192,
+            2875,
+            3477,
+            2696,
+            1881,
+            1054,
+            1040,
+            1057,
+            1279,
+            1425,
+            1208,
+            1262,
+            1284,
+            1319,
+            1778,
+            1997,
+            1234,
+            1110,
+            1581,
+            1126,
+            1112,
+            1179,
+            1077,
+            998,
+            1180,
+            1002,
+            999,
+            1003,
+            1528,
+            1776,
+            1682,
+            1765,
+            1530,
+            1777
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624760686,
+              "pid": 3225517,
+              "line": 11
+            },
+            {
+              "timestamp_ms": 1793625360669,
+              "pid": 3228069,
+              "line": 25
+            },
+            {
+              "timestamp_ms": 1793625960816,
+              "pid": 3231261,
+              "line": 31
+            },
+            {
+              "timestamp_ms": 1793626560779,
+              "pid": 3234136,
+              "line": 57
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 998,
+          "max_delta": 3477,
+          "mode_deltas": [
+            [
+              2552,
+              1
+            ],
+            [
+              3192,
+              1
+            ],
+            [
+              2875,
+              1
+            ],
+            [
+              3477,
+              1
+            ],
+            [
+              2696,
+              1
+            ],
+            [
+              1881,
+              1
+            ],
+            [
+              1054,
+              1
+            ],
+            [
+              1040,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2552,
+            3192,
+            2875,
+            3477,
+            2696,
+            1881,
+            1054,
+            1040,
+            1057,
+            1279,
+            1425,
+            1208,
+            1262,
+            1284,
+            1319,
+            1778,
+            1997,
+            1234,
+            1110,
+            1581,
+            1126,
+            1112,
+            1179,
+            1077,
+            998,
+            1180,
+            1002,
+            999,
+            1003,
+            1528,
+            1776,
+            1682,
+            1765,
+            1530,
+            1777
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624760891,
+              "pid": 3225518,
+              "line": 12
+            },
+            {
+              "timestamp_ms": 1793625360915,
+              "pid": 3228070,
+              "line": 26
+            },
+            {
+              "timestamp_ms": 1793625961101,
+              "pid": 3231262,
+              "line": 32
+            },
+            {
+              "timestamp_ms": 1793626561024,
+              "pid": 3234137,
+              "line": 58
+            }
+          ]
+        }
+      ]
+    },
+    "WS-OHADDAD-01.meridianhcs.local": {
+      "ecar_sha256": "a94386cc157e09b145743038b07d99668cdea839442d6489022df83f9322c5cf",
+      "syslog_sha256": "8a6828baf606c119e4c0c808ed0819996c90dc0078567752534c8cf0c3351b5b",
+      "repeated_process_groups": [
+        {
+          "image": "/bin/sh",
+          "command": "/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+          "count": 36,
+          "min_delta": 1001,
+          "max_delta": 3756,
+          "mode_deltas": [
+            [
+              1118,
+              2
+            ],
+            [
+              2164,
+              1
+            ],
+            [
+              2314,
+              1
+            ],
+            [
+              1985,
+              1
+            ],
+            [
+              1924,
+              1
+            ],
+            [
+              1807,
+              1
+            ],
+            [
+              1375,
+              1
+            ],
+            [
+              1454,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2164,
+            2314,
+            1985,
+            1924,
+            1807,
+            1375,
+            1118,
+            1454,
+            1001,
+            1011,
+            1493,
+            1224,
+            1798,
+            1361,
+            1364,
+            1739,
+            1419,
+            2441,
+            3603,
+            3444,
+            3722,
+            3756,
+            3567,
+            1855,
+            1207,
+            1735,
+            1166,
+            1780,
+            1172,
+            1118,
+            1042,
+            1060,
+            1510,
+            1969,
+            1083
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": true,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624759986,
+              "pid": 60698,
+              "line": 2
+            },
+            {
+              "timestamp_ms": 1793625359542,
+              "pid": 62862,
+              "line": 14
+            },
+            {
+              "timestamp_ms": 1793625959725,
+              "pid": 65176,
+              "line": 39
+            },
+            {
+              "timestamp_ms": 1793626559668,
+              "pid": 67161,
+              "line": 53
+            }
+          ]
+        },
+        {
+          "image": "/usr/lib/sysstat/debian-sa1",
+          "command": "debian-sa1 1 1",
+          "count": 36,
+          "min_delta": 1001,
+          "max_delta": 3756,
+          "mode_deltas": [
+            [
+              1118,
+              2
+            ],
+            [
+              2164,
+              1
+            ],
+            [
+              2314,
+              1
+            ],
+            [
+              1985,
+              1
+            ],
+            [
+              1924,
+              1
+            ],
+            [
+              1807,
+              1
+            ],
+            [
+              1375,
+              1
+            ],
+            [
+              1454,
+              1
+            ]
+          ],
+          "all_deltas": [
+            2164,
+            2314,
+            1985,
+            1924,
+            1807,
+            1375,
+            1118,
+            1454,
+            1001,
+            1011,
+            1493,
+            1224,
+            1798,
+            1361,
+            1364,
+            1739,
+            1419,
+            2441,
+            3603,
+            3444,
+            3722,
+            3756,
+            3567,
+            1855,
+            1207,
+            1735,
+            1166,
+            1780,
+            1172,
+            1118,
+            1042,
+            1060,
+            1510,
+            1969,
+            1083
+          ],
+          "possible_wrap_or_out_of_order": 0,
+          "native_cron_sequence_matches": null,
+          "witnesses": [
+            {
+              "timestamp_ms": 1793624760053,
+              "pid": 60699,
+              "line": 3
+            },
+            {
+              "timestamp_ms": 1793625359834,
+              "pid": 62863,
+              "line": 15
+            },
+            {
+              "timestamp_ms": 1793625959892,
+              "pid": 65177,
+              "line": 40
+            },
+            {
+              "timestamp_ms": 1793626559786,
+              "pid": 67162,
+              "line": 54
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

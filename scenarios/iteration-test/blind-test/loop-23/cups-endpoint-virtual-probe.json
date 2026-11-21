@@ -1,0 +1,20 @@
+{
+  "prototype_only": true,
+  "production_source_changed": false,
+  "checked": 75,
+  "examples": [
+    {
+      "case": "defaults",
+      "message": "Browse remote printer FRONTDESK-MFP at ipp://FRONTDESK-MFP.local:631/ipp/print"
+    },
+    {
+      "case": "named_pool",
+      "message": "Browse remote printer SITE-QUEUE-07 at ipp://SITE-QUEUE-07.local:631/ipp/print"
+    },
+    {
+      "case": "explicit_endpoint",
+      "message": "Browse remote printer Custom friendly printer at ipps://print.example.test:631/printers/design"
+    }
+  ],
+  "scope": "Named correlated endpoint semantics only, not full native CUPS collector/body fidelity"
+}

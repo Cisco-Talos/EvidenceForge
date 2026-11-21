@@ -1,0 +1,46 @@
+{
+  "scope": "Engineering path-shape census for known-domain Windows policy shares; resolved domain classifies paths. Custom/explicit seeds and roots can validly differ. Script extensions and native default-root shape are descriptive, not universal validity requirements. Sensor rows overlap physical activity.",
+  "domain": "meridianhcs.local",
+  "sensors": {
+    "zeek-core": {
+      "counts": {
+        "sysvol_file_rows": 48,
+        "sysvol_domain_gpo_shape_rows": 48,
+        "netlogon_file_rows": 64,
+        "netlogon_script_extension_rows": 64
+      },
+      "examples": {
+        "sysvol": [
+          "meridianhcs.local\\Policies\\{6AC1786C-016F-11D2-945F-00C04FB984F9}\\Machine\\Preferences\\ScheduledTasks\\ScheduledTasks.xml",
+          "meridianhcs.local\\Policies\\{9F81628C-27D4-46C6-A012-4F8C1472FBF0}\\User\\Registry.pol",
+          "meridianhcs.local\\Policies\\{1DCFFE94-F580-46E1-ABE5-A9CA1BC29682}\\Machine\\Preferences\\Groups\\Groups.xml",
+          "meridianhcs.local\\Policies\\{4C0B9BC2-496A-48D3-A2A2-9C76088B6E7C}\\User\\Preferences\\Printers\\Printers.xml",
+          "meridianhcs.local\\Policies\\{50BAB6B8-28FA-4A2E-A5BD-0F85FD5A1959}\\GPT.INI",
+          "meridianhcs.local\\Policies\\{6AC1786C-016F-11D2-945F-00C04FB984F9}\\Machine\\Registry.pol"
+        ],
+        "netlogon": [
+          "Logon.cmd",
+          "Maintenance\\Collect-LogonDiagnostics.ps1",
+          "Logon\\Set-UserEnvironment.ps1",
+          "Workstations\\Refresh-ManagementAgent.ps1",
+          "Logon\\Map-DepartmentDrives.ps1",
+          "Workstations\\Configure-TimeService.cmd"
+        ]
+      }
+    }
+  },
+  "windows_share_access": {
+    "DC-02.meridianhcs.local": {
+      "sysvol_access_records": 11,
+      "sysvol_native_default_root_records": 11,
+      "netlogon_access_records": 22,
+      "netlogon_native_default_root_records": 22
+    },
+    "DC-01.meridianhcs.local": {
+      "netlogon_access_records": 12,
+      "netlogon_native_default_root_records": 12,
+      "sysvol_access_records": 15,
+      "sysvol_native_default_root_records": 15
+    }
+  }
+}

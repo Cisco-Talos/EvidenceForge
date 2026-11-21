@@ -1,0 +1,195 @@
+{
+  "scope": "Descriptive nearest same LUID/session lock-unlock pairs, not a unique transition join or authenticity verdict",
+  "hosts": {
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "sha256": "4c2868e80f3297b65cb1cbb59add5babcb4af70a55ec2124516a7a8b5e329b7f",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T18:20:13.0476041Z",
+          "logon_id": "0x25db677",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T18:34:37.6434909Z",
+          "logon_id": "0x25db677",
+          "session_id": "2"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T18:20:13.0476041Z",
+            "logon_id": "0x25db677",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T18:34:37.6434909Z",
+            "logon_id": "0x25db677",
+            "session_id": "2"
+          },
+          "interval_seconds": 864.595886
+        }
+      ]
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "sha256": "dd2c07cba8383d1a54d3cf944915772208818690365391450e391f44ef57b0cb",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T14:06:00.9512538Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T14:22:41.0712096Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        },
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T18:00:25.7180851Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T18:49:55.4684526Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T14:06:00.9512538Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T14:22:41.0712096Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "interval_seconds": 1000.119956
+        },
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T18:00:25.7180851Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T18:49:55.4684526Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "interval_seconds": 2969.750367
+        }
+      ]
+    },
+    "WS-PPATEL-01.meridianhcs.local": {
+      "sha256": "135ae73595f5e014582005f8e504f5151cfb7ac9efa55be220dd28512747fcf7",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T17:23:33.7018833Z",
+          "logon_id": "0xd9f9479",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T17:29:30.9418075Z",
+          "logon_id": "0xd9f9479",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T18:09:28.6922902Z",
+          "logon_id": "0xd9f9479",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T18:40:42.7580457Z",
+          "logon_id": "0xd9f9479",
+          "session_id": "2"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T17:23:33.7018833Z",
+            "logon_id": "0xd9f9479",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T17:29:30.9418075Z",
+            "logon_id": "0xd9f9479",
+            "session_id": "2"
+          },
+          "interval_seconds": 357.239924
+        },
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T18:09:28.6922902Z",
+            "logon_id": "0xd9f9479",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T18:40:42.7580457Z",
+            "logon_id": "0xd9f9479",
+            "session_id": "2"
+          },
+          "interval_seconds": 1874.065755
+        }
+      ]
+    },
+    "WS-SMARTINEZ-01.meridianhcs.local": {
+      "sha256": "c95a37ae42c0b0667eacbbd36f7e5f252d63782371fd0cbfb606624f4b8d1c89",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T18:12:16.7255342Z",
+          "logon_id": "0xc114d88",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T18:56:15.8486914Z",
+          "logon_id": "0xc114d88",
+          "session_id": "2"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T18:12:16.7255342Z",
+            "logon_id": "0xc114d88",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T18:56:15.8486914Z",
+            "logon_id": "0xc114d88",
+            "session_id": "2"
+          },
+          "interval_seconds": 2639.123157
+        }
+      ]
+    }
+  }
+}

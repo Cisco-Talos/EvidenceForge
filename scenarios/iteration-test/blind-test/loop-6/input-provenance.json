@@ -1,0 +1,33 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 6,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 539,
+  "behavior_surface_sha256": "f18860c2206a410914ad641ce9e3887fe92181069665ffea484ecf8b913e0613",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "continuous source-observation delay precision"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "source_policy_matrix": "70 passed",
+    "native_dispatcher_cohort_manifest_deferred_siblings": "300 passed; overlaps first matrix, not summed",
+    "configuration": "105 files, zero errors/warnings",
+    "checkpoint_smoke": "2 passed, 7 deselected, 104.57 seconds",
+    "ruff_check": "PASS",
+    "ruff_format": "PASS, 1643 files",
+    "behavior_surface": "PASS",
+    "routine_suite": "Not completed; focused gates only, no full-suite/release claim."
+  }
+}

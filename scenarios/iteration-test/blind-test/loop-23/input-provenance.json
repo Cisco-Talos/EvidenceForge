@@ -1,0 +1,36 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 23,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 560,
+  "behavior_surface_sha256": "7c1b2387fabc9de36db463f3960bbaaa604132893dea7ef84d5bb63188a3f210",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "CUPS source-profile printer-correlated discovery endpoint parameters"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "before": "2of3semanticprofilecasesFAILonbareintegerlocationandexplicitendpointoverride; legacycompatcasePASS. Native22census11bare_numeric/3hosts. Privatevirtual75default/namedpool/explicitendpointcasesPASS.",
+    "central": "135profile/config/systemtraffic/manifestPASS11.91s93deselected",
+    "siblings": "38extra-syslog/nativefamilyrenderer/transport/arrivalcasesPASS1.52s110deselected",
+    "global_rng": "3PASS7.12s unchangedcensus",
+    "config": "105files0issues",
+    "ruff": "1679filescheck/formatPASS",
+    "scope": "YAML-onlynamedparameteradaptation intoexistingcorrelatednestedtemplateowner; no severity/collector/body/nativeCUPSversionclaim. Explicitendpointpool supportsfriendlylabels; frozenoldpositionalmessageandunrelatednumericcountersunchanged. No newState/runtimecache/quotas. Addeddescriptivenativeendpointprobe to once-onlyposthelper.",
+    "downscope": "Higher-leverageopaqueCONNECTstreambudgetgapconfirmed12of18exactcontrolledsmall/omittedrequests; completefixneedsproperprecommitsharedTLS/pairedtransportowner and exactrecovery. Deferredratherthanrendererpatch, protocolfloorbypass orarbitrarybudgetinflation. Seeproxy-stream-candidate-contract.md.",
+    "validation_limit": "No fullroutine/releasegate; thisdata-onlyprofilechangeusesfocusednativeconsumersandfrozenlegacydefinitionratherthananotherunrelatedcheckpointmatrix."
+  },
+  "fix_classification": "source_native_single_schema",
+  "failed_generation_attempts": []
+}

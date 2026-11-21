@@ -1,0 +1,2063 @@
+[
+  {
+    "action_id": "b5a21aaa-a5ce-426b-b2ad-181552707ab1",
+    "coverage_gaps": [
+      {
+        "family": "sysmon",
+        "format": "windows_event_sysmon",
+        "location": "LT-MRIVERA-02",
+        "reason": "deployment_unknown",
+        "restrictions": []
+      }
+    ],
+    "facts": {
+      "capture": {
+        "history": "ShADadfF",
+        "identity": "network-connection-a6e675cc-c9c5-43ec-8f4a-25f75531ea6b",
+        "protocol": "tcp",
+        "traffic": {
+          "missed_orig_bytes": 0,
+          "missed_resp_bytes": 0,
+          "orig": {
+            "ip_bytes": 267838,
+            "packets": 225,
+            "payload_bytes": 256130
+          },
+          "resp": {
+            "ip_bytes": 679456,
+            "packets": 457,
+            "payload_bytes": 655676
+          }
+        }
+      },
+      "dst_host": {
+        "fqdn": "WS-AJOHNSON-01.meridianhcs.local",
+        "hostname": "WS-AJOHNSON-01",
+        "ip": "10.10.1.35",
+        "os_category": "windows",
+        "roles": []
+      },
+      "lifecycle": {
+        "canonical_start": "2026-11-02T16:01:18.663976+00:00",
+        "group_id": "network-connection-a6e675cc-c9c5-43ec-8f4a-25f75531ea6b",
+        "parent_group_id": null
+      },
+      "local_only": false,
+      "network": {
+        "application_layer_only": false,
+        "closed_at": "2026-11-02T16:16:06.529965+00:00",
+        "conn_state": "SF",
+        "dst_ip": "10.10.1.35",
+        "dst_port": 3389,
+        "hostname": "WS-AJOHNSON-01",
+        "initiating_pid": -1,
+        "link_local": false,
+        "protocol": "tcp",
+        "responding_pid": 4500,
+        "service": "rdp",
+        "src_ip": "10.10.1.99",
+        "src_port": 57338,
+        "stable_id": "network-connection-a6e675cc-c9c5-43ec-8f4a-25f75531ea6b",
+        "started_at": "2026-11-02T16:01:18.663976+00:00",
+        "zeek_uid": "CM2XYlnXpeFHySi1A8"
+      },
+      "src_host": {
+        "fqdn": "LT-MRIVERA-02.meridianhcs.local",
+        "hostname": "LT-MRIVERA-02",
+        "ip": "10.10.1.99",
+        "os_category": "linux",
+        "roles": []
+      },
+      "storyline_cluster_id": "evt-012-rdp",
+      "traffic": {
+        "orig": {
+          "ip_bytes": 267838,
+          "packets": 225,
+          "payload_bytes": 256130
+        },
+        "resp": {
+          "ip_bytes": 679456,
+          "packets": 457,
+          "payload_bytes": 655676
+        }
+      }
+    },
+    "intent_id": "9ca7fe04-8ca2-4fb5-ac84-bc8696c77c1f",
+    "kind": "connection",
+    "occurrence_id": "8c76b738-a60b-4a9b-ad52-2841a570fcce",
+    "outcome": {
+      "enforcing_entity": null,
+      "mechanism": null,
+      "operation": null,
+      "reason": null,
+      "result": "completed",
+      "stage": null
+    },
+    "relationships": [
+      {
+        "facts": {
+          "attempted_ip": "10.10.1.35",
+          "client_ip": "10.10.1.99",
+          "connection_uid": "CM2XYlnXpeFHySi1A8",
+          "domain": "WS-AJOHNSON-01",
+          "transport_id": "network-connection-a6e675cc-c9c5-43ec-8f4a-25f75531ea6b"
+        },
+        "kind": "connection_attempt"
+      },
+      {
+        "facts": {
+          "client_ip": "10.10.1.99",
+          "connection_uid": "CM2XYlnXpeFHySi1A8",
+          "domain": "WS-AJOHNSON-01",
+          "selected_ip": "10.10.1.35"
+        },
+        "kind": "connection_target"
+      }
+    ],
+    "schema_version": 2,
+    "section": "storyline",
+    "source_expectations": [
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": "topology_exclusion",
+            "stage": "placement",
+            "state": "excluded"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": "not_sampled_for_excluded_projection",
+            "stage": "loss",
+            "state": "unknown"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "2931f859-75bc-49a3-8b74-64cb530bb3a0",
+        "expected": "absent",
+        "expected_time": "2026-11-02T16:01:18.663976Z",
+        "family": "asa",
+        "format": "cisco_asa",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CbjUBcXEE1ZQSxrghe"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {},
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:01:18.663976+00:00",
+            "lifecycle_start": "2026-11-02T16:01:18.663976+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:01:18.663976+00:00"
+          }
+        },
+        "reason": "topology_exclusion",
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "src_ip": "10.10.1.99",
+              "src_port": 57338
+            },
+            "selector": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "msg_id": 302013,
+              "src_ip": "10.10.1.99",
+              "src_port": 57338
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "fw-perimeter",
+        "source_instance": "asa:fw-perimeter",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "firewall_connection_lifecycle"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "placement",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "loss",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "b8471f7c-0123-45a0-a757-3a1a7d631f30",
+        "expected": "present",
+        "expected_time": "2026-11-02T16:01:19.108879Z",
+        "family": "ecar",
+        "format": "ecar",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CM2XYlnXpeFHySi1A8"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {
+            "base_probability": 0.01,
+            "dropped": false,
+            "identity": "ecar|ecar|ecar|WS-AJOHNSON-01|remote-session:3389:WS-AJOHNSON-01:10.10.1.99:57338:10.10.1.35|",
+            "probability": 0.009471269452365894,
+            "sample": 0.8240705648111408,
+            "seed": 42
+          },
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:01:19.108879+00:00",
+            "lifecycle_start": "2026-11-02T16:01:19.108879+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:01:19.108879+00:00"
+          }
+        },
+        "reason": null,
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "src_ip": "10.10.1.99",
+              "src_port": 57338
+            },
+            "selector": {
+              "action": "CONNECT",
+              "direction": "OUTBOUND",
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "object": "FLOW",
+              "src_ip": "10.10.1.99",
+              "src_port": 57338
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "source_endpoint",
+        "source_host": "lt-mrivera-02",
+        "source_instance": "ecar:lt-mrivera-02",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "placement",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "loss",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "c5351423-e0e1-4f56-b7db-967afb8b686b",
+        "expected": "present",
+        "expected_time": "2026-11-02T16:01:18.104049Z",
+        "family": "ecar",
+        "format": "ecar",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CM2XYlnXpeFHySi1A8"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {
+            "base_probability": 0.01,
+            "dropped": false,
+            "identity": "ecar|ecar|ecar|WS-AJOHNSON-01|remote-session:3389:WS-AJOHNSON-01:10.10.1.99:57338:10.10.1.35|",
+            "probability": 0.009414535588254358,
+            "sample": 0.07032470342603647,
+            "seed": 42
+          },
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:01:18.104049+00:00",
+            "lifecycle_start": "2026-11-02T16:01:18.104049+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:01:18.104049+00:00"
+          }
+        },
+        "reason": null,
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "src_ip": "10.10.1.99",
+              "src_port": 57338
+            },
+            "selector": {
+              "action": "CONNECT",
+              "direction": "INBOUND",
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "object": "FLOW",
+              "src_ip": "10.10.1.99",
+              "src_port": 57338
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "destination_endpoint",
+        "source_host": "ws-ajohnson-01",
+        "source_instance": "ecar:ws-ajohnson-01",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "placement",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "loss",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "32dee3a5-d2d7-474f-a67e-b4dbcd463e0c",
+        "expected": "present",
+        "expected_time": "2026-11-02T16:01:18.641065Z",
+        "family": "zeek",
+        "format": "zeek_conn",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CD2Ae4MMzp1GQsM1Xb"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {
+            "base_probability": 0.001,
+            "dropped": false,
+            "identity": "zeek|zeek_conn|connection|WS-AJOHNSON-01|action-lifecycle:network-connection-a6e675cc-c9c5-43ec-8f4a-25f75531ea6b|1793635278663976",
+            "probability": 0.0010786667678015394,
+            "sample": 0.5835619741733334,
+            "seed": 42
+          },
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:16:06.506597+00:00",
+            "lifecycle_start": "2026-11-02T16:01:18.641065+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:01:18.641065+00:00"
+          }
+        },
+        "reason": null,
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "conn_state": "SF",
+              "id.orig_h": "10.10.1.99",
+              "id.orig_p": 57338,
+              "id.resp_h": "10.10.1.35",
+              "id.resp_p": 3389,
+              "orig_bytes": 256130,
+              "orig_ip_bytes": 267838,
+              "orig_pkts": 225,
+              "resp_bytes": 655676,
+              "resp_ip_bytes": 679456,
+              "resp_pkts": 457
+            },
+            "selector": {
+              "uid": "CD2Ae4MMzp1GQsM1Xb"
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "zeek-core",
+        "source_instance": "zeek:zeek-core",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": "topology_exclusion",
+            "stage": "placement",
+            "state": "excluded"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": "not_sampled_for_excluded_projection",
+            "stage": "loss",
+            "state": "unknown"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "d7155360-1120-45bf-8fe3-22f280964ef2",
+        "expected": "absent",
+        "expected_time": "2026-11-02T16:01:18.663976Z",
+        "family": "zeek",
+        "format": "zeek_conn",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CGikHoC2BANboIe5FK"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {},
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:16:06.529965+00:00",
+            "lifecycle_start": "2026-11-02T16:01:18.663976+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:01:18.663976+00:00"
+          }
+        },
+        "reason": "topology_exclusion",
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "conn_state": "SF",
+              "id.orig_h": "10.10.1.99",
+              "id.orig_p": 57338,
+              "id.resp_h": "10.10.1.35",
+              "id.resp_p": 3389
+            },
+            "selector": {
+              "uid": "CGikHoC2BANboIe5FK"
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "zeek-db",
+        "source_instance": "zeek:zeek-db",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": "topology_exclusion",
+            "stage": "placement",
+            "state": "excluded"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": "not_sampled_for_excluded_projection",
+            "stage": "loss",
+            "state": "unknown"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "7595524b-ba72-4a07-a6aa-e37ebd588481",
+        "expected": "absent",
+        "expected_time": "2026-11-02T16:01:18.663976Z",
+        "family": "zeek",
+        "format": "zeek_conn",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CmzFBkIeq4kOkUGrnO"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {},
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:16:06.529965+00:00",
+            "lifecycle_start": "2026-11-02T16:01:18.663976+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:01:18.663976+00:00"
+          }
+        },
+        "reason": "topology_exclusion",
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "conn_state": "SF",
+              "id.orig_h": "10.10.1.99",
+              "id.orig_p": 57338,
+              "id.resp_h": "10.10.1.35",
+              "id.resp_p": 3389
+            },
+            "selector": {
+              "uid": "CmzFBkIeq4kOkUGrnO"
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "zeek-dmz",
+        "source_instance": "zeek:zeek-dmz",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      }
+    ],
+    "source_views": {
+      "zeek:zeek-core": {
+        "close_time": "2026-11-02T16:16:06.506597Z",
+        "files": [],
+        "firewall_teardown_observed": true,
+        "firewall_teardown_time": null,
+        "nat": null,
+        "path_role": "local_segment",
+        "profile": "distributed_taps",
+        "sensor_identity": "zeek-core",
+        "source_times": {
+          "zeek_conn": "2026-11-02T16:01:18.641065Z"
+        },
+        "start_time": "2026-11-02T16:01:18.641065Z",
+        "traffic": {
+          "missed_orig_bytes": 0,
+          "missed_resp_bytes": 0,
+          "orig": {
+            "ip_bytes": 267838,
+            "packets": 225,
+            "payload_bytes": 256130
+          },
+          "resp": {
+            "ip_bytes": 679456,
+            "packets": 457,
+            "payload_bytes": 655676
+          }
+        },
+        "visible_formats": [
+          "zeek_conn"
+        ]
+      }
+    },
+    "storyline_id": "evt-012-rdp",
+    "time": "2026-11-02T16:01:18.663976Z"
+  },
+  {
+    "action_id": "ed51e83c-c170-4e1b-8a8f-aba0af427fe4",
+    "coverage_gaps": [
+      {
+        "family": "sysmon",
+        "format": "windows_event_sysmon",
+        "location": "LT-MRIVERA-02",
+        "reason": "deployment_unknown",
+        "restrictions": []
+      }
+    ],
+    "facts": {
+      "capture": {
+        "history": "ShADadfF",
+        "identity": "network-connection-5903c02e-c8d1-4e21-bbb4-e6542f1143fb",
+        "protocol": "tcp",
+        "traffic": {
+          "missed_orig_bytes": 0,
+          "missed_resp_bytes": 0,
+          "orig": {
+            "ip_bytes": 304635,
+            "packets": 207,
+            "payload_bytes": 296343
+          },
+          "resp": {
+            "ip_bytes": 1200798,
+            "packets": 862,
+            "payload_bytes": 1166278
+          }
+        }
+      },
+      "dst_host": {
+        "fqdn": "WS-AJOHNSON-01.meridianhcs.local",
+        "hostname": "WS-AJOHNSON-01",
+        "ip": "10.10.1.35",
+        "os_category": "windows",
+        "roles": []
+      },
+      "lifecycle": {
+        "canonical_start": "2026-11-02T16:21:50.107490+00:00",
+        "group_id": "network-connection-5903c02e-c8d1-4e21-bbb4-e6542f1143fb",
+        "parent_group_id": null
+      },
+      "local_only": false,
+      "network": {
+        "application_layer_only": false,
+        "closed_at": "2026-11-02T16:36:37.973479+00:00",
+        "conn_state": "SF",
+        "dst_ip": "10.10.1.35",
+        "dst_port": 3389,
+        "hostname": "WS-AJOHNSON-01",
+        "initiating_pid": -1,
+        "link_local": false,
+        "protocol": "tcp",
+        "responding_pid": 4500,
+        "service": "rdp",
+        "src_ip": "10.10.1.99",
+        "src_port": 38655,
+        "stable_id": "network-connection-5903c02e-c8d1-4e21-bbb4-e6542f1143fb",
+        "started_at": "2026-11-02T16:21:50.107490+00:00",
+        "zeek_uid": "CD1HBtxsEEqxjgkQHm"
+      },
+      "src_host": {
+        "fqdn": "LT-MRIVERA-02.meridianhcs.local",
+        "hostname": "LT-MRIVERA-02",
+        "ip": "10.10.1.99",
+        "os_category": "linux",
+        "roles": []
+      },
+      "storyline_cluster_id": "evt-013",
+      "traffic": {
+        "orig": {
+          "ip_bytes": 304635,
+          "packets": 207,
+          "payload_bytes": 296343
+        },
+        "resp": {
+          "ip_bytes": 1200798,
+          "packets": 862,
+          "payload_bytes": 1166278
+        }
+      }
+    },
+    "intent_id": "e4c99f32-4251-44f3-8ed2-a55248460672",
+    "kind": "connection",
+    "occurrence_id": "c1fbf2e9-f416-4158-9c85-a401f69e96d8",
+    "outcome": {
+      "enforcing_entity": null,
+      "mechanism": null,
+      "operation": null,
+      "reason": null,
+      "result": "completed",
+      "stage": null
+    },
+    "relationships": [
+      {
+        "facts": {
+          "attempted_ip": "10.10.1.35",
+          "client_ip": "10.10.1.99",
+          "connection_uid": "CD1HBtxsEEqxjgkQHm",
+          "domain": "WS-AJOHNSON-01",
+          "transport_id": "network-connection-5903c02e-c8d1-4e21-bbb4-e6542f1143fb"
+        },
+        "kind": "connection_attempt"
+      },
+      {
+        "facts": {
+          "client_ip": "10.10.1.99",
+          "connection_uid": "CD1HBtxsEEqxjgkQHm",
+          "domain": "WS-AJOHNSON-01",
+          "selected_ip": "10.10.1.35"
+        },
+        "kind": "connection_target"
+      }
+    ],
+    "schema_version": 2,
+    "section": "storyline",
+    "source_expectations": [
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": "topology_exclusion",
+            "stage": "placement",
+            "state": "excluded"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": "not_sampled_for_excluded_projection",
+            "stage": "loss",
+            "state": "unknown"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "514d5598-caa0-410f-8504-637ee0e5eb85",
+        "expected": "absent",
+        "expected_time": "2026-11-02T16:21:50.107490Z",
+        "family": "asa",
+        "format": "cisco_asa",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "C1VEsTLlqZwTsy4de0"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {},
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:21:50.107490+00:00",
+            "lifecycle_start": "2026-11-02T16:21:50.107490+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:21:50.107490+00:00"
+          }
+        },
+        "reason": "topology_exclusion",
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "src_ip": "10.10.1.99",
+              "src_port": 38655
+            },
+            "selector": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "msg_id": 302013,
+              "src_ip": "10.10.1.99",
+              "src_port": 38655
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "fw-perimeter",
+        "source_instance": "asa:fw-perimeter",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "firewall_connection_lifecycle"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "placement",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "loss",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "6037f38b-f83b-4e88-a61e-8e1a38d8a9cd",
+        "expected": "present",
+        "expected_time": "2026-11-02T16:21:50.840798Z",
+        "family": "ecar",
+        "format": "ecar",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CD1HBtxsEEqxjgkQHm"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {
+            "base_probability": 0.01,
+            "dropped": false,
+            "identity": "ecar|ecar|ecar|WS-AJOHNSON-01|remote-session:3389:WS-AJOHNSON-01:10.10.1.99:38655:10.10.1.35|",
+            "probability": 0.009471269452365894,
+            "sample": 0.531203364113876,
+            "seed": 42
+          },
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:21:50.840798+00:00",
+            "lifecycle_start": "2026-11-02T16:21:50.840798+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:21:50.840798+00:00"
+          }
+        },
+        "reason": null,
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "src_ip": "10.10.1.99",
+              "src_port": 38655
+            },
+            "selector": {
+              "action": "CONNECT",
+              "direction": "OUTBOUND",
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "object": "FLOW",
+              "src_ip": "10.10.1.99",
+              "src_port": 38655
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "source_endpoint",
+        "source_host": "lt-mrivera-02",
+        "source_instance": "ecar:lt-mrivera-02",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "placement",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "loss",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "286ae8a5-6f6e-46f1-a1b0-433fd44c1f4a",
+        "expected": "present",
+        "expected_time": "2026-11-02T16:21:49.588278Z",
+        "family": "ecar",
+        "format": "ecar",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CD1HBtxsEEqxjgkQHm"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {
+            "base_probability": 0.01,
+            "dropped": false,
+            "identity": "ecar|ecar|ecar|WS-AJOHNSON-01|remote-session:3389:WS-AJOHNSON-01:10.10.1.99:38655:10.10.1.35|",
+            "probability": 0.009414535588254358,
+            "sample": 0.2449523756282984,
+            "seed": 42
+          },
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:21:49.588278+00:00",
+            "lifecycle_start": "2026-11-02T16:21:49.588278+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:21:49.588278+00:00"
+          }
+        },
+        "reason": null,
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "src_ip": "10.10.1.99",
+              "src_port": 38655
+            },
+            "selector": {
+              "action": "CONNECT",
+              "direction": "INBOUND",
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "object": "FLOW",
+              "src_ip": "10.10.1.99",
+              "src_port": 38655
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "destination_endpoint",
+        "source_host": "ws-ajohnson-01",
+        "source_instance": "ecar:ws-ajohnson-01",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "placement",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "loss",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "a03e57cf-f812-4adf-a7b8-22b75e2f31cd",
+        "expected": "present",
+        "expected_time": "2026-11-02T16:21:50.083524Z",
+        "family": "zeek",
+        "format": "zeek_conn",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "Clr9mZ6GeDruquQBIQ"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {
+            "base_probability": 0.001,
+            "dropped": false,
+            "identity": "zeek|zeek_conn|connection|WS-AJOHNSON-01|action-lifecycle:network-connection-5903c02e-c8d1-4e21-bbb4-e6542f1143fb|1793636510107490",
+            "probability": 0.0010786667678015394,
+            "sample": 0.8190464114233621,
+            "seed": 42
+          },
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:36:37.950100+00:00",
+            "lifecycle_start": "2026-11-02T16:21:50.083524+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:21:50.083524+00:00"
+          }
+        },
+        "reason": null,
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "conn_state": "SF",
+              "id.orig_h": "10.10.1.99",
+              "id.orig_p": 38655,
+              "id.resp_h": "10.10.1.35",
+              "id.resp_p": 3389,
+              "orig_bytes": 296343,
+              "orig_ip_bytes": 304635,
+              "orig_pkts": 207,
+              "resp_bytes": 1166278,
+              "resp_ip_bytes": 1200798,
+              "resp_pkts": 862
+            },
+            "selector": {
+              "uid": "Clr9mZ6GeDruquQBIQ"
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "zeek-core",
+        "source_instance": "zeek:zeek-core",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": "topology_exclusion",
+            "stage": "placement",
+            "state": "excluded"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": "not_sampled_for_excluded_projection",
+            "stage": "loss",
+            "state": "unknown"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "1c6c8979-1437-43d4-a2eb-8b6875fd9e65",
+        "expected": "absent",
+        "expected_time": "2026-11-02T16:21:50.107490Z",
+        "family": "zeek",
+        "format": "zeek_conn",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "ClnlWTWwCaJe4EeZlu"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {},
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:36:37.973479+00:00",
+            "lifecycle_start": "2026-11-02T16:21:50.107490+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:21:50.107490+00:00"
+          }
+        },
+        "reason": "topology_exclusion",
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "conn_state": "SF",
+              "id.orig_h": "10.10.1.99",
+              "id.orig_p": 38655,
+              "id.resp_h": "10.10.1.35",
+              "id.resp_p": 3389
+            },
+            "selector": {
+              "uid": "ClnlWTWwCaJe4EeZlu"
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "zeek-db",
+        "source_instance": "zeek:zeek-db",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": "topology_exclusion",
+            "stage": "placement",
+            "state": "excluded"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": "not_sampled_for_excluded_projection",
+            "stage": "loss",
+            "state": "unknown"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "4c1788cb-37f7-4d7e-b850-22710eff438b",
+        "expected": "absent",
+        "expected_time": "2026-11-02T16:21:50.107490Z",
+        "family": "zeek",
+        "format": "zeek_conn",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "ChEx5KaWMH67iQFGXn"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {},
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:36:37.973479+00:00",
+            "lifecycle_start": "2026-11-02T16:21:50.107490+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:21:50.107490+00:00"
+          }
+        },
+        "reason": "topology_exclusion",
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "conn_state": "SF",
+              "id.orig_h": "10.10.1.99",
+              "id.orig_p": 38655,
+              "id.resp_h": "10.10.1.35",
+              "id.resp_p": 3389
+            },
+            "selector": {
+              "uid": "ChEx5KaWMH67iQFGXn"
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "zeek-dmz",
+        "source_instance": "zeek:zeek-dmz",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      }
+    ],
+    "source_views": {
+      "zeek:zeek-core": {
+        "close_time": "2026-11-02T16:36:37.950100Z",
+        "files": [],
+        "firewall_teardown_observed": true,
+        "firewall_teardown_time": null,
+        "nat": null,
+        "path_role": "local_segment",
+        "profile": "distributed_taps",
+        "sensor_identity": "zeek-core",
+        "source_times": {
+          "zeek_conn": "2026-11-02T16:21:50.083524Z"
+        },
+        "start_time": "2026-11-02T16:21:50.083524Z",
+        "traffic": {
+          "missed_orig_bytes": 0,
+          "missed_resp_bytes": 0,
+          "orig": {
+            "ip_bytes": 304635,
+            "packets": 207,
+            "payload_bytes": 296343
+          },
+          "resp": {
+            "ip_bytes": 1200798,
+            "packets": 862,
+            "payload_bytes": 1166278
+          }
+        },
+        "visible_formats": [
+          "zeek_conn"
+        ]
+      }
+    },
+    "storyline_id": "evt-013",
+    "time": "2026-11-02T16:21:50.107490Z"
+  },
+  {
+    "action_id": "e41866a9-1c4a-4ed5-bc18-4dd86100232e",
+    "coverage_gaps": [
+      {
+        "family": "sysmon",
+        "format": "windows_event_sysmon",
+        "location": "LT-MRIVERA-02",
+        "reason": "deployment_unknown",
+        "restrictions": []
+      }
+    ],
+    "facts": {
+      "capture": {
+        "history": "ShADadfF",
+        "identity": "network-connection-92cedb0e-3fc9-411c-aa03-0c1a99ffe253",
+        "protocol": "tcp",
+        "traffic": {
+          "missed_orig_bytes": 0,
+          "missed_resp_bytes": 0,
+          "orig": {
+            "ip_bytes": 112555,
+            "packets": 379,
+            "payload_bytes": 92823
+          },
+          "resp": {
+            "ip_bytes": 1717954,
+            "packets": 1150,
+            "payload_bytes": 1658118
+          }
+        }
+      },
+      "dst_host": {
+        "fqdn": "WS-AJOHNSON-01.meridianhcs.local",
+        "hostname": "WS-AJOHNSON-01",
+        "ip": "10.10.1.35",
+        "os_category": "windows",
+        "roles": []
+      },
+      "lifecycle": {
+        "canonical_start": "2026-11-02T16:44:58.782576+00:00",
+        "group_id": "network-connection-92cedb0e-3fc9-411c-aa03-0c1a99ffe253",
+        "parent_group_id": null
+      },
+      "local_only": false,
+      "network": {
+        "application_layer_only": false,
+        "closed_at": "2026-11-02T16:59:46.648565+00:00",
+        "conn_state": "SF",
+        "dst_ip": "10.10.1.35",
+        "dst_port": 3389,
+        "hostname": "WS-AJOHNSON-01",
+        "initiating_pid": -1,
+        "link_local": false,
+        "protocol": "tcp",
+        "responding_pid": 4500,
+        "service": "rdp",
+        "src_ip": "10.10.1.99",
+        "src_port": 39368,
+        "stable_id": "network-connection-92cedb0e-3fc9-411c-aa03-0c1a99ffe253",
+        "started_at": "2026-11-02T16:44:58.782576+00:00",
+        "zeek_uid": "CjIHpLFztRg1TzhWgEt"
+      },
+      "src_host": {
+        "fqdn": "LT-MRIVERA-02.meridianhcs.local",
+        "hostname": "LT-MRIVERA-02",
+        "ip": "10.10.1.99",
+        "os_category": "linux",
+        "roles": []
+      },
+      "storyline_cluster_id": "evt-014",
+      "traffic": {
+        "orig": {
+          "ip_bytes": 112555,
+          "packets": 379,
+          "payload_bytes": 92823
+        },
+        "resp": {
+          "ip_bytes": 1717954,
+          "packets": 1150,
+          "payload_bytes": 1658118
+        }
+      }
+    },
+    "intent_id": "a6ad065c-2af4-46bc-86ce-b86fc4d2a018",
+    "kind": "connection",
+    "occurrence_id": "e14e48f4-34e5-4a6b-a1fc-c8cbadb2e2e8",
+    "outcome": {
+      "enforcing_entity": null,
+      "mechanism": null,
+      "operation": null,
+      "reason": null,
+      "result": "completed",
+      "stage": null
+    },
+    "relationships": [
+      {
+        "facts": {
+          "attempted_ip": "10.10.1.35",
+          "client_ip": "10.10.1.99",
+          "connection_uid": "CjIHpLFztRg1TzhWgEt",
+          "domain": "WS-AJOHNSON-01",
+          "transport_id": "network-connection-92cedb0e-3fc9-411c-aa03-0c1a99ffe253"
+        },
+        "kind": "connection_attempt"
+      },
+      {
+        "facts": {
+          "client_ip": "10.10.1.99",
+          "connection_uid": "CjIHpLFztRg1TzhWgEt",
+          "domain": "WS-AJOHNSON-01",
+          "selected_ip": "10.10.1.35"
+        },
+        "kind": "connection_target"
+      }
+    ],
+    "schema_version": 2,
+    "section": "storyline",
+    "source_expectations": [
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": "topology_exclusion",
+            "stage": "placement",
+            "state": "excluded"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": "not_sampled_for_excluded_projection",
+            "stage": "loss",
+            "state": "unknown"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "08232912-6039-4b5c-b068-5482a3728b35",
+        "expected": "absent",
+        "expected_time": "2026-11-02T16:44:58.782576Z",
+        "family": "asa",
+        "format": "cisco_asa",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "C8XZZqvjhFmsVnTpGiF"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {},
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:44:58.782576+00:00",
+            "lifecycle_start": "2026-11-02T16:44:58.782576+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:44:58.782576+00:00"
+          }
+        },
+        "reason": "topology_exclusion",
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "src_ip": "10.10.1.99",
+              "src_port": 39368
+            },
+            "selector": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "msg_id": 302013,
+              "src_ip": "10.10.1.99",
+              "src_port": 39368
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "fw-perimeter",
+        "source_instance": "asa:fw-perimeter",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "firewall_connection_lifecycle"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "placement",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "loss",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "7f0cf648-15c4-46db-a74e-4cb31455f58f",
+        "expected": "present",
+        "expected_time": "2026-11-02T16:44:59.754661Z",
+        "family": "ecar",
+        "format": "ecar",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CjIHpLFztRg1TzhWgEt"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {
+            "base_probability": 0.01,
+            "dropped": false,
+            "identity": "ecar|ecar|ecar|WS-AJOHNSON-01|remote-session:3389:WS-AJOHNSON-01:10.10.1.99:39368:10.10.1.35|",
+            "probability": 0.009471269452365894,
+            "sample": 0.5711901206822244,
+            "seed": 42
+          },
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:44:59.754661+00:00",
+            "lifecycle_start": "2026-11-02T16:44:59.754661+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:44:59.754661+00:00"
+          }
+        },
+        "reason": null,
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "src_ip": "10.10.1.99",
+              "src_port": 39368
+            },
+            "selector": {
+              "action": "CONNECT",
+              "direction": "OUTBOUND",
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "object": "FLOW",
+              "src_ip": "10.10.1.99",
+              "src_port": 39368
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "source_endpoint",
+        "source_host": "lt-mrivera-02",
+        "source_instance": "ecar:lt-mrivera-02",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "placement",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "loss",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "b8865394-e86c-4ddf-b5cc-0c1599c890ee",
+        "expected": "present",
+        "expected_time": "2026-11-02T16:44:58.583142Z",
+        "family": "ecar",
+        "format": "ecar",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CjIHpLFztRg1TzhWgEt"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {
+            "base_probability": 0.01,
+            "dropped": false,
+            "identity": "ecar|ecar|ecar|WS-AJOHNSON-01|remote-session:3389:WS-AJOHNSON-01:10.10.1.99:39368:10.10.1.35|",
+            "probability": 0.009414535588254358,
+            "sample": 0.11307988736548147,
+            "seed": 42
+          },
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:44:58.583142+00:00",
+            "lifecycle_start": "2026-11-02T16:44:58.583142+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:44:58.583142+00:00"
+          }
+        },
+        "reason": null,
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "src_ip": "10.10.1.99",
+              "src_port": 39368
+            },
+            "selector": {
+              "action": "CONNECT",
+              "direction": "INBOUND",
+              "dst_ip": "10.10.1.35",
+              "dst_port": 3389,
+              "object": "FLOW",
+              "src_ip": "10.10.1.99",
+              "src_port": 39368
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "destination_endpoint",
+        "source_host": "ws-ajohnson-01",
+        "source_instance": "ecar:ws-ajohnson-01",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "placement",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "loss",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "90e0b727-5faa-4257-a34a-6701056354e5",
+        "expected": "present",
+        "expected_time": "2026-11-02T16:44:58.759068Z",
+        "family": "zeek",
+        "format": "zeek_conn",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CJCI2fCV3XokYs17uRf"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {
+            "base_probability": 0.001,
+            "dropped": false,
+            "identity": "zeek|zeek_conn|connection|WS-AJOHNSON-01|action-lifecycle:network-connection-92cedb0e-3fc9-411c-aa03-0c1a99ffe253|1793637898782576",
+            "probability": 0.0010786667678015394,
+            "sample": 0.8744150272714997,
+            "seed": 42
+          },
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:59:46.625434+00:00",
+            "lifecycle_start": "2026-11-02T16:44:58.759068+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:44:58.759068+00:00"
+          }
+        },
+        "reason": null,
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "conn_state": "SF",
+              "id.orig_h": "10.10.1.99",
+              "id.orig_p": 39368,
+              "id.resp_h": "10.10.1.35",
+              "id.resp_p": 3389,
+              "orig_bytes": 92823,
+              "orig_ip_bytes": 112555,
+              "orig_pkts": 379,
+              "resp_bytes": 1658118,
+              "resp_ip_bytes": 1705617,
+              "resp_pkts": 1141
+            },
+            "selector": {
+              "uid": "CJCI2fCV3XokYs17uRf"
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "zeek-core",
+        "source_instance": "zeek:zeek-core",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": "topology_exclusion",
+            "stage": "placement",
+            "state": "excluded"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": "not_sampled_for_excluded_projection",
+            "stage": "loss",
+            "state": "unknown"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "bbcb9ddb-e8de-4e70-a989-03430e99318a",
+        "expected": "absent",
+        "expected_time": "2026-11-02T16:44:58.782576Z",
+        "family": "zeek",
+        "format": "zeek_conn",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CZHmRDCaef3XRGSi3GN"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {},
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:59:46.648565+00:00",
+            "lifecycle_start": "2026-11-02T16:44:58.782576+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:44:58.782576+00:00"
+          }
+        },
+        "reason": "topology_exclusion",
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "conn_state": "SF",
+              "id.orig_h": "10.10.1.99",
+              "id.orig_p": 39368,
+              "id.resp_h": "10.10.1.35",
+              "id.resp_p": 3389
+            },
+            "selector": {
+              "uid": "CZHmRDCaef3XRGSi3GN"
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "zeek-db",
+        "source_instance": "zeek:zeek-db",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      },
+      {
+        "conditions": [
+          {
+            "reason": null,
+            "stage": "deployment",
+            "state": "eligible"
+          },
+          {
+            "reason": "topology_exclusion",
+            "stage": "placement",
+            "state": "excluded"
+          },
+          {
+            "reason": null,
+            "stage": "capability",
+            "state": "eligible"
+          },
+          {
+            "reason": null,
+            "stage": "window",
+            "state": "eligible"
+          },
+          {
+            "reason": "not_sampled_for_excluded_projection",
+            "stage": "loss",
+            "state": "unknown"
+          },
+          {
+            "reason": null,
+            "stage": "export",
+            "state": "eligible"
+          }
+        ],
+        "connection_leg": "direct",
+        "expectation_id": "3c2174c5-670c-4801-b153-fcd126b237e5",
+        "expected": "absent",
+        "expected_time": "2026-11-02T16:44:58.782576Z",
+        "family": "zeek",
+        "format": "zeek_conn",
+        "identifiers": {
+          "dst_ip": "10.10.1.35",
+          "src_ip": "10.10.1.99",
+          "zeek_uid": "CksfZIXjupP4Eshx12p"
+        },
+        "phase": "connection",
+        "provenance": {
+          "contract_version": 1,
+          "loss": {},
+          "timing": {},
+          "window": {
+            "admission_time": "2026-11-02T16:59:46.648565+00:00",
+            "lifecycle_start": "2026-11-02T16:44:58.782576+00:00",
+            "source_delay_seconds": 0.0,
+            "source_time": "2026-11-02T16:44:58.782576+00:00"
+          }
+        },
+        "reason": "topology_exclusion",
+        "requirements": [
+          {
+            "contains": [],
+            "expected": "present",
+            "maximum": 1,
+            "minimum": 1,
+            "required": {
+              "conn_state": "SF",
+              "id.orig_h": "10.10.1.99",
+              "id.orig_p": 39368,
+              "id.resp_h": "10.10.1.35",
+              "id.resp_p": 3389
+            },
+            "selector": {
+              "uid": "CksfZIXjupP4Eshx12p"
+            },
+            "timing": "point"
+          }
+        ],
+        "role": "sensor",
+        "source_host": "zeek-dmz",
+        "source_instance": "zeek:zeek-dmz",
+        "timing_tolerance_seconds": 2.0,
+        "transaction_phase": "transport"
+      }
+    ],
+    "source_views": {
+      "zeek:zeek-core": {
+        "close_time": "2026-11-02T16:59:46.625434Z",
+        "files": [],
+        "firewall_teardown_observed": true,
+        "firewall_teardown_time": null,
+        "nat": null,
+        "path_role": "local_segment",
+        "profile": "distributed_taps",
+        "sensor_identity": "zeek-core",
+        "source_times": {
+          "zeek_conn": "2026-11-02T16:44:58.759068Z"
+        },
+        "start_time": "2026-11-02T16:44:58.759068Z",
+        "traffic": {
+          "missed_orig_bytes": 0,
+          "missed_resp_bytes": 11869,
+          "orig": {
+            "ip_bytes": 112555,
+            "packets": 379,
+            "payload_bytes": 92823
+          },
+          "resp": {
+            "ip_bytes": 1705617,
+            "packets": 1141,
+            "payload_bytes": 1646249
+          }
+        },
+        "visible_formats": [
+          "zeek_conn"
+        ]
+      }
+    },
+    "storyline_id": "evt-014",
+    "time": "2026-11-02T16:44:58.782576Z"
+  }
+]

@@ -1,0 +1,43 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 26,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 564,
+  "behavior_surface_sha256": "9bc23fcb5cb5e59039e319d03695523cdb195193ac6b3459f11ba1de91f4eff9",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": [
+    "Canonical Finder interior phase allocation within fixed readiness anchors"
+  ],
+  "code_change_for_loop": true,
+  "scenario_path": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test/scenario.yaml",
+  "validation_reused_from": "../loop-1/validation.json",
+  "validation_reuse_reason": "All four authored input SHA256 hashes are unchanged",
+  "focused_validation": {
+    "before": "Actual native three-launch control FAIL against563: residuals second_gap-2*first_gap[-1,0,1]us; birth/final readiness/Mach order already pass. Prior24 native census9/9GUI triplets have1:2ratio; two SSH exit chains remain separately scoped27 candidate.",
+    "scope": "Pure positive weighted allocation of canonical interior transitions conditioned on existing readiness budget. All ordinary Finder entry adapters share owner; Terminal independent startup and authored command phases unchanged. Same first/final anchors, native wall/birth/Mach truth and exact retained source replay. No new State/cache/quota/raw RNG or empirical latency calibration claim.",
+    "central": "147PASS9deselect221.27s including10pure allocation and real native three-launch control, all Finder generation/identity/credentials/native clock/manifest routine cases",
+    "recovery": "9slow Finder phase/precommit/lost-return/source-release controlsPASS31.97s",
+    "siblings": "90Terminal/reference routinePASS66deselect5.88s; slow Terminal suite not claimed",
+    "rng": "3PASS7.56s unchanged census",
+    "config": "105files zero issues; existing overlayable timing support reused",
+    "ruff": "all check/format PASS after explicit zip strict=False in new tests; production digest unchanged by test-only formatting"
+  },
+  "fix_classification": "family_level",
+  "rendered_verification": {
+    "finder_gui_triplets": 9,
+    "finder_fixed_one_to_two_ratios": 0,
+    "previous_ratios": 9,
+    "ssh_equal_close_chains": 2,
+    "data_files": 115,
+    "changed_data_files": 4,
+    "change_scope": "Only two Mac ES and two Mac eCAR files changed;111otherdata files byte-identical"
+  }
+}

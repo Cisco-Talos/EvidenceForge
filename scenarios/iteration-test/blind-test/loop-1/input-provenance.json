@@ -1,0 +1,18 @@
+{
+  "epoch": "2026-11-20-realism",
+  "loop": 1,
+  "git_head": "b1c7839389515b50a44ab3f91a23f0943f92f4e0",
+  "behavior_revision": 534,
+  "behavior_surface_sha256": "3698f9c957ce8c2a8ceeb57445d58b7cf7bb58f7390a66a805c332a86f37cd9d",
+  "seed": 42,
+  "target": "default",
+  "authored_sha256": {
+    "scenario.yaml": "ccd1b117736c9a8e6a4c2a94bfd860113e115d5b414f710ee2f730ccccd5ea5b",
+    "environment.yaml": "05f421a6bca7557c4f86230dfdd40a71cdfda0afbc4d626209a42eed149e59f6",
+    "baseline_activity.yaml": "26349715dfc21e990af889c2af2eadc609b0b7619d356c75f575fe7aa4b60861",
+    "email_corpus.yaml": "0d7429209923c521556e93f84c6e028745e027849b54ac5c820837a562cf3002"
+  },
+  "prior_epoch_scores_inherited": false,
+  "selected_family": "new canonical baseline; verify candidate qualitative findings without carrying scores",
+  "code_change_for_loop": false
+}

@@ -1,0 +1,12 @@
+{
+  "revision": 568,
+  "id": "dovecot-native-body-fetch-count-positive-for-sent-data",
+  "impact": "localized",
+  "domains": [
+    "dovecot-native-fetch-summary"
+  ],
+  "formats": [
+    "syslog"
+  ],
+  "summary": "Condition native Dovecot fetched-message counts on positive body data while allowing counted empty fetches. Preserve committed transport, byte budgets, worker identity and session codec."
+}

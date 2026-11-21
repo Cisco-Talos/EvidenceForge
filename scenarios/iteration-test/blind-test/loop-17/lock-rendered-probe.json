@@ -1,0 +1,141 @@
+{
+  "scope": "Descriptive nearest same LUID/session lock-unlock pairs, not a unique transition join or authenticity verdict",
+  "hosts": {
+    "WS-AJOHNSON-01.meridianhcs.local": {
+      "sha256": "4f8c5f6d102845dd288a59f05838b7746e7c728cc23137d8a6d5c4e5d1b7211e",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T18:20:13.0472716Z",
+          "logon_id": "0x25d4e32",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T18:34:37.6434095Z",
+          "logon_id": "0x25d4e32",
+          "session_id": "2"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T18:20:13.0472716Z",
+            "logon_id": "0x25d4e32",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T18:34:37.6434095Z",
+            "logon_id": "0x25d4e32",
+            "session_id": "2"
+          },
+          "interval_seconds": 864.596138
+        }
+      ]
+    },
+    "WS-MCHEN-01.meridianhcs.local": {
+      "sha256": "2585c45ccfa2c8dcd4d06b082e0bae124b02803acddbcec0a2d9488565099c2d",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T16:45:33.4062685Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T17:11:10.4567193Z",
+          "logon_id": "0x6c29844",
+          "session_id": "5"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T16:45:33.4062685Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T17:11:10.4567193Z",
+            "logon_id": "0x6c29844",
+            "session_id": "5"
+          },
+          "interval_seconds": 1537.050451
+        }
+      ]
+    },
+    "WS-PPATEL-01.meridianhcs.local": {
+      "sha256": "c4550fee8ad607ed260528d0e1d06cb87a6554f582889a051ab219a87f390e57",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T17:47:10.9170555Z",
+          "logon_id": "0xd9f9479",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T18:29:49.2022566Z",
+          "logon_id": "0xd9f9479",
+          "session_id": "2"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T17:47:10.9170555Z",
+            "logon_id": "0xd9f9479",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T18:29:49.2022566Z",
+            "logon_id": "0xd9f9479",
+            "session_id": "2"
+          },
+          "interval_seconds": 2558.285201
+        }
+      ]
+    },
+    "WS-SMARTINEZ-01.meridianhcs.local": {
+      "sha256": "77dfa1c8045f71818fb4d4b9c6d7fa7db406cc264c862a35b8bd343b6219d4bd",
+      "records": [
+        {
+          "event_id": "4800",
+          "time": "2026-11-02T16:37:57.5684732Z",
+          "logon_id": "0xc114d88",
+          "session_id": "2"
+        },
+        {
+          "event_id": "4801",
+          "time": "2026-11-02T17:12:04.3974368Z",
+          "logon_id": "0xc114d88",
+          "session_id": "2"
+        }
+      ],
+      "nearest_matching_pairs": [
+        {
+          "lock": {
+            "event_id": "4800",
+            "time": "2026-11-02T16:37:57.5684732Z",
+            "logon_id": "0xc114d88",
+            "session_id": "2"
+          },
+          "unlock": {
+            "event_id": "4801",
+            "time": "2026-11-02T17:12:04.3974368Z",
+            "logon_id": "0xc114d88",
+            "session_id": "2"
+          },
+          "interval_seconds": 2046.828963
+        }
+      ]
+    }
+  }
+}

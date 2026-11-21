@@ -1,0 +1,100 @@
+{
+  "scope": "Read-only triage of timing subscore movement; no evaluation rerun or threshold change.",
+  "observations": {
+    "7": {
+      "pillar_score": 98.66439245879867,
+      "checks": [
+        {
+          "key": "attack_chain_timing",
+          "score": 100.0,
+          "details": "17/17 typed causal timing relationships agree; unrelated adjacent steps impose no implicit deadline",
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "key": "burstiness",
+          "score": 98.01816929481106,
+          "details": "CV scores for 34 users (target CV 1.0-3.0)",
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "key": "system_regularity",
+          "score": 95.5192007205115,
+          "details": "17 independently identified service streams, 1076 starts; mean interval CV 0.879",
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "key": "diurnal_pattern",
+          "score": null,
+          "details": "Scenario spans 6.0h across 1 weekday(s) \u2014 too short to measure diurnal pattern (needs \u226524h and \u22652 weekdays)",
+          "failure_summary": {},
+          "skipped": true
+        },
+        {
+          "key": "volume_adequacy",
+          "score": 100.0,
+          "details": "Noise:signal 1218:1 (target 200:1 for low)",
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "key": "rate_plausibility",
+          "score": 100.0,
+          "details": "20068/20068 timing checks plausible",
+          "failure_summary": {},
+          "skipped": false
+        }
+      ]
+    },
+    "8": {
+      "pillar_score": 97.15645812366554,
+      "checks": [
+        {
+          "key": "attack_chain_timing",
+          "score": 100.0,
+          "details": "17/17 typed causal timing relationships agree; unrelated adjacent steps impose no implicit deadline",
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "key": "burstiness",
+          "score": 95.16398521225528,
+          "details": "CV scores for 34 users (target CV 1.0-3.0)",
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "key": "system_regularity",
+          "score": 91.28246304320922,
+          "details": "17 independently identified service streams, 1081 starts; mean interval CV 0.993",
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "key": "diurnal_pattern",
+          "score": null,
+          "details": "Scenario spans 6.0h across 1 weekday(s) \u2014 too short to measure diurnal pattern (needs \u226524h and \u22652 weekdays)",
+          "failure_summary": {},
+          "skipped": true
+        },
+        {
+          "key": "volume_adequacy",
+          "score": 100.0,
+          "details": "Noise:signal 1269:1 (target 200:1 for low)",
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "key": "rate_plausibility",
+          "score": 100.0,
+          "details": "20867/20867 timing checks plausible",
+          "failure_summary": {},
+          "skipped": false
+        }
+      ]
+    }
+  },
+  "interpretation": "Drop comes from human burstiness and service-regularity CV texture; typed causal timing and rate plausibility remain100, with no new failure summaries. Identity-dependent activity population changes are a plausible explanation, not proof of causation."
+}

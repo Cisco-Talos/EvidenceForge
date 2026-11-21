@@ -1,0 +1,62 @@
+{
+  "schema_version": "eforge-assess-scores/v1",
+  "loop": 9,
+  "automated_eval": {
+    "score": 98.3561213429993,
+    "status": "PASS",
+    "records": 140934,
+    "interpretation": "PASS / high quality",
+    "pillars": {
+      "parseability": 100.0,
+      "plausibility": 96.85609640231354,
+      "causality": 99.60708914408067,
+      "timing": 98.69464424945328,
+      "ground_truth": 96.62277691914899
+    }
+  },
+  "blind_initial": {
+    "threat_hunter": {
+      "assessment": "Real",
+      "verdict_confidence": 61.0,
+      "synthetic_confidence": 29.0,
+      "interpretation": "mostly realistic",
+      "report_path": "threat-hunter-report.md"
+    },
+    "detection_engineer": {
+      "assessment": "Inconclusive",
+      "verdict_confidence": 80.0,
+      "synthetic_confidence": 42.0,
+      "interpretation": "mixed/inconclusive",
+      "report_path": "detection-engineer-report.md"
+    },
+    "network_forensics": {
+      "assessment": "Inconclusive",
+      "verdict_confidence": 78.0,
+      "synthetic_confidence": 44.0,
+      "interpretation": "mixed/inconclusive",
+      "report_path": "network-forensics-report.md"
+    },
+    "host_forensics": {
+      "assessment": "Inconclusive",
+      "verdict_confidence": 82.0,
+      "synthetic_confidence": 49.0,
+      "interpretation": "mixed/inconclusive",
+      "report_path": "host-forensics-report.md"
+    },
+    "average_synthetic_confidence": 41.0,
+    "average_interpretation": "mixed/inconclusive"
+  },
+  "deliberation": {
+    "triggered": true,
+    "reason": "Initial verdict/confidence/spread trigger",
+    "average_synthetic_confidence": 50.25,
+    "average_interpretation": "mixed/inconclusive",
+    "report_path": "deliberation.md",
+    "expert_scores": {
+      "threat_hunter": 46,
+      "detection_engineer": 49,
+      "network_forensics": 52,
+      "host_forensics": 54
+    }
+  }
+}
