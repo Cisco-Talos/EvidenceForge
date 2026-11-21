@@ -3,11 +3,13 @@
 Read the requested family and inspect its packaged file and project overlay before editing.
 The live schema remains authoritative.
 
+**Contents:** [DNS and traffic](#dns-and-traffic) · [Beacon and storage](#beacon-and-storage-profiles) ·
+[Proxy, web, and HTTP](#proxy-web-and-http) · [TLS](#tls-and-public-infrastructure) ·
+[Identity pools](#generated-identity-pools) · [Repair decisions](#repair-decisions)
+
 ## DNS and traffic
 
 ### `dns_registry.yaml`
-
-Owns reusable domain/IP identity and tag selection:
 
 ```yaml
 valid_tags:
@@ -66,15 +68,13 @@ Engine-owned `file_size_policy.profiles` maps names to positive, ordered
 extension keys are lowercase suffixes. Explicit seed sizes win; later SMB evolution is separate.
 Absent frozen policy retains original sizing. Keep this root outside portable pack vocabulary.
 
-Optional engine-owned `policy_repository` models Windows domain-policy metadata outside pack
-vocabulary. Given an explicit environment domain, recognized Windows DC SYSVOL/NETLOGON shares
-use bounded domain/GPO GUID paths and linked templates. `sysvol_root`/`netlogon_root` affect only
-synthesized roots; explicit roots/seeds win. Templates require literal relative `path`, MIME,
-positive ordered sizes and finite `presence_probability`; each GPO requires `GPT.INI`.
-Bounds model supports, not empirical calibration. Missing/disabled policy preserves legacy paths
-and RNG; malformed present policy rejects; partial overlays deep-merge. Custom shares, file sets,
-domain-unknown environments and Samba members retain existing behavior. Initial paths/size/MIME
-add no filesystem aliases or live AD/DFSR replication/mutation. Cap catalogs at finite realizable
+Engine-owned `policy_repository` adds bounded GPO GUID paths and templates to Windows DC
+SYSVOL/NETLOGON shares in explicitly named domains. `sysvol_root` and `netlogon_root` set
+synthesized roots; explicit roots/seeds take precedence. Keep this metadata outside packs.
+Templates require relative `path`, MIME, positive ordered sizes and finite `presence_probability`.
+Each GPO requires `GPT.INI`. Partial policy deep-merges. Malformed values fail validation.
+Absent or disabled policy preserves legacy paths and RNG, as do custom shares, file sets,
+unknown domains and Samba members. Models initial metadata only. Cap catalogs to realizable
 space and record requested/effective counts in the storage manifest.
 
 ## Proxy, web, and HTTP

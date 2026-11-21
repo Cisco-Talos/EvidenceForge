@@ -2,6 +2,12 @@
 
 Inspect the matching packaged YAML and existing overlay before editing; validation is the schema authority.
 
+**Contents:** [Linux activity](#linux-activity) · [SMB profiles](#smb-client-and-server-profiles) ·
+[Authentication and endpoint noise](#authentication-and-endpoint-noise) ·
+[Volume and distribution](#volume-and-distribution) · [Observation and timing](#observation-and-timing) ·
+[Safety fixtures](#safety-fixture-families) · [Mac native sources](#mac-native-source-profiles) ·
+[Mac filesystem and execution](#modeled-mac-filesystem-and-execution-metadata)
+
 ## Linux activity
 
 ### `bash_commands.yaml`

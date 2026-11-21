@@ -31,6 +31,8 @@ def test_queued_snapshot_survives_nested_include_pack_and_overlay_deletion(tmp_p
     data.pop("description")
     data["scenario_version"] = "2.0"
     data["includes"] = ["fragments/first.yaml"]
+    # One hour of warm-up is enough to exercise generation from the frozen inputs.
+    data["time_window"]["warmup"] = "1h"
     data["composition"] = {
         "industries": [
             {
