@@ -30,9 +30,10 @@ attack storyline. EvidenceForge then generates temporally consistent evidence ac
 formats, complete with cross-referenced identities, sessions, processes, timestamps, and network
 connections.
 
-Every generated bundle includes human-readable `GROUND_TRUTH.md` and machine-readable
-`GROUND_TRUTH.json` answer keys. Attack scenarios document what happened, when, and where, while
-baseline-only scenarios explicitly state that no malicious events were generated.
+Every generated bundle includes a human-readable `GROUND_TRUTH.md` answer key and
+machine-readable `GROUND_TRUTH.json`. New bundles also include `GROUND_TRUTH_EVENTS.jsonl`,
+which records authored occurrences, their consequences and per-source evidence expectations.
+Baseline-only scenarios explicitly state that no malicious events were generated.
 
 ### Key Capabilities
 
@@ -74,61 +75,32 @@ systems and sensors.
   while the generation engine makes no LLM calls. The same scenario, seed, formats, and version
   reproduce the same dataset without API costs or model variability.
 
-## What's New in 3.0.0rc1 (Release Candidate)
+## What's New in 3.0.0rc2 (Release Candidate)
 
-EvidenceForge 3.0 introduces EvidenceForge Studio and simulation of mixed Windows, Linux and
-macOS environments.
+EvidenceForge 3.0 adds **macOS workstations as simulated hosts** and introduces
+**EvidenceForge Studio**, a desktop application for building and reviewing threat-hunting exercises.
 
-- **EvidenceForge Studio:** A desktop app for authoring scenarios and packs, generating logs and
-  reviewing evaluations, with new themes for both light and dark modes. Installers are available
-  for Apple Silicon macOS and Linux ARM64, and for Linux and Windows on x86_64. Each one bundles
-  everything Studio needs, including Python and the EvidenceForge engine; only Codex, used for
-  AI-assisted authoring, is installed separately. The CLI and agent-skill workflows remain
-  available and fully supported.
-- **Bundled example scenarios:** Five example scenarios arrive in an Example Scenarios project.
-  Duplicate one or start a new draft to make it your own; Settings installs or updates them.
-- **Ground truth improvements:** New bundles record every authored occurrence, its consequences
-  and what each log source should show. A new Ground Truth Agreement evaluation pillar scores the
-  generated evidence against that record.
-- **Evaluation at full scale:** `eforge eval` reads complete datasets within a bounded memory
-  budget, spilling to disk instead of capping the corpus, with corrected cross-source matching.
-- **Realism fixes** across process timing, RDP, mail, LDAP, macOS Endpoint Security and Zeek ICMP
-  evidence, plus dependency updates.
+- **Simulate macOS alongside Windows and Linux.** Include modeled macOS 27 arm64 workstations
+  in the same scenario as Windows and Linux systems. Mac hosts can produce Endpoint Security
+  process and selected file events, selected Unified Log messages, and interactive shell history,
+  correlated with other endpoint and network evidence. You can generate these datasets from any
+  supported host platform. [See the macOS simulation guide](docs/macos.md).
+- **Build exercises in EvidenceForge Studio.** Author and validate scenarios, build reusable
+  environment packs, generate logs, and review evaluation results in one desktop application.
+  Studio ships with five example scenarios you can run or duplicate into your own project.
+  The CLI and agent-skill workflows remain supported.
+- **Check generated evidence against ground truth.** New bundles record authored occurrences,
+  their consequences, and what each log source is expected to show. The new Ground Truth
+  Agreement score checks those expectations, and `eforge eval` can process complete datasets
+  within a configurable memory budget.
 
-[See the changelog](CHANGELOG.md#v300rc1-2026-11-17) for the full list.
+Studio installers are available for Apple Silicon macOS, Ubuntu 24.04 Linux on ARM64 and x86_64,
+and Windows 11 x86_64. Each bundles Python and the EvidenceForge engine. Install Codex
+separately for assisted authoring.
 
-## What's New in 2.2.0a4 (Alpha)
-
-The fourth alpha improves Studio conversations and discovery of published environment packs.
-
-- **Queue or steer follow-ups:** Queue messages while Codex works, or send guidance to the
-  active turn. Choose the default in Settings; Cmd+Enter on macOS or Ctrl+Enter elsewhere uses
-  the other mode. Stop now targets the active turn correctly.
-- **Clearer progress:** Commentary stays interleaved with readable tool entries. Live
-  "Working for" and completed "Worked for" counters show elapsed time, and the chat follows
-  new output until you scroll up to read.
-- **More comfortable conversations:** Preserve composer drafts and reading positions, copy
-  messages and code, collapse the conversation list, and let longer messages use wider windows.
-- **Questions and file summaries:** Answer structured clarification cards with suggested choices
-  or your own text. See files grouped by creation, editing, removal and renaming, with recorded
-  line changes and current sizes.
-- **Published pack discovery:** Scenario authoring can find Studio-published industry and
-  organization packs through the CLI inventory and use their exact references.
-
-### Studio and portable releases
-
-- **EvidenceForge Studio:** A desktop workspace for authoring scenarios and packs,
-  generating logs, and reviewing evaluations.
-- **Standalone installers:** An Apple Silicon macOS DMG and Ubuntu 24.04 ARM64/x86_64
-  AppImages bundle Python, the engine, resources, and skills. Codex-assisted authoring
-  requires a separate Codex installation.
-- **Portable authored releases:** Version, freeze, export, and share scenarios
-  and packs with their dependencies and release history.
-
-The CLI and native agent-skill workflows remain supported. Older Studio state uses a reviewed
-upgrade with a verified backup and recovery support; scenario and pack source files are unchanged.
-
-See the [Studio guide](docs/studio.md) for installation, workflows, and backup/restore.
+[Download 3.0.0rc2](https://github.com/Cisco-Talos/EvidenceForge/releases/tag/v3.0.0rc2) ·
+[Installation guide](docs/studio.md#install-and-open-studio) ·
+[Full release notes](CHANGELOG.md#v300rc2-2026-11-21)
 
 ## What's New in 2.0
 

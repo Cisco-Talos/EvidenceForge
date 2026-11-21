@@ -4,115 +4,107 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
-## v3.0.0rc1 (2026-11-18)
+## v3.0.0rc2 (2026-11-21)
 
-First release candidate for EvidenceForge 3.0. The 3.0 version marks the Studio desktop
-workflow and mixed Windows, Linux and macOS simulation developed through the 2.2 alpha series.
-Traditional CLI and legacy-scenario workflows remain supported; product numbering stays
-independent of scenario and storage schema versions. Changes since 2.2.0a6:
+EvidenceForge 3.0 adds support for simulated macOS workstations and introduces EvidenceForge Studio.
+This release candidate includes the work from the 2.2 alpha series. Existing CLI, agent-skill,
+and legacy-scenario workflows remain supported.
 
-**Redesigned Studio**
+**Simulated macOS workstations**
 
-- New themes for both light and dark modes, built on shared design tokens with an ember accent;
-  Studio follows the system or a Settings → Appearance choice (`7c5dd272`, `744098ec`, `9c4ce5ec`).
-- One shared dialog component, consistent action names and menu order, shared status pills
-  and feedback, and Reveal in Finder (`51659438`, `9a0e588d`).
-- Libraries organized around sidebar projects and sortable tables; each scenario or pack's
-  versions collapse into one row, with badges for unpublished drafts
-  (`6dabb988`, `261ff2ff`, `4222ead7`, `b27818b4`).
-- Scenario workspace readiness strip with one next action, section tabs, and labeled status
-  in section headers (`cc24d571`, `5168c87f`).
-- Activity as one timeline, and bundles as one newest-first list of runs (`596142e1`, `d3af4f73`).
-- A queued chat message can steer the running turn (`3eab9fe2`).
-- Draft conversations get a private scratch folder for temporary files on every platform,
-  instead of falling back to the draft folder (`e63ed3ad`, `b98cebbf`).
-- Studio UI rules for contributors in AGENTS.md and the Studio guide
-  (`d57b1abf`, `30288217`, `09a442e8`, `e655aa85`).
+- Model macOS 27 arm64 workstations in the same scenario as Windows and Linux hosts, with
+  correlated activity across endpoints, servers, and network sensors.
+- Generate Endpoint Security events for modeled process starts, execution, known exits, and
+  selected file operations. Mac hosts can also produce selected Unified Log messages,
+  interactive shell history, and eCAR evidence.
+- Model supported Terminal, iTerm2, Finder, browser, and SSH activity. The macOS simulation
+  guide documents the supported workloads and coverage limits.
+  [Read the macOS simulation guide](https://github.com/Cisco-Talos/EvidenceForge/blob/v3.0.0rc2/docs/macos.md).
 
-**Windows installer**
+**Introducing EvidenceForge Studio**
 
-- Unsigned Windows 11 x86_64 NSIS installer with "Just me" and "Everyone" scopes, bundled
-  Python and runtime, and private per-account state (`602ab2ec`).
-- Published with releases beside the macOS and Linux installers after native install,
-  uninstall and service/recovery qualification (`9ccfeeb3`).
-- Uninstall preserves data by default and offers three reviewed opt-in cleanup choices with
-  progress in the wizard (`8eacd6c6`, `f650f283`, `12d0e75e`, `eac59e9b`, `922129e4`,
-  `a5d5ff98`, `c6b15412`).
-- Native Windows Codex authoring through MXC, with Codex discovery and PowerShell-safe
-  commands (`7e3cf951`, `18fbee49`, `5eb4edd3`, `b99cb31e`, `d15127cd`).
-- Windows startup, storage and generation reliability: slow-start waits, idle socket
-  shutdown, nested and long generation/checkpoint paths, workspace storage hardening and
-  retried output opens (`d77aeaef`, `40aab0c8`, `5daed0fe`, `031c77ad`, `718af5db`,
-  `c1186030`, `e021a95f`).
-- Native CI qualification of Windows Studio service, recovery and installed scopes
-  (`eb83f6b4`, `4534aba0`).
-- Windows draft authoring and generation under the MXC sandbox: renames fall back to the pinned
-  parent's path when handle-relative renames are rejected, artifact trees and every SQLite
-  database open beyond MAX_PATH, and agents use PowerShell search tools
-  (`34c3b675`, `b1e5eea7`, `e4f23d35`, `d7e138fa`).
+- Author scenarios and reusable environment packs, validate inputs, run and resume generation,
+  and inspect log bundles and evaluation scorecards from a desktop workspace.
+- Version and share scenarios and packs with frozen dependencies. Organize work by project,
+  retain authoring conversations, and compare runs with the scenario inputs that produced them
+  (`1a0bea4e`, `8dca987b`). A project can suggest an exact released pack for new scenarios
+  (`1126448d`).
+- Start with five bundled example scenarios. Run them as supplied or duplicate one into a
+  project and make it your own. Settings can install or update the examples in any workspace
+  (`86d74702`, `f50a520b`, `78db6f84`).
+- Install Studio on Apple Silicon macOS, Ubuntu 24.04 ARM64 or x86_64, or Windows 11 x86_64.
+  Each installer includes Python, the engine, resources, and authoring skills. Codex is a
+  separate install for assisted authoring.
 
-**Bundled example scenarios**
+**Ground truth and evaluation**
 
-- Five portable example scenarios ship with Studio and the source distribution (`86d74702`).
-- First launch creates an Example Scenarios project. Settings installs or updates examples in
-  any workspace, and Duplicate or New draft copies one into your own project (`f50a520b`),
-  using the redesigned Studio dialogs (`78db6f84`).
+- New schema-5 bundles include `GROUND_TRUTH_EVENTS.jsonl`, a deterministic record of authored
+  occurrences, their consequences and what each log source is expected to show. Evaluation
+  adds a fifth, equally weighted **Ground Truth Agreement** pillar with a 95% acceptance
+  threshold. Studio scorecards show agreement diagnostics, and schema-3 and schema-4 bundles
+  retain four-pillar evaluation (`9d105bb5`, `8f0365cd`, `394eeb80`, `447a7087`, `f4e9f812`,
+  `0da82b66`).
+- `eforge eval` reads complete datasets and can spill to disk to honor a configurable
+  working-memory budget. Use `--memory-budget-mib` and `--scratch-dir` to control it. Matching
+  improvements cover typed fields, DNS TXT, HTTP transactions, IDS thresholds and which
+  observations qualify for cadence and anomaly scoring (`65fa5c73`, `e2b7593b`, `394eeb80`).
 
-**Ground truth improvements**
+**Generation correctness**
 
-- Ground-truth schema 5 adds the deterministic `GROUND_TRUTH_EVENTS.jsonl` stream: each
-  authored occurrence, its consequences and per-source expectations (`9d105bb5`).
-- A new Ground Truth Agreement evaluation pillar (95% minimum), so schema-5 bundles score
-  five equally weighted pillars; legacy bundles keep four. Studio scorecards show ground-truth
-  diagnostics (`9d105bb5`).
-- Preserve authored occurrences and retryable truth finalization (`8f0365cd`); match
-  expectations by exact identity and shared source-admission rules (`394eeb80`).
-- Ground-truth agreement reconciled with firewall/NAT translation, eCAR and command-line views,
-  and canonical Bash history destruction, bringing the bundled corpus to the 95% gate
-  (`447a7087`, `f4e9f812`, `0da82b66`).
-
-**Evaluation**
-
-- Evaluate complete datasets without fixed corpus caps, within a configurable memory budget
-  that spills to disk (`--memory-budget-mib`, `--scratch-dir`) (`65fa5c73`, `e2b7593b`).
-- Evaluator corrections found with the bundled examples: typed Boolean and DNS TXT comparison,
-  one-to-one HTTP matching, IDS threshold awareness, and eligible-observation sampling for
-  anomaly and cadence measures (`394eeb80`).
-- Evaluator memory and correctness gates in CI (`11a74d5e`, `c11c2176`).
-
-**Realism fixes**
-
-- Assessment loops 89–98: process timing proofs, pipeline protocol intent, RDP reconnect
-  admission, mail recipients and provenance, and Zeek ICMP expectations (`c44d7a72`).
-- Browser exits now render Security 4689 under declared source policy, and ASA participates
-  in persistent SMB publication (`394eeb80`).
-- LDAP process lifetimes, sub-second scheduling and natural Mac exits, authored foreground and
-  lifecycle frontiers, pre-collection exit timing, syslog spillage consequences, and escaped
-  solidus in macOS Endpoint Security JSON (`51629cd7`, `6e486fec`, `8404cfcd`, `887367c7`,
-  `15b85996`, `3a01cbea`).
-- macOS observation-profile overrides validate against one shared source table (`66e8e5f4`).
-- Deferred SSH/RDP sessions that straddle the collection-window start no longer abort
-  generation; the slow tier now generates a draft of every shipping example (`eb3d85fc`).
-
-**Dependencies and release maintenance**
-
-- pydantic 2.14.3, pytest 9.2.0, websockets 17.4, platformdirs 4.14.5 and python-dotenv
-  1.2.4 (`36bef307`, `b3708e1a`, `ec1a2f8e`, `a171976b`, `64242b4f`).
-- Release publishing proceeds after the unused modern/legacy policy branch is skipped
-  (`3944d47a`); dev CI repairs for the bundled examples (`6487c094`).
-- Roadmap cleanup; removal of the legacy public-identity overlay adapter is deferred past 3.0
-  (`55052225`, `743facb7`, `1471476d`).
+- Linux and macOS share a foreground process lifetime model. Executable launches reuse installed
+  or previously produced files. When the scenario implies a file creation, ground truth
+  attributes it to the launching parent before execution, and validation reports it as
+  informational (`a503e96b`).
+- Authored logoffs now fail validation when no earlier storyline action can own the session.
+  Deferred SSH and RDP sessions that cross the collection-window start can publish their evidence
+  without aborting the run (`38337de6`, `eb3d85fc`).
+- Storyline commands now run inside RDP sessions when eCAR output is disabled, and each network
+  sensor uses one consistent identity regardless of hostname capitalization. Sensor UIDs,
+  capture settings, ground truth and evaluation all use that identity (`7b2c539e`, `ae8bff6e`).
+- Improved Windows process creator and authentication evidence, Linux console session ownership,
+  macOS execution and filesystem metadata, HTTP and TLS observations, mail sessions, and SMB file
+  and storage behavior. The realism assessment also prompted a broader mixed-OS benchmark
+  (`c44d7a72`, `394eeb80`, `51629cd7`, `6e486fec`, `8404cfcd`, `887367c7`, `15b85996`,
+  `3a01cbea`, `66e8e5f4`, `3db5af45`).
 
 **Installers and known limits**
 
-- Studio installers for Apple Silicon macOS (DMG) and Linux ARM64 (AppImage), and for Linux
-  (AppImage) and Windows 11 (setup EXE) on x86_64. Each bundles Python, the engine, resources and
-  skills; only Codex is installed separately for authoring. The CLI and agent-skill workflows
-  remain supported. The macOS installer has no Developer ID signature or notarization, and the
-  Windows installer is not code-signed.
-- Windows generation is much slower than on macOS and Linux, mostly after the simulated
-  hours finish: one 24-hour example took about 1h40m on a Windows 11 laptop inside the
-  authoring sandbox. Investigation is planned for 3.0.0.
+- The Apple Silicon DMG contains a fully ad-hoc-signed app bundle, fixing the “damaged” message
+  seen after downloading and installing rc1. macOS may still require **Open Anyway** because the
+  app ships without Developer ID signing or notarization (`40ec4c92`, `c0abf0f5`).
+- The unsigned Windows 11 x86_64 NSIS installer offers **Just me** and **Everyone** scopes and
+  uses private per-account Studio state. Uninstall preserves data by default and offers three
+  opt-in cleanup choices with review and progress (`602ab2ec`, `9ccfeeb3`, `8eacd6c6`,
+  `f650f283`, `12d0e75e`, `eac59e9b`, `922129e4`, `a5d5ff98`, `c6b15412`).
+- Native Windows Codex authoring uses MXC and PowerShell. Improvements cover Codex discovery,
+  helper startup and shutdown, long-path artifact and SQLite access, and checkpoint publication
+  inside MXC (`7e3cf951`, `18fbee49`, `5eb4edd3`, `b99cb31e`, `d15127cd`, `d77aeaef`,
+  `40aab0c8`, `5daed0fe`, `031c77ad`, `718af5db`, `c1186030`, `e021a95f`, `34c3b675`,
+  `b1e5eea7`, `e4f23d35`, `d7e138fa`).
+- Windows generation finalization can be slow. One packaged 24-hour example took about
+  1 hour 40 minutes inside the Windows authoring sandbox, with roughly 88 minutes spent after
+  the simulated hours completed.
+- Studio uses its reviewed backup and upgrade process for existing workspaces. Regenerate
+  rc1 test bundles affected by the RDP or sensor-identity issues before comparing evaluation
+  scores with rc2.
+
+**Release checks and dependencies**
+
+- Release checks cover native Studio recovery, both Windows installation scopes, evaluator memory
+  use, and draft generation of all five bundled examples. The slow suite now runs in five
+  balanced shards, and reusable CI evidence is tied to the shard layout (`eb83f6b4`, `4534aba0`,
+  `11a74d5e`, `c11c2176`, `eb3d85fc`, `a8344c6c`, `95982c2a`, `a130c3f8`, `5f1df2fd`).
+- Updated runtime and development dependencies, including Pydantic, FastAPI and Typer. Fixed
+  the CLI’s incomplete-generation choice for Typer 0.29 and streamlined checks on docs-only
+  pull requests (`36bef307`, `b3708e1a`, `ec1a2f8e`, `a171976b`, `64242b4f`, `729bd3aa`,
+  `3af251db`, `2433daae`).
+- Restored navigation in two packaged configuration references and shortened the Studio test
+  fixture's warm-up while retaining its frozen-input generation checks (`b0a9d426`).
+
+## v3.0.0rc1 (2026-11-18)
+
+Internal-only test snapshot for EvidenceForge 3.0. It was never announced and was superseded by
+`3.0.0rc2`.
 
 ## v2.2.0a6 (2026-11-09)
 
