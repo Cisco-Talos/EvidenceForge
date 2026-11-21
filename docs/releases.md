@@ -10,10 +10,9 @@ Automated release and packaged-installer checks remain required. See the
 [release worklog](worklog/2026-10-12-release-2.2.0a2.md).
 See [Studio installation](studio.md#macos-installation).
 
-The current development target is **3.0.0rc1**. The user selected 3.0 as a product
-milestone for Studio and mixed Windows/Linux/macOS simulation, carrying forward
-the 2.2 alpha series. Traditional CLI and legacy-scenario workflows remain
-supported; product numbering is independent of scenario and storage schema versions.
+**3.0.0rc3** adds simulated macOS workstations and introduces EvidenceForge Studio.
+The 2.2 alpha series led to this milestone. `3.0.0rc1` and `3.0.0rc2` were internal
+release candidates. Traditional CLI and legacy-scenario workflows remain supported.
 
 ## Source capabilities and release scope
 
@@ -47,8 +46,18 @@ automatic GitHub publication; preparing files or pushing to `dev` alone does not
 
 ## Alpha, beta and release candidates
 
-After the version commit is on remote `dev`, create and push an annotated tag for that exact
-commit. For example, when the committed product version is `2.2.0a1`:
+After the version commit is on remote `dev`, run the release checks against that exact
+commit before creating its tag:
+
+```sh
+gh workflow run ci.yml --ref dev -f release-coverage=true -f force-tests=true
+gh workflow run release-slow.yml --ref dev -f force-tests=true
+gh workflow run installers.yml --ref dev -f platform=all -f release=true -f force-tests=true
+```
+
+Verify that all three runs passed and their head SHA equals the candidate commit.
+After a source fix, repeat qualification on the new commit. Then create and push
+the annotated tag for the qualified commit. For example:
 
 ```sh
 git tag -a v2.2.0a1 <release-commit-sha> -m "EvidenceForge v2.2.0a1"

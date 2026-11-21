@@ -1,7 +1,7 @@
 {
   "name": "desktop-ui",
   "private": true,
-  "version": "3.0.0-rc.2",
+  "version": "3.0.0-rc.3",
   "type": "module",
   "scripts": {
     "version:sync": "node scripts/sync-version.mjs",

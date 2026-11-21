@@ -207,12 +207,12 @@ files listed as preserved need separate manual review if you also want them gone
 ### macOS installation
 
 1. Open [GitHub Releases](https://github.com/Cisco-Talos/EvidenceForge/releases) and select
-   `v2.2.0a4` (or the release you intend to use). Download its
-   `EvidenceForge-Studio-2.2.0a4-aarch64.dmg` and its `.dmg.sha256` file.
+   `v3.0.0rc3`. Download `EvidenceForge-Studio-3.0.0rc3-aarch64.dmg` and its
+   `.dmg.sha256` file.
 2. In the download folder, verify the image with:
 
    ```sh
-   shasum -a 256 -c EvidenceForge-Studio-2.2.0a4-aarch64.dmg.sha256
+   shasum -a 256 -c EvidenceForge-Studio-3.0.0rc3-aarch64.dmg.sha256
    ```
 
 3. Open the DMG and drag **EvidenceForge Studio.app** to **Applications**.
@@ -220,9 +220,9 @@ files listed as preserved need separate manual review if you also want them gone
 5. If macOS blocks the first launch, use **System Settings → Privacy & Security → Open Anyway**
    for this app, then confirm opening it. The current app has no Developer ID signature or
    notarization. See [Apple's instructions](https://support.apple.com/102445).
-6. Releases up to and including `3.0.0rc1` ship an incompletely signed app, which macOS calls
-   "damaged" without offering Open Anyway. After verifying the checksum, clear the download
-   flag with `xattr -dr com.apple.quarantine "/Applications/EvidenceForge Studio.app"`.
+
+The rc3 app bundle is ad-hoc signed. If an earlier installer produced a “damaged” message,
+download the current DMG, verify its checksum and reinstall.
 
 First launch expands the private bundled runtime; later launches reuse it. The app opens no
 terminal and downloads no additional runtime. Application updates are manual; see
@@ -233,20 +233,20 @@ terminal and downloads no additional runtime. Application updates are manual; se
 Download the AppImage and adjacent `.sha256` from the same
 [GitHub Release](https://github.com/Cisco-Talos/EvidenceForge/releases). Choose `aarch64`
 for an ARM64 desktop or `x86_64` for an x64 desktop; the images are not interchangeable.
-The published `2.2.0a4` filenames are shown below for ARM64; substitute your selected version
+The `3.0.0rc3` filenames are shown below for ARM64. Substitute your selected version
 and architecture in every filename. Locally built previews add `-test` and are separate from
 published release assets.
 
 ```sh
-sha256sum -c EvidenceForge-Studio-2.2.0a4-aarch64.AppImage.sha256
-chmod +x EvidenceForge-Studio-2.2.0a4-aarch64.AppImage
-./EvidenceForge-Studio-2.2.0a4-aarch64.AppImage
+sha256sum -c EvidenceForge-Studio-3.0.0rc3-aarch64.AppImage.sha256
+chmod +x EvidenceForge-Studio-3.0.0rc3-aarch64.AppImage
+./EvidenceForge-Studio-3.0.0rc3-aarch64.AppImage
 ```
 
 The builder baseline is glibc 2.39. Compatibility with other distributions is pending native
 acceptance; building against newer libraries can exclude older hosts. Ordinary AppImage launch
 uses FUSE 2 (`libfuse2t64` on Ubuntu 24.04). If FUSE is unavailable, use
-`./EvidenceForge-Studio-2.2.0a4-aarch64.AppImage --appimage-extract-and-run`.
+`./EvidenceForge-Studio-3.0.0rc3-aarch64.AppImage --appimage-extract-and-run`.
 See [Tauri's AppImage limitations](https://v2.tauri.app/distribute/appimage/#limitations) and
 [AppImage FUSE guidance](https://docs.appimage.org/user-guide/troubleshooting/fuse.html).
 

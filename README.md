@@ -75,7 +75,7 @@ systems and sensors.
   while the generation engine makes no LLM calls. The same scenario, seed, formats, and version
   reproduce the same dataset without API costs or model variability.
 
-## What's New in 3.0.0rc2 (Release Candidate)
+## What's New in 3.0.0rc3 (Release Candidate)
 
 EvidenceForge 3.0 adds **macOS workstations as simulated hosts** and introduces
 **EvidenceForge Studio**, a desktop application for building and reviewing threat-hunting exercises.
@@ -98,9 +98,9 @@ Studio installers are available for Apple Silicon macOS, Ubuntu 24.04 Linux on A
 and Windows 11 x86_64. Each bundles Python and the EvidenceForge engine. Install Codex
 separately for assisted authoring.
 
-[Download 3.0.0rc2](https://github.com/Cisco-Talos/EvidenceForge/releases/tag/v3.0.0rc2) ·
+[Download 3.0.0rc3](https://github.com/Cisco-Talos/EvidenceForge/releases/tag/v3.0.0rc3) ·
 [Installation guide](docs/studio.md#install-and-open-studio) ·
-[Full release notes](CHANGELOG.md#v300rc2-2026-11-21)
+[Full release notes](CHANGELOG.md#v300rc3-2026-11-21)
 
 ## What's New in 2.0
 

@@ -4,7 +4,7 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
-## v3.0.0rc2 (2026-11-21)
+## v3.0.0rc3 (2026-11-21)
 
 EvidenceForge 3.0 adds support for simulated macOS workstations and introduces EvidenceForge Studio.
 This release candidate includes the work from the 2.2 alpha series. Existing CLI, agent-skill,
@@ -19,7 +19,7 @@ and legacy-scenario workflows remain supported.
   interactive shell history, and eCAR evidence.
 - Model supported Terminal, iTerm2, Finder, browser, and SSH activity. The macOS simulation
   guide documents the supported workloads and coverage limits.
-  [Read the macOS simulation guide](https://github.com/Cisco-Talos/EvidenceForge/blob/v3.0.0rc2/docs/macos.md).
+  [Read the macOS simulation guide](https://github.com/Cisco-Talos/EvidenceForge/blob/v3.0.0rc3/docs/macos.md).
 
 **Introducing EvidenceForge Studio**
 
@@ -48,6 +48,10 @@ and legacy-scenario workflows remain supported.
   working-memory budget. Use `--memory-budget-mib` and `--scratch-dir` to control it. Matching
   improvements cover typed fields, DNS TXT, HTTP transactions, IDS thresholds and which
   observations qualify for cadence and anomaly scoring (`65fa5c73`, `e2b7593b`, `394eeb80`).
+- Ground-truth checks recognize native Samba close messages and distinguish web requests
+  from different clients in the same second. Windows process agreement compares the
+  4688 target account with the eCAR process principal when the target account is present
+  (`dc2c28ea`).
 
 **Generation correctness**
 
@@ -84,9 +88,7 @@ and legacy-scenario workflows remain supported.
 - Windows generation finalization can be slow. One packaged 24-hour example took about
   1 hour 40 minutes inside the Windows authoring sandbox, with roughly 88 minutes spent after
   the simulated hours completed.
-- Studio uses its reviewed backup and upgrade process for existing workspaces. Regenerate
-  rc1 test bundles affected by the RDP or sensor-identity issues before comparing evaluation
-  scores with rc2.
+- Studio uses its reviewed backup and upgrade process for existing workspaces.
 
 **Release checks and dependencies**
 
@@ -100,11 +102,19 @@ and legacy-scenario workflows remain supported.
   `3af251db`, `2433daae`).
 - Restored navigation in two packaged configuration references and shortened the Studio test
   fixture's warm-up while retaining its frozen-input generation checks (`b0a9d426`).
+- Release-mode installers can be built and verified before tagging. Refreshed slow-test
+  shard costs and pinned the RDP boundary and macOS shell fixtures to the cases they validate
+  (`dc2c28ea`).
+
+## v3.0.0rc2 (2026-11-21)
+
+Internal-only release candidate. The tag was created for testing, and release validation
+blocked publication. Superseded by `3.0.0rc3`.
 
 ## v3.0.0rc1 (2026-11-18)
 
-Internal-only test snapshot for EvidenceForge 3.0. It was never announced and was superseded by
-`3.0.0rc2`.
+Internal-only release candidate for EvidenceForge 3.0. It was never announced and was
+superseded by `3.0.0rc3`.
 
 ## v2.2.0a6 (2026-11-09)
 
