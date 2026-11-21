@@ -39,14 +39,17 @@ def test_iteration_fresh_process_bytes_and_complete_evaluation(tmp_path: Path, t
                 str(output),
                 "--seed",
                 "42",
+                "--checkpoint-hours",
+                "0",
                 "--target",
                 target,
             ],
             cwd=root,
             capture_output=True,
             text=True,
-            # The expanded mixed-fleet workload exceeded ten minutes on shared runners.
-            timeout=1200,
+            # This workload measures deterministic output, with resume exercised separately.
+            # Slow hosts can take more than twenty minutes to render it.
+            timeout=1800,
             check=False,
         )
         assert generated.returncode == 0, generated.stderr

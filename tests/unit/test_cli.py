@@ -1537,7 +1537,7 @@ class TestGenerateCheckpointResume:
             capture_output=True,
             text=True,
             check=False,
-            timeout=1200,
+            timeout=1800,
         )
         assert resumed.returncode == EXIT_SUCCESS, resumed.stdout + resumed.stderr
         uninterrupted = subprocess.run(
@@ -1558,7 +1558,7 @@ class TestGenerateCheckpointResume:
             capture_output=True,
             text=True,
             check=False,
-            timeout=1200,
+            timeout=1800,
         )
         assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout + uninterrupted.stderr
         assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)

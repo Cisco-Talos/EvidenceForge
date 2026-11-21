@@ -209,6 +209,7 @@ def test_verified_reuse_preserves_the_executed_producer(
     run, job = origin(evidence)
     output = tmp_path / "outputs"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.delenv("CI_FORCE_RUN", raising=False)
     monkeypatch.setattr(ci, "fingerprint", lambda *args: evidence.fingerprint)
     monkeypatch.setattr(
         ci,
@@ -255,6 +256,7 @@ def test_missing_permissions_fall_back_to_execution(
     evidence: ci.Evidence, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    monkeypatch.delenv("CI_FORCE_RUN", raising=False)
     monkeypatch.setattr(ci, "fingerprint", lambda *args: evidence.fingerprint)
 
     def unavailable(*args: Any, **kwargs: Any) -> None:
