@@ -152,9 +152,10 @@ def test_rdp_session_straddling_the_window_start_publishes_its_visible_members(
 
     from evidenceforge.cli.commands import app
     from evidenceforge.events.dispatcher import EventDispatcher
+    from evidenceforge.generation.storyline_timing import StorylineTimingPlanner
 
-    # This shortened Alderbrook draft opens a baseline RDP session to the domain controller
-    # during warm-up whose shell processes start just after collection begins.
+    # Pin the authored placement so the RDP startup cohort crosses the window
+    # boundary without depending on storyline jitter or baseline traffic.
     example = next(
         item
         for item in discover_examples()
@@ -168,9 +169,21 @@ def test_rdp_session_straddling_the_window_start_publishes_its_visible_members(
     )
     document = yaml.safe_load(draft.read_text(encoding="utf-8"))
     document["time_window"]["duration"] = "1h"
-    document["storyline"] = [dict(document["storyline"][1], time="+30m")]
+    document["storyline"] = [
+        {
+            "id": "warmup-rdp",
+            "time": "2026-11-09T13:59:56Z",
+            "actor": "erin.walsh",
+            "system": "ABL-DC-01",
+            "activity": "Open an administrator session across the collection boundary",
+            "events": [{"type": "rdp_session", "source_ip": "10.72.10.28"}],
+        },
+    ]
     document.pop("red_herrings")
     draft.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(
+        StorylineTimingPlanner, "place_event", lambda _self, nominal_time, **_kw: nominal_time
+    )
     boundaries: list[tuple[int, int]] = []
     original = EventDispatcher._deferred_session_unobserved_members
 

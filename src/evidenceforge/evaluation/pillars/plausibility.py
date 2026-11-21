@@ -1309,6 +1309,8 @@ def _extract_agree_field(
     if not field:
         return None
     val = record.fields.get(field)
+    if not is_b and spec.get("a_fallback_field") and val in (None, "", "-"):
+        val = record.fields.get(spec["a_fallback_field"])
     if val is None and is_b and spec.get("b_nested"):
         nested = record.fields.get(spec["b_nested"])
         if isinstance(nested, dict):

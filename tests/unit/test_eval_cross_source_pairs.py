@@ -247,6 +247,19 @@ class TestScorePair:
         assert agreeing == 1
         assert failures == []
 
+    def test_4688_compares_the_child_principal_and_falls_back_to_the_creator(self) -> None:
+        win = self._make_win(1234, r"C:\Windows\System32\cmd.exe", "WS-01")
+        win.fields.update(SubjectUserName="SYSTEM", TargetUserName="analyst")
+        ecar = self._make_ecar(1234, "cmd.exe", "WS-01")
+        ecar.fields["principal"] = "analyst"
+        records = {"windows_event_security": [win], "ecar": [ecar]}
+        scorer = CrossSourceScorer()
+        assert scorer._score_field_agreement(records).score == 100
+        ecar.fields["principal"] = "SYSTEM"
+        assert scorer._score_field_agreement(records).score == 0
+        win.fields["TargetUserName"] = "-"
+        assert scorer._score_field_agreement(records).score == 100
+
     def test_mismatched_process_name_produces_failure(self):
         win = self._make_win(1234, r"C:\Windows\System32\powershell.exe", "WS-01")
         ecar = self._make_ecar(1234, "cmd.exe", "WS-01")

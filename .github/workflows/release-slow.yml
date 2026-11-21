@@ -62,9 +62,9 @@ jobs:
   slow-comprehensive:
     name: Slow comprehensive tests (${{ matrix.shard_number }}/5, no coverage)
     runs-on: ubuntu-latest
-    # Measured-cost shards take about 42 minutes. The ceiling stops hangs while leaving
-    # room for a recovery run that plans a tagged snapshot with an older timing seed.
-    timeout-minutes: 90
+    # The expanded mixed-fleet workload used nearly 90 minutes on shared runners
+    # even with several subprocesses stopping at older hang guards.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

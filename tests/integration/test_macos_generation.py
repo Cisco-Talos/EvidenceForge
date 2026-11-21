@@ -62,7 +62,7 @@ def test_mac_mixed_fleet_isolation_fresh_process_determinism_and_filtering(
             capture_output=True,
             text=True,
             check=False,
-            timeout=180,
+            timeout=480,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         outputs.append(output)

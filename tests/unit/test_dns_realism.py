@@ -240,12 +240,21 @@ class TestHostnameConsistency:
             conn_state="SF",
         )
 
-        dns_event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
-        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        dns_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns.query == hostname and call.args[0].dns.query_type == "A"
+        )
+        conn_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.dst_port == 443 and call.args[0].network.hostname == hostname
+        )
         assert dns_event.dns is not None
         assert dns_event.dns.query_type == "A"
         assert dns_event.dns.query == hostname
         assert conn_event.network.dst_ip in dns_event.dns.answers
+        assert dns_event.timestamp < conn_event.timestamp
 
     def test_hostname_backed_local_tcp_emits_dns_without_emit_dns_flag(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch

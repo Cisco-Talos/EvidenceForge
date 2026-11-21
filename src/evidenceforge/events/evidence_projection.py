@@ -49,14 +49,11 @@ def candidate_formats(kind: str, facts: dict) -> set[str]:
     contract = contract_for(kind)
     formats = {item.value for item in contract.emitter_consumers} if contract else set()
     network = facts.get("network") or {}
-    if kind == "logoff" and not (
-        facts.get("syslog")
-        and any(
-            (facts.get(name) or {}).get("os_category") == "linux"
-            for name in ("src_host", "dst_host")
-        )
-    ):
-        formats.discard("syslog")
+    if kind == "logoff":
+        from evidenceforge.events.evidence_source_rules import semantic_source_admission
+
+        if not semantic_source_admission("syslog", kind, facts):
+            formats.discard("syslog")
     for name in tuple(formats):
         if name.startswith("zeek_"):
             context = name.removeprefix("zeek_")
@@ -192,8 +189,10 @@ def native_requirements(
     seed: int = 42,
     native_id: int | None = None,
     source_view: dict | None = None,
+    *,
+    legacy_web_and_samba: bool = False,
 ) -> list[NativeEvidenceRequirement]:
-    """Describe required native evidence from canonical facts; never render it."""
+    """Describe native evidence, with optional historical web and Samba selectors."""
     from evidenceforge.events.evidence_source_rules import (
         native_projection_applicable,
         native_zeek_connection_ports,
@@ -603,6 +602,8 @@ def native_requirements(
         context = facts.get("proxy") if format_name == "proxy_access" else http
         context = context or {}
         selector = {"method": context.get("method")}
+        if format_name == "web_access" and not legacy_web_and_samba:
+            selector["client_ip"] = network.get("src_ip")
         if context.get("method") == "CONNECT":
             required = {
                 "status|status_code": context.get("tunnel_status_code")
@@ -691,7 +692,19 @@ def native_requirements(
     elif format_name == "syslog":
         context = facts.get("syslog") or {}
         selector = {"app_name": context.get("app_name")}
-        if context.get("message"):
+        if kind == "logoff" and auth.get("session_kind") == "smb" and not legacy_web_and_samba:
+            selector = {"app_name": "smbd"}
+            worker = network.get("responding_pid") or 0
+            if worker > 0:
+                selector["pid"] = worker
+            close_prefix = "closed connection to service "
+            share = (facts.get("smb") or {}).get("share_name")
+            if share:
+                native_share = str(share).replace("\r", " ").replace("\n", " ").replace("|", "_")
+                required["message"] = close_prefix + native_share
+            else:
+                contains = [close_prefix]
+        elif context.get("message"):
             contains = [context["message"]]
         else:
             contains = [

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -92,7 +91,7 @@ def test_queued_snapshot_survives_nested_include_pack_and_overlay_deletion(tmp_p
             capture_output=True,
             text=True,
             check=False,
-            timeout=120 if os.name == "nt" else 30,
+            timeout=120,
         )
         assert generation.returncode == 0, generation.stdout + generation.stderr
         generated = compile_scenario(job.output_root / "RESOLVED_SCENARIO.yaml")

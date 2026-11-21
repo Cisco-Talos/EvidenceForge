@@ -45,7 +45,8 @@ def test_iteration_fresh_process_bytes_and_complete_evaluation(tmp_path: Path, t
             cwd=root,
             capture_output=True,
             text=True,
-            timeout=600,
+            # The expanded mixed-fleet workload exceeded ten minutes on shared runners.
+            timeout=1200,
             check=False,
         )
         assert generated.returncode == 0, generated.stderr

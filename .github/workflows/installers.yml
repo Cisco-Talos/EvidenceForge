@@ -26,6 +26,10 @@ on:
           - linux-x86_64
           - windows-x86_64
         default: linux-x86_64
+      release:
+        description: Build and verify release-named installers without publishing
+        type: boolean
+        default: false
       force-tests:
         type: boolean
         default: false

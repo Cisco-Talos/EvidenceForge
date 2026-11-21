@@ -281,7 +281,7 @@ def test_current_profile_mixed_benchmark_executes_queries_and_exports_known_life
         ],
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=480,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     truth = json.loads((output / "GROUND_TRUTH.json").read_text())

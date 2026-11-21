@@ -105,6 +105,9 @@ class TestConnStateDistribution:
         # into partial-handshake Zeek states after service-layer context is built.
         valid_histories.setdefault("SH", set()).add("Sh")
         valid_histories.setdefault("S1", set()).update({"ShAD", "ShADd"})
+        # Partial exchanges can carry application data before either side resets.
+        valid_histories["RSTO"].add("ShADadR")
+        valid_histories["RSTR"].add("ShADdr")
 
         state_manager.set_current_time(timestamp)
 

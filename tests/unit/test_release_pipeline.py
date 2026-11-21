@@ -350,7 +350,9 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
     )
     assert "publish" not in build and "git push" not in build
     assert installers[True]["workflow_call"]["inputs"]["release"]["default"] is False
-    assert "release" not in installers[True]["workflow_dispatch"]["inputs"]
+    release_input = installers[True]["workflow_dispatch"]["inputs"]["release"]
+    assert release_input["type"] == "boolean"
+    assert release_input["default"] is False
     matrix = next(
         step["run"] for step in installers["jobs"]["plan"]["steps"] if step.get("id") == "matrix"
     )

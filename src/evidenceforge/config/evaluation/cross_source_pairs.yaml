@@ -21,6 +21,7 @@
 #       list_contains: if true, b_field is a list and a_field must appear in it
 #     agree_on[]:
 #       a_field: field name in format_a record
+#       a_fallback_field: use when a_field is missing or the native "-" placeholder
 #       b_field: field name in format_b record
 #       normalize: optional transform applied to both values before comparison
 #                  "path_basename_ci" — take basename, lowercase
@@ -51,7 +52,8 @@ pairs:
         b_field: image_path
         b_nested: properties
         normalize: path_basename_ci
-      - a_field: SubjectUserName
+      - a_field: TargetUserName
+        a_fallback_field: SubjectUserName
         b_field: principal
         normalize: lower
 

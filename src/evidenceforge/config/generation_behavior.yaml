@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 568
+current_revision: 569
 history_start_revision: 1
-behavior_surface_sha256: fc245f4f08b674ae6fdbedc49e50016fd42465ae87c50bd0495db0d6f4c2fee9
+behavior_surface_sha256: 831e206129b759226cde6777d7535d37e51dddc9c466835800bdf356e3a44214
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6581,3 +6581,17 @@ changes:
   summary: Condition native Dovecot fetched-message counts on positive body data while allowing
     counted empty fetches. Preserve committed transport, byte budgets, worker identity and
     session codec.
+- revision: 569
+  id: native-samba-web-and-process-agreement
+  impact: localized
+  domains:
+  - ground-truth
+  - smb-session-close
+  - cross-source-evaluation
+  formats:
+  - syslog
+  - windows_event_security
+  - ecar
+  - web_access
+  summary: Match Samba logoffs to native closes, scope web requests by client, and compare
+    4688 child credentials with eCAR, using the creator when the native target is absent.

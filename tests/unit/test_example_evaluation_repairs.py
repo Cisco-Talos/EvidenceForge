@@ -13,7 +13,7 @@ from evidenceforge.evaluation.ground_truth_agreement import (
 )
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.pillars.plausibility import _coerce_key
-from evidenceforge.events.evidence_projection import native_requirements
+from evidenceforge.events.evidence_projection import candidate_formats, native_requirements
 from evidenceforge.events.ground_truth_occurrence import (
     GroundTruthOccurrence,
     GroundTruthSourceExpectation,
@@ -96,6 +96,41 @@ def test_smb_audit_cardinality_is_scoped_to_the_file() -> None:
     assert sum(_fields_match(r, selector) for r in rows) == 1
     rows.append(rows[0].model_copy(deep=True))
     assert sum(_fields_match(r, selector) for r in rows) == 2
+
+
+def test_samba_logoff_matches_the_native_close_without_a_username() -> None:
+    facts = {
+        "dst_host": {"os_category": "linux"},
+        "auth": {"session_kind": "smb", "username": "alice"},
+        "smb": {"share_name": "Reviews"},
+        "network": {"responding_pid": 1234},
+    }
+    (requirement,) = native_requirements("syslog", "logoff", facts, {}, "host")
+    assert requirement.selector == {"app_name": "smbd", "pid": 1234}
+    assert requirement.required == {"message": "closed connection to service Reviews"}
+    del facts["smb"]
+    del facts["network"]
+    assert "syslog" in candidate_formats("logoff", facts)
+    (legacy,) = native_requirements("syslog", "logoff", facts, {}, "host")
+    assert legacy.selector == {"app_name": "smbd"}
+    assert legacy.contains == ["closed connection to service "]
+
+
+def test_web_request_identity_distinguishes_clients_in_the_same_second() -> None:
+    facts = {
+        "http": {"method": "GET", "uri": "/login", "status_code": 301},
+        "network": {"src_ip": "192.0.2.3"},
+    }
+    (requirement,) = native_requirements("web_access", "connection", facts, {}, "host")
+    records = [
+        ParsedRecord(
+            source_format="web_access",
+            raw="",
+            fields={"method": "GET", "path": "/login", "client_ip": ip},
+        )
+        for ip in ("192.0.2.2", "192.0.2.3")
+    ]
+    assert [_fields_match(row, requirement.selector) for row in records] == [False, True]
 
 
 def test_history_identity_uses_the_native_second(tmp_path: Path) -> None:

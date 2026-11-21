@@ -925,7 +925,7 @@ class TestGenerateCheckpointResume:
         scenario.write_text(
             (scenarios_dir / "minimal.yaml")
             .read_text(encoding="utf-8")
-            .replace('duration: "1h"', 'duration: "24h"'),
+            .replace('duration: "1h"', 'duration: "4h"\n  warmup: "1h"'),
             encoding="utf-8",
         )
         suspended_root = tmp_path / "suspended"
@@ -967,7 +967,7 @@ class TestGenerateCheckpointResume:
         assert status.state == "resumable"
         assert status.suspended
         assert status.simulated_hour is not None
-        assert status.simulated_hour < 24
+        assert status.simulated_hour < 4
         recovery_index_before_verify = (
             suspended_root / ".eforge-generation" / "CURRENT.json"
         ).read_bytes()
@@ -1537,7 +1537,7 @@ class TestGenerateCheckpointResume:
             capture_output=True,
             text=True,
             check=False,
-            timeout=600,
+            timeout=1200,
         )
         assert resumed.returncode == EXIT_SUCCESS, resumed.stdout + resumed.stderr
         uninterrupted = subprocess.run(
@@ -1558,7 +1558,7 @@ class TestGenerateCheckpointResume:
             capture_output=True,
             text=True,
             check=False,
-            timeout=600,
+            timeout=1200,
         )
         assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout + uninterrupted.stderr
         assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)

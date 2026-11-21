@@ -1652,7 +1652,7 @@ def evaluate_ground_truth(
                 ):
                     errors.append("authored_http_status_disagreement")
             try:
-                requirements = native_requirements(
+                args = (
                     expectation.format,
                     row.kind,
                     row.facts,
@@ -1660,14 +1660,29 @@ def evaluate_ground_truth(
                     expectation.role,
                     (contract.source_rules.get("windows_event_sysmon") if contract else None),
                     scenario.generation_seed,
-                    source_view=row.source_views[expectation.source_instance].model_dump(
-                        mode="json"
-                    )
-                    if expectation.source_instance in row.source_views
-                    else None,
                 )
+                source_view = (
+                    row.source_views[expectation.source_instance].model_dump(mode="json")
+                    if expectation.source_instance in row.source_views
+                    else None
+                )
+                requirements = native_requirements(*args, source_view=source_view)
                 expected_requirements = [item.model_dump(mode="json") for item in requirements]
                 legacy_requirements = json.loads(json.dumps(expected_requirements))
+                if expectation.requirements != expected_requirements and (
+                    expectation.format == "web_access"
+                    or (
+                        expectation.format == "syslog"
+                        and row.kind == "logoff"
+                        and (row.facts.get("auth") or {}).get("session_kind") == "smb"
+                    )
+                ):
+                    legacy_requirements = [
+                        item.model_dump(mode="json")
+                        for item in native_requirements(
+                            *args, source_view=source_view, legacy_web_and_samba=True
+                        )
+                    ]
                 if expectation.format in {"bash_history", "zsh_history"}:
                     for item in legacy_requirements:
                         item["selector"].pop("command", None)

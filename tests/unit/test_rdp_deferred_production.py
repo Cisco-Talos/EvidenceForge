@@ -82,7 +82,8 @@ from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.exceptions import EventContractError, StateError
-from evidenceforge.models.scenario import System, User
+from evidenceforge.models.scenario import Scenario, System, User
+from evidenceforge.utils.files import load_yaml
 from evidenceforge.utils.rng import reset_thread_rng
 
 pytestmark = pytest.mark.slow
@@ -558,10 +559,16 @@ def _compiled_rdp_terminal_deployment(*, enabled: bool = True) -> CompiledCollec
     )
 
 
+def _new_terminal_engine(output_root: Path) -> GenerationEngine:
+    """Provide the same configuration and seed owners as a real generation run."""
+    fixture = Path(__file__).resolve().parents[1] / "fixtures/scenarios/minimal.yaml"
+    return GenerationEngine(Scenario.model_validate(load_yaml(fixture)), output_root)
+
+
 def _aborted_engine_for_rdp_harness(harness: _RdpTerminalHarness) -> GenerationEngine:
     """Return the real failed-generation terminal path with only RDP work pending."""
 
-    engine = GenerationEngine.__new__(GenerationEngine)
+    engine = _new_terminal_engine(harness.output_root)
     engine.activity_generator = harness.generator
     engine.state_manager = harness.state
     engine.dispatcher = harness.dispatcher
@@ -4265,7 +4272,7 @@ def test_engine_orders_ssh_before_rdp_and_blocks_source_close_during_retry(
     owner = _OrderedEngineLifecycleOwner(calls)
     dispatcher = _OrderedEngineRecoveryDispatcher(calls)
     sink = _OrderedSourceSink(calls, owner)
-    engine = GenerationEngine.__new__(GenerationEngine)
+    engine = _new_terminal_engine(tmp_path)
     engine.activity_generator = owner
     engine.state_manager = StateManager()
     engine.dispatcher = dispatcher
@@ -4284,9 +4291,6 @@ def test_engine_orders_ssh_before_rdp_and_blocks_source_close_during_retry(
     engine._closed_emitter_names = set()
     engine._exact_projection_recovery_dispatcher = None
     engine.ground_truth_dir = tmp_path
-    engine.scenario = object()
-    engine.output_target = object()
-    engine.workload_estimate = object()
     monkeypatch.setattr(
         "evidenceforge.events.collection_profile.write_collection_profile",
         lambda *_args, **_kwargs: None,
