@@ -17,6 +17,15 @@ else:
     from package_studio_macos import assemble, digest, run
 
 
+def built_nsis_installer(build: Path, product_name: str, native_version: str) -> Path:
+    """Return the setup executable for the synchronized Tauri product and version."""
+    bundle = build / "target/x86_64-pc-windows-msvc/release/bundle/nsis"
+    installer = bundle / f"{product_name}_{native_version}_x64-setup.exe"
+    if not installer.is_file():
+        raise FileNotFoundError(f"Expected the current NSIS installer at {installer}")
+    return installer
+
+
 def main() -> None:
     """Build an installer without release credentials, tags or publication."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -55,17 +64,16 @@ def main() -> None:
         frontend,
         environment,
     )
-    candidates = list(
-        (build / "target/x86_64-pc-windows-msvc/release/bundle/nsis").glob("*-setup.exe")
+    tauri = json.loads((frontend / "src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+    built_installer = built_nsis_installer(
+        build, product_name=tauri["productName"], native_version=tauri["version"]
     )
-    if len(candidates) != 1:
-        raise RuntimeError(f"Expected exactly one NSIS installer, found {candidates}")
     version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     destination = root / "dist/windows"
     destination.mkdir(parents=True, exist_ok=True)
     suffix = "" if arguments.release else "-test"
     installer = destination / f"EvidenceForge-Studio-{version}-windows-x86_64{suffix}-setup.exe"
-    shutil.copy2(candidates[0], installer)
+    shutil.copy2(built_installer, installer)
     installer.with_suffix(".exe.sha256").write_text(
         f"{digest(installer)}  {installer.name}\n", encoding="utf-8"
     )

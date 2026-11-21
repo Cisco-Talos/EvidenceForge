@@ -105,6 +105,8 @@ and legacy-scenario workflows remain supported.
 - Release-mode installers can be built and verified before tagging. Refreshed slow-test
   shard costs and pinned the RDP boundary and macOS shell fixtures to the cases they validate
   (`dc2c28ea`).
+- Windows packaging selects the setup file for the synchronized Studio version, even when
+  the Rust build cache contains installers from earlier versions.
 
 ## v3.0.0rc2 (2026-11-21)
 

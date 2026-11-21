@@ -10,9 +10,23 @@ from typing import Any
 import pytest
 import yaml
 from scripts import release_pipeline as release
+from scripts.package_studio_windows import built_nsis_installer
 from scripts.sync_studio_version import synchronize
 
 from tests.unit.test_studio_version import release_tree
+
+
+def test_windows_packager_selects_the_synchronized_installer_from_a_warm_cache(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "target/x86_64-pc-windows-msvc/release/bundle/nsis"
+    bundle.mkdir(parents=True)
+    (bundle / "EvidenceForge Studio_3.0.0-rc.1_x64-setup.exe").touch()
+    with pytest.raises(FileNotFoundError, match=r"3\.0\.0-rc\.3"):
+        built_nsis_installer(tmp_path, "EvidenceForge Studio", "3.0.0-rc.3")
+    current = bundle / "EvidenceForge Studio_3.0.0-rc.3_x64-setup.exe"
+    current.touch()
+    assert built_nsis_installer(tmp_path, "EvidenceForge Studio", "3.0.0-rc.3") == current
 
 
 @pytest.fixture
