@@ -40,34 +40,24 @@ numbered canonical suffix: `2.2.0a1`, `2.2.0b1`, or `2.2.0rc1`. Update `pyprojec
 files together with a nonempty `## vVERSION (YYYY-MM-DD)` section in `CHANGELOG.md`. Each release
 uses its checked-in changelog section as its release notes, plus platform installation limitations.
 
-Keep the release snapshot clean and commit all required source changes before tagging. Run the
-applicable local release and native acceptance checks. Pushing a release tag authorizes the
-automatic GitHub publication; preparing files or pushing to `dev` alone does not publish.
+Keep the release snapshot clean and commit all required source changes. Run the applicable local
+release and native acceptance checks. A new prerelease starts with an explicit Release dispatch.
 
 ## Alpha, beta and release candidates
 
-After the version commit is on remote `dev`, run the release checks against that exact
-commit before creating its tag:
+After the version commit is on remote `dev` and publication is authorized, dispatch the
+**Release** workflow from `dev` with the candidate's full commit SHA in `source-sha`:
 
 ```sh
-gh workflow run ci.yml --ref dev -f release-coverage=true -f force-tests=true
-gh workflow run release-slow.yml --ref dev -f force-tests=true
-gh workflow run installers.yml --ref dev -f platform=all -f release=true -f force-tests=true
+candidate_sha=$(git rev-parse HEAD)
+gh workflow run release.yml --ref dev -f source-sha="$candidate_sha"
 ```
 
-Verify that all three runs passed and their head SHA equals the candidate commit.
-After a source fix, repeat qualification on the new commit. Then create and push
-the annotated tag for the qualified commit. For example:
-
-```sh
-git tag -a v2.2.0a1 <release-commit-sha> -m "EvidenceForge v2.2.0a1"
-git push origin refs/tags/v2.2.0a1
-```
-
-The workflow must be present in the tagged snapshot. GitHub runs the tag-push workflow even
-before it is merged into the default branch. The pipeline rejects lightweight tags, mismatched
-tag/version identities, stable tags on this entry point, and commits not reachable from remote
-`dev`. `main` remains unchanged. The release is marked prerelease and is not marked latest.
+The workflow validates that the SHA is reachable from `origin/dev` and has a synchronized,
+unused prerelease version. It runs fresh release CI and extended tests, builds and verifies all
+four installers for that SHA, and verifies the downloaded artifacts before creating the
+annotated tag. It publishes those installers and their checksums from the same run with
+**Pre-release** enabled and **Latest** disabled. After a source fix, dispatch the new commit SHA.
 
 ## Stable releases
 
@@ -117,9 +107,10 @@ notarization and additional platform acceptance remain separate release work.
 
 ## Failed runs and retries
 
-Build or test failures prevent publication. Upload/publication failures can leave an annotated
-stable tag and a draft containing some verified assets. Use **Re-run failed jobs** on the original
-Actions run to reuse its installer artifacts (retained for 14 days). Do not move the tag.
+Build or test failures prevent the workflow from creating a release tag. Upload or publication
+failures can leave an annotated tag and a draft containing some verified assets. Use
+**Re-run failed jobs** on the original Actions run to reuse its installer artifacts (retained for
+14 days). Do not move the tag.
 
 The publisher resumes only drafts bound to the same commit and release channel. It reuses matching
 assets and refuses differing bytes or incomplete/unexpected assets. Rebuilding all jobs may produce

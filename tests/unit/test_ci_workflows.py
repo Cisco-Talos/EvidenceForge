@@ -368,7 +368,14 @@ def test_release_overlaps_builds_but_publication_requires_all_selected_gates() -
 
 
 def test_release_publisher_ignores_unused_branch_skips_but_requires_successful_gates() -> None:
-    publisher = workflow("release.yml")["jobs"]["publish-release"]
+    release = workflow("release.yml")
+    publisher = release["jobs"]["publish-release"]
+    assert release["permissions"]["contents"] == "read"
+    assert [
+        name
+        for name, job in release["jobs"].items()
+        if job.get("permissions", {}).get("contents") == "write"
+    ] == ["publish-release"]
     # The unused modern/legacy branch is skipped even on a successful release.
     # A status function must override GitHub's implicit ancestor success() check.
     terms = {term.strip() for term in publisher["if"].split("&&")}
@@ -381,6 +388,34 @@ def test_release_publisher_ignores_unused_branch_skips_but_requires_successful_g
         "needs.release-gates.result == 'success'",
     } <= terms
     assert {"validate-release-version", "release-gates"} <= set(publisher["needs"])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Release dispatch uses native Ubuntu bash")
+@pytest.mark.parametrize(
+    ("ref", "sha", "tag", "allowed"),
+    [
+        ("refs/heads/dev", "a" * 40, "", True),
+        ("refs/heads/dev", "", "v3.0.0rc2", True),
+        ("refs/heads/dev", "a" * 40, "v3.0.0rc2", False),
+        ("refs/heads/dev", "", "", False),
+        ("refs/heads/dev", "a" * 8, "", False),
+        ("refs/heads/dev", "", "dev", False),
+        ("refs/heads/main", "a" * 40, "", False),
+    ],
+)
+def test_release_dispatch_checks_inputs_before_checkout(
+    ref: str, sha: str, tag: str, allowed: bool
+) -> None:
+    validation, checkout, *_ = workflow("release.yml")["jobs"]["release-scope"]["steps"]
+    assert checkout["uses"].startswith("actions/checkout@")
+    result = subprocess.run(
+        ["bash", "-ec", validation["run"]],
+        env={**os.environ, "GITHUB_REF": ref, "RELEASE_SOURCE_SHA": sha, "RECOVERY_TAG": tag},
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert (result.returncode == 0) is allowed
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Release gates execute on native Ubuntu bash")

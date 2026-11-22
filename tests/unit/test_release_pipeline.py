@@ -50,7 +50,7 @@ def repository(tmp_path: Path) -> Path:
     return root
 
 
-def tag_snapshot(root: Path, version: str, *, annotated: bool = True, push_dev: bool = True) -> str:
+def commit_snapshot(root: Path, version: str, *, push_dev: bool = True) -> str:
     release_tree(root, version)
     synchronize(root)
     (root / "CHANGELOG.md").write_text(f"## v{version} (2026-10-09)\n\nChanges.\n")
@@ -58,6 +58,11 @@ def tag_snapshot(root: Path, version: str, *, annotated: bool = True, push_dev: 
     release.run(root, ["git", "commit", "-m", f"chore: bump version to {version}"])
     if push_dev:
         release.run(root, ["git", "push", "origin", "dev"])
+    return release.run(root, ["git", "rev-parse", "HEAD"])
+
+
+def tag_snapshot(root: Path, version: str, *, annotated: bool = True, push_dev: bool = True) -> str:
+    commit_snapshot(root, version, push_dev=push_dev)
     tag = f"v{version}"
     command = ["git", "tag", "-a", tag, "-m", "Release"] if annotated else ["git", "tag", tag]
     release.run(root, command)
@@ -71,6 +76,56 @@ def test_annotated_prerelease_on_dev_has_exact_identity(repository: Path, versio
     plan = release.prepare(repository, "push", f"refs/tags/{tag}")
     assert plan.version == version and plan.tag == tag and plan.prerelease
     assert plan.sha == release.run(repository, ["git", "rev-parse", "HEAD"])
+
+
+@pytest.mark.parametrize("version", ["2.2.0a1", "2.2.0b2", "2.2.0rc1"])
+def test_prerelease_dispatch_prepares_exact_dev_commit_without_tagging(
+    repository: Path, version: str
+) -> None:
+    sha = commit_snapshot(repository, version)
+    plan = release.prepare(repository, "workflow_dispatch", "refs/heads/dev", source_sha=sha)
+    assert plan.sha == sha and plan.tag == f"v{version}"
+    assert plan.prerelease and plan.create_prerelease_tag
+    assert release.remote_tag(repository, plan.tag) is None
+    assert release.run(repository, ["git", "tag", "--list"]) == ""
+
+
+def test_prerelease_dispatch_rejects_stable_source(repository: Path) -> None:
+    sha = release.run(repository, ["git", "rev-parse", "HEAD"])
+    with pytest.raises(ValueError, match="alpha, beta, or release candidate"):
+        release.prepare(repository, "workflow_dispatch", "refs/heads/dev", source_sha=sha)
+
+
+def test_prerelease_dispatch_requires_exact_sha_on_remote_dev(repository: Path) -> None:
+    sha = commit_snapshot(repository, "2.2.0rc1", push_dev=False)
+    with pytest.raises(ValueError, match="full lowercase source-sha"):
+        release.prepare(repository, "workflow_dispatch", "refs/heads/dev", source_sha=sha[:8])
+    with pytest.raises(ValueError, match="only accepted.*from dev"):
+        release.prepare(repository, "workflow_dispatch", "refs/heads/main", source_sha=sha)
+    with pytest.raises(ValueError, match="does not match"):
+        release.prepare(repository, "workflow_dispatch", "refs/heads/dev", source_sha="0" * 40)
+    with pytest.raises(ValueError, match="reachable from origin/dev"):
+        release.prepare(repository, "workflow_dispatch", "refs/heads/dev", source_sha=sha)
+
+
+def test_prerelease_dispatch_rejects_reuse_but_publication_retries_the_same_tag(
+    repository: Path,
+) -> None:
+    tag_snapshot(repository, "2.2.0rc1")
+    sha = release.run(repository, ["git", "rev-parse", "HEAD"])
+    with pytest.raises(ValueError, match="already exists"):
+        release.prepare(repository, "workflow_dispatch", "refs/heads/dev", source_sha=sha)
+    plan = release.prepare(
+        repository, "workflow_dispatch", "refs/heads/dev", source_sha=sha, publishing=True
+    )
+    assert plan.sha == sha and plan.create_prerelease_tag
+    (repository / "later.txt").write_text("Later source with the same version.\n")
+    newer = commit_snapshot(repository, "2.2.0rc1")
+    assert sha != newer
+    with pytest.raises(ValueError, match="another commit"):
+        release.prepare(
+            repository, "workflow_dispatch", "refs/heads/dev", source_sha=newer, publishing=True
+        )
 
 
 def test_stable_main_push_and_release_pr_validate_without_writes(repository: Path) -> None:
@@ -267,6 +322,45 @@ def test_stable_publication_creates_tag_after_verifying_build_and_marks_latest(
     assert "--latest=true" in commands[-1] and "--prerelease=false" in commands[-1]
 
 
+def test_new_prerelease_tags_verified_build_and_retries_without_retagging(
+    tmp_path: Path, assets: Path, plan: release.ReleasePlan, github: dict[str, Any]
+) -> None:
+    candidate = plan.model_copy(update={"create_prerelease_tag": True})
+    (tmp_path / "CHANGELOG.md").write_text("## v2.2.0a1 (2026-10-09)\n\nAlpha changes.\n")
+    github["tag_sha"] = None
+    github["fail"] = "upload"
+    with pytest.raises(subprocess.CalledProcessError):
+        release.publish(tmp_path, assets, candidate, "testing/project")
+    commands = github["commands"]
+    assert commands[1][-6:] == ["tag", "-a", plan.tag, plan.sha, "-m", f"EvidenceForge {plan.tag}"]
+    assert commands[2] == ["git", "push", "origin", f"refs/tags/{plan.tag}"]
+    assert commands[3][:3] == ["gh", "release", "create"]
+    assert github["tag_sha"] == plan.sha and github["release"]["draft"]
+
+    github["commands"].clear()
+    github["fail"] = None
+    release.publish(tmp_path, assets, candidate, "testing/project")
+    assert all(command[0] == "gh" for command in commands)
+    assert commands[-1][:3] == ["gh", "release", "edit"]
+    assert "--prerelease=true" in commands[-1] and "--latest=false" in commands[-1]
+
+
+@pytest.mark.parametrize("create_tag", [False, True])
+def test_release_never_recreates_a_missing_prerelease_tag_during_recovery(
+    tmp_path: Path,
+    assets: Path,
+    plan: release.ReleasePlan,
+    github: dict[str, Any],
+    create_tag: bool,
+) -> None:
+    recovery = plan.model_copy(update={"create_prerelease_tag": create_tag})
+    github["tag_sha"] = None
+    github["release"] = {"body": plan.marker, "draft": True, "prerelease": True}
+    with pytest.raises(ValueError, match="refusing to recreate"):
+        release.publish(tmp_path, assets, recovery, "testing/project")
+    assert [command[:2] for command in github["commands"]] == [["gh", "api"]]
+
+
 def test_partial_draft_retry_uploads_only_missing_asset(
     tmp_path: Path, assets: Path, plan: release.ReleasePlan, github: dict[str, Any]
 ) -> None:
@@ -318,8 +412,8 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
     root = Path(__file__).resolve().parents[2]
     workflow = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
     triggers = workflow[True]  # PyYAML treats YAML 1.1 'on' as a boolean.
-    assert triggers["push"] == {"branches": ["main"], "tags": ["v*"]}
-    assert triggers["workflow_dispatch"]["inputs"]["tag"]["required"] is True
+    assert triggers["push"] == {"branches": ["main"]}
+    assert set(triggers["workflow_dispatch"]["inputs"]) == {"source-sha", "tag"}
     jobs = workflow["jobs"]
     assert jobs["publish-release"]["needs"] == [
         "release-scope",
@@ -334,9 +428,16 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
             "github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'"
             " && needs.validate-release-version.outputs.ci-modern == 'true'"
         )
-    assert jobs["validate-release-version"]["steps"][0]["with"]["ref"] == (
-        "${{ inputs.tag || github.sha }}"
-    )
+    for job in ("release-scope", "validate-release-version"):
+        checkout = next(step for step in jobs[job]["steps"] if "uses" in step)
+        assert checkout["with"]["ref"] == (
+            "${{ inputs.source-sha || (inputs.tag && format('refs/tags/{0}', inputs.tag))"
+            " || github.sha }}"
+        )
+    for job in ("release-ci", "build-installers"):
+        assert jobs[job]["with"]["force-tests"] == (
+            "${{ inputs.source-sha != '' && github.event_name == 'workflow_dispatch' }}"
+        )
     for path in ("ci.yml", "release-slow.yml", "ci-recovery.yml"):
         called = yaml.safe_load((root / ".github/workflows" / path).read_text())
         for job in called["jobs"].values():
@@ -348,7 +449,8 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
         assert 'GITHUB_EVENT_NAME="$RELEASE_EVENT" GITHUB_REF="$RELEASE_REF"' in commands
     assert jobs["publish-release"]["steps"][0]["with"]["ref"] == source
     assert jobs["build-installers"]["uses"] == "./.github/workflows/installers.yml"
-    assert jobs["build-installers"]["with"] == {"source-ref": source, "release": True}
+    assert jobs["build-installers"]["with"]["source-ref"] == source
+    assert jobs["build-installers"]["with"]["release"] is True
     assert jobs["build-installers"]["needs"] == [
         "release-scope",
         "validate-release-version",
@@ -428,8 +530,10 @@ def test_linux_installer_corruption_prevents_publication(
 ) -> None:
     image = assets / plan.installer_names("linux-x86_64")[0]
     image.write_bytes(b"broken Linux image")
+    github["tag_sha"] = None
+    candidate = plan.model_copy(update={"create_prerelease_tag": True})
     with pytest.raises(ValueError, match="checksum"):
-        release.publish(tmp_path, assets, plan, "testing/project")
+        release.publish(tmp_path, assets, candidate, "testing/project")
     assert github["commands"] == []
 
 

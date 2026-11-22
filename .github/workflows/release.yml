@@ -3,27 +3,29 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      source-sha:
+        description: Full commit SHA from dev to qualify, tag and publish as a new prerelease
+        type: string
       tag:
-        description: Existing annotated prerelease tag to validate, build and publish
-        required: true
+        description: Existing annotated prerelease tag to recover (leave source-sha blank)
         type: string
   pull_request:
     branches: [main]
   push:
     branches: [main]
-    tags: ["v*"]
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-${{ inputs.source-sha || inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
-  RELEASE_EVENT: ${{ github.event_name == 'workflow_dispatch' && 'push' || github.event_name }}
-  RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+  RELEASE_EVENT: ${{ inputs.tag && 'push' || github.event_name }}
+  RELEASE_REF: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+  RELEASE_SOURCE_SHA: ${{ inputs.source-sha }}
 
 jobs:
   release-scope:
@@ -35,10 +37,28 @@ jobs:
     outputs:
       cleanup: ${{ steps.scope.outputs.cleanup }}
     steps:
+      - name: Validate manual release input
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          RECOVERY_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/dev ]; then
+            echo 'Dispatch prereleases from dev.'
+            exit 1
+          fi
+          if [[ -n "$RELEASE_SOURCE_SHA" && -z "$RECOVERY_TAG" && "$RELEASE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            exit 0
+          fi
+          if [[ -z "$RELEASE_SOURCE_SHA" && "$RECOVERY_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$ ]]; then
+            exit 0
+          fi
+          echo 'Supply either a full lowercase source-sha from dev or an existing prerelease tag.'
+          exit 1
       - name: Checkout exact event snapshot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.tag || github.sha }}
+          ref: ${{ inputs.source-sha || (inputs.tag && format('refs/tags/{0}', inputs.tag)) || github.sha }}
           fetch-depth: 0
       - name: Recognize bounded project-state cleanup
         id: scope
@@ -71,7 +91,7 @@ jobs:
       - name: Checkout release snapshot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.tag || github.sha }}
+          ref: ${{ inputs.source-sha || (inputs.tag && format('refs/tags/{0}', inputs.tag)) || github.sha }}
           fetch-depth: 0
           fetch-tags: true
       - name: Install uv
@@ -108,6 +128,7 @@ jobs:
     with:
       release-coverage: true
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
+      force-tests: ${{ inputs.source-sha != '' && github.event_name == 'workflow_dispatch' }}
 
   release-slow:
     if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'true'
@@ -116,8 +137,7 @@ jobs:
     with:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
       legacy-memory-policy: ${{ needs.validate-release-version.outputs.ci-memory != 'true' }}
-      # Manual recovery exists because the workflow changed; evidence recorded under the
-      # earlier workflow may describe a different shard layout, so execute every case.
+      # Run fresh for new prereleases and for recovery after workflow corrections.
       force-tests: ${{ github.event_name == 'workflow_dispatch' }}
 
   build-installers:
@@ -127,6 +147,7 @@ jobs:
     with:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
       release: true
+      force-tests: ${{ inputs.source-sha != '' && github.event_name == 'workflow_dispatch' }}
 
   # Immutable snapshots such as a5 predate the shard/evidence helpers. Preserve
   # manual recovery using their known CI policy, without overlaying source files.

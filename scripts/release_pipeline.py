@@ -35,6 +35,7 @@ class ReleasePlan(BaseModel):
     tag: str
     sha: str
     prerelease: bool
+    create_prerelease_tag: bool = False
 
     @property
     def dmg_name(self) -> str:
@@ -88,14 +89,23 @@ def changelog_notes(root: Path, version: str) -> str:
     return match[1].strip()
 
 
-def prepare(root: Path, event: str, ref: str) -> ReleasePlan:
-    """Enforce stable-main and prerelease-dev entry points before any build or write."""
+def prepare(
+    root: Path, event: str, ref: str, *, source_sha: str = "", publishing: bool = False
+) -> ReleasePlan:
+    """Validate the release entry point and exact snapshot before any build or write."""
+    candidate = event == "workflow_dispatch" and ref == "refs/heads/dev"
+    if candidate:
+        if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+            raise ValueError("Supply a full lowercase source-sha from dev.")
+    elif source_sha:
+        raise ValueError("source-sha is only accepted for a prerelease dispatch from dev.")
     version = synchronize(root, check=True)
     plan = ReleasePlan(
         version=version,
         tag=f"v{version}",
         sha=run(root, ["git", "rev-parse", "HEAD"]),
         prerelease="-" in studio_version(version),
+        create_prerelease_tag=candidate,
     )
     changelog_notes(root, version)
     if run(root, ["git", "status", "--porcelain", "--untracked-files=normal"]):
@@ -110,11 +120,22 @@ def prepare(root: Path, event: str, ref: str) -> ReleasePlan:
             raise ValueError(f"Remote release tag {plan.tag} already exists; bump before merging.")
     elif event == "push" and ref == "refs/heads/main":
         if plan.prerelease:
-            raise ValueError(
-                "Prereleases must use an annotated tag on dev; main publishes stable versions."
-            )
+            raise ValueError("Dispatch prereleases from dev. Main publishes stable versions.")
         if existing is not None and existing != plan.sha:
             raise ValueError(f"Remote tag {plan.tag} belongs to another commit; never move it.")
+    elif candidate:
+        if not plan.prerelease:
+            raise ValueError("The source-sha must identify an alpha, beta, or release candidate.")
+        if plan.sha != source_sha:
+            raise ValueError("The checked-out commit does not match the requested source-sha.")
+        if existing is not None:
+            if not publishing:
+                raise ValueError(
+                    f"Remote release tag {plan.tag} already exists. Rerun failed jobs in the "
+                    "original workflow or use tag recovery."
+                )
+            if existing != plan.sha:
+                raise ValueError(f"Remote tag {plan.tag} belongs to another commit; never move it.")
     elif event == "push" and ref.startswith("refs/tags/"):
         if not plan.prerelease or ref != f"refs/tags/{plan.tag}":
             raise ValueError(
@@ -124,15 +145,16 @@ def prepare(root: Path, event: str, ref: str) -> ReleasePlan:
             raise ValueError(
                 "The annotated remote release tag must point to the checked-out commit."
             )
-        # The checkout fetches full history; refresh dev without changing the release HEAD.
+    else:
+        raise ValueError("Release entry must be a stable main release or prerelease dispatch.")
+    if plan.prerelease:
+        # Refresh dev without changing the candidate checked out by the workflow.
         run(root, ["git", "fetch", "origin", "dev:refs/remotes/origin/dev"])
         result = subprocess.run(
             ["git", "merge-base", "--is-ancestor", plan.sha, "origin/dev"], cwd=root, check=False
         )
         if result.returncode != 0:
             raise ValueError("The prerelease commit must be reachable from origin/dev.")
-    else:
-        raise ValueError("Release entry must be a main push, release PR, or prerelease tag push.")
     return plan
 
 
@@ -213,7 +235,7 @@ def publish(root: Path, directory: Path, plan: ReleasePlan, repository: str) -> 
             print(f"Release {plan.tag} is already complete; left unchanged.")
             return
     if existing is None:
-        if plan.prerelease:
+        if plan.prerelease and (not plan.create_prerelease_tag or release is not None):
             raise ValueError("The prerelease tag disappeared; refusing to recreate it.")
         run(
             root,
@@ -352,7 +374,13 @@ def main() -> None:
             return
         if args.platform is not None or args.preview:
             raise ValueError("--platform and --preview are only valid for verify-installer")
-        plan = prepare(root, os.environ["GITHUB_EVENT_NAME"], os.environ["GITHUB_REF"])
+        plan = prepare(
+            root,
+            os.environ["GITHUB_EVENT_NAME"],
+            os.environ["GITHUB_REF"],
+            source_sha=os.environ.get("RELEASE_SOURCE_SHA", ""),
+            publishing=args.command == "publish",
+        )
         if args.command == "prepare":
             output = os.environ.get("GITHUB_OUTPUT")
             if output:

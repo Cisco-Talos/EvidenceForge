@@ -183,14 +183,15 @@ bump or publication; wait for an explicit release request.
 require a different SemVer target. Increment the stage number for each new published snapshot;
 never overwrite a published tag or replace its build. Synchronize all Python and Studio versions,
 and commit the changelog with the version bump on `dev` (for example,
-`chore: bump version to 2.2.0a1`). Push the versioned source to `dev`, then push an annotated tag pointing to that exact snapshot.
-The Release workflow validates the tag/version and `dev` ancestry, runs release gates, builds
-and verifies the installers, attaches them and their checksums to a draft, then publishes it marked
-**pre-release**, with **latest** disabled. Document supported platforms, external
-requirements, signing/notarization status, known limitations, and validation evidence. Retain
-the applicable release and native acceptance gates; alpha status does not close outstanding gates.
-Pushing the prerelease tag starts publication automatically; only push it when the release is
-authorized. A normal push to `dev` does not publish a release.
+`chore: bump version to 2.2.0a1`). Push the versioned source to `dev`. After explicit release
+authorization, dispatch Release from `dev` with `source-sha` set to the full candidate commit.
+The workflow validates the version and remote `dev` ancestry, runs fresh release gates, and builds
+and verifies the installers before creating the annotated tag. It uploads those same installers
+and their checksums to a draft, then publishes it as a **pre-release** with **latest** disabled.
+Document supported platforms, external requirements, signing/notarization status, known
+limitations, and validation evidence. Retain the applicable release and native acceptance gates;
+alpha status does not close outstanding gates.
+Use the workflow to create prerelease tags. A normal push to `dev` does not publish a release.
 When the stable release is ready, remove the prerelease suffix (for example, `2.2.0rc1` → `2.2.0`)
 on `dev` and follow the normal `dev` → `main` release path. Do not increase the base version again
 solely because prereleases were published.
@@ -205,8 +206,9 @@ chore: bump version to X.Y.Z
 **Release automation:** `.github/workflows/release.yml` checks stable release PRs to `main`.
 It rejects prerelease versions on that entry point and reused tags. On pushes to `main`, it
 publishes the stable version from the exact merged commit, creating its annotated tag after the
-build succeeds. Annotated `vX.Y.ZaN`, `vX.Y.ZbN`, and `vX.Y.ZrcN` tag pushes publish prereleases
-from commits reachable on `origin/dev`; tag names must match the canonical product version.
+build succeeds. A prerelease dispatch from `dev` publishes the requested commit after the same
+gates pass. It derives the annotated `vX.Y.ZaN`, `vX.Y.ZbN`, or `vX.Y.ZrcN` tag from the
+canonical product version.
 Both paths require synchronized Python/Studio metadata and a nonempty versioned changelog entry.
 
 The workflow calls the existing CI and slow/portability workflows on the exact snapshot, with
@@ -229,12 +231,11 @@ created by this pipeline are not adopted automatically. If a failure before asse
 a workflow correction, the manual recovery entry point can use the corrected dev workflow against
 the existing annotated prerelease tag. Every gate, build and publisher checks out its validated
 original commit; tags remain immutable. See [release instructions](docs/releases.md).
-The normal stable-release trigger calls the build/publish jobs directly: tags pushed with
-`GITHUB_TOKEN` do not start a second workflow. Publication requires the macOS DMG, both Linux
-AppImages, the Windows setup EXE and all four SHA256 files. Each release snapshot's own
-`scripts/release_pipeline.py` defines its required set, so snapshots made before Windows releases
-keep their three-installer contract. The read-only Installer Builds workflow also creates preview
-artifacts for every platform, including Windows, without tagging or publishing. Windows 11
+Both release paths call the build and publish jobs within one workflow run. Publication requires
+the macOS DMG, both Linux AppImages, the Windows setup EXE and all four SHA256 files. Each release
+snapshot's own `scripts/release_pipeline.py` defines its required set. Snapshots made before
+Windows releases keep their three-installer contract. The read-only Installer Builds workflow
+also creates preview artifacts for every platform, including Windows, without tagging or publishing. Windows 11
 desktop acceptance remains a user gate before declaring Windows release testing complete.
 
 **Manual recovery (fallback only):** inspect the failed run and draft before taking any action.
