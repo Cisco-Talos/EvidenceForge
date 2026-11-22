@@ -78,7 +78,7 @@ systems and sensors.
 ## What's New in 3.0.0rc3 (Release Candidate)
 
 EvidenceForge 3.0 adds **macOS workstations as simulated hosts** and introduces
-**EvidenceForge Studio**, a desktop application for building and reviewing threat-hunting exercises.
+**EvidenceForge Studio**, a desktop application for creating and reviewing synthetic security datasets.
 
 - **Simulate macOS alongside Windows and Linux.** Include modeled macOS 27 arm64 workstations
   in the same scenario as Windows and Linux systems. Mac hosts can produce Endpoint Security
