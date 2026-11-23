@@ -5,13 +5,8 @@ from __future__ import annotations
 import sqlite3
 import threading
 
-from evidenceforge.studio.state_records_v3 import (
-    ChatControl,
-    ChatInput,
-    ChatPreference,
-    ChatTurn,
-    ChatViewState,
-)
+from evidenceforge.studio.state_records_v3 import ChatPreference, ChatTurn
+from evidenceforge.studio.state_records_v7 import ChatControl, ChatInput, ChatViewState
 
 
 class ChatStore:

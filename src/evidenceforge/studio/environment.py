@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -20,6 +21,9 @@ from evidenceforge.studio.contexts import ConfigurationState, configuration_stat
 from evidenceforge.studio.processes import launch_options
 from evidenceforge.studio.settings import StudioSettings, controller_settings
 from evidenceforge.studio.store import Project
+from evidenceforge.studio.topology import TopologyGraph, project_topology
+
+logger = logging.getLogger(__name__)
 
 
 class OverlayFile(BaseModel):
@@ -56,6 +60,7 @@ class EnvironmentReport(BaseModel):
     authored_kind: str = ""
     selected_packs: list[SelectedPack] = Field(default_factory=list)
     effective_scenario: dict[str, Any] = Field(default_factory=dict)
+    topology: TopologyGraph | None = None
     field_origins: dict[str, str] = Field(default_factory=dict)
     organization_model_origins: dict[str, str] = Field(default_factory=dict)
     catalog_origins: dict[str, str] = Field(default_factory=dict)
@@ -319,6 +324,17 @@ def inspect_environment(
         ):
             raise ValueError("The CLI returned invalid declaration sources")
         _populate_declarations(inspected, captured)
+        resolved_environment = inspected.effective_scenario.get("environment")
+        captured_source = captured.get(f"sources/{report.source_sha256[:16]}-{source.name}")
+        if (
+            isinstance(resolved_environment, dict)
+            and captured_source is not None
+            and hashlib.sha256(captured_source.encode("utf-8")).hexdigest() == report.source_sha256
+        ):
+            try:
+                inspected.topology = project_topology(resolved_environment)
+            except ValidationError:
+                logger.debug("Environment inspection returned unsupported topology fields")
         return inspected
     except (ValidationError, ValueError, yaml.YAMLError):
         report.error = (

@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from evidenceforge.desktop.library import LibraryItem
 from evidenceforge.studio.chat import ChatMessageRequest
 from evidenceforge.studio.codex import CodexTimeoutError
 from evidenceforge.studio.service import StudioService, create_app
@@ -294,7 +295,7 @@ async def test_result_links_exclude_files_outside_the_permitted_source(
 
 def test_restart_holds_queued_and_uncertain_claims(studio: StudioService) -> None:
     from evidenceforge.studio.chat import ChatRuntime
-    from evidenceforge.studio.state_records_v3 import ChatInput
+    from evidenceforge.studio.state_records_v7 import ChatInput
 
     chat = conversation(studio, active=False)
     studio.store.chat.save_input(
@@ -456,6 +457,42 @@ def test_message_setup_timeout_is_rejected_before_turn_dispatch(
         assert not studio.store.conversation(chat.id).active
 
 
+@pytest.mark.parametrize("kind", ["scenario", "organization_pack"])
+def test_network_question_creates_a_private_author_draft(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: Literal["scenario", "organization_pack"],
+) -> None:
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(tmp_path / "workspace"))
+    app = create_app(paths(tmp_path / "private"), "secret")
+    with TestClient(app, headers={"X-EForge-Token": "secret"}) as client:
+        studio = app.state.studio
+        source = studio.settings.workspace / "network.yaml"
+        source.write_text("name: network\n", encoding="utf-8")
+        item = studio.store.upsert_item(
+            studio.settings.workspace, kind, LibraryItem(path=source, name="network", kind=kind)
+        )
+        response = client.post(
+            "/v1/conversations",
+            json={
+                "item_id": item.id,
+                "network_context": {
+                    "revision": "diagram-source",
+                    "topology": {"segments": [], "hosts": [], "devices": [], "findings": []},
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+        created = response.json()
+        assert created["item_id"] == item.id
+        assert created["thread_id"] is None
+        view = studio.store.chat.control(created["id"]).view
+        assert view.include_current_view
+        assert view.network_context is not None
+        assert view.network_context.revision == "diagram-source"
+        assert not studio.store.chat.inputs(created["id"])
+
+
 def test_fake_app_server_dispatches_fifo_and_holds_work_across_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -530,6 +567,16 @@ def test_fake_app_server_dispatches_fifo_and_holds_work_across_restart(
     private = paths(tmp_path / "private")
     app = create_app(private, "secret")
     headers = {"X-EForge-Token": "secret"}
+    image = (
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC"
+        "0lEQVR42mP8/x8AAwMCAO+jP1sAAAAASUVORK5CYII="
+    )
+    network_context = {
+        "revision": "compiled-revision",
+        "topology": {"segments": [], "hosts": [], "devices": [], "findings": []},
+        "selected_id": "segment:office",
+        "image": image,
+    }
     with TestClient(app) as client:
         studio = app.state.studio
         chat = conversation(studio, active=False)
@@ -539,7 +586,12 @@ def test_fake_app_server_dispatches_fifo_and_holds_work_across_restart(
         response = client.post(
             base + "/messages",
             headers=headers,
-            json={"message_id": "first", "text": "First", "mode": "start"},
+            json={
+                "message_id": "first",
+                "text": "First",
+                "mode": "start",
+                "network_context": network_context,
+            },
         )
         assert response.status_code == 200, response.text
         assert response.json()["turn_id"] == "native-first"
@@ -611,6 +663,12 @@ def test_fake_app_server_dispatches_fifo_and_holds_work_across_restart(
     records = [json.loads(line) for line in calls.read_text().splitlines()]
     turns = [row for row in records if row["method"] == "turn/start"]
     assert [row["params"]["clientUserMessageId"] for row in turns] == ["first", "third", "held"]
+    text_part, image_part = turns[0]["params"]["input"]
+    assert text_part["type"] == "text"
+    assert text_part["text"].startswith("First\n\n[Studio network diagram context]\n")
+    assert json.loads(text_part["text"].splitlines()[-1])["revision"] == "compiled-revision"
+    assert "data:image/png" not in text_part["text"]
+    assert image_part == {"type": "image", "url": image}
     assert turns[1]["params"]["input"] == [{"type": "text", "text": "Edited third"}]
     assert all(row["params"]["sandboxPolicy"]["type"] == "readOnly" for row in turns)
 
@@ -618,7 +676,7 @@ def test_fake_app_server_dispatches_fifo_and_holds_work_across_restart(
 def test_concurrent_draft_saves_cannot_clear_a_queue_hold(studio: StudioService) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    from evidenceforge.studio.state_records_v3 import ChatViewState
+    from evidenceforge.studio.state_records_v7 import ChatViewState
 
     chat = conversation(studio, active=False)
 

@@ -56,6 +56,8 @@
   --radius-pill: 999px;
   --shadow-pop: 0 8px 24px var(--shadow-color);
   --shadow-dialog: 0 24px 64px var(--shadow-color);
+  --diagram-min-height: 440px;
+  --diagram-inspector-width: 304px;
 
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Noto Sans", sans-serif;
   font-size: var(--text-md);
@@ -580,6 +582,10 @@ p { line-height: 1.5; }
 .chat-welcome p { color: var(--text-2); }
 .composer-wrap { padding: 16px 24px 20px; border-top: 1px solid var(--border); }
 .composer { max-width: 850px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-2); }
+.composer-network-attachment { display: flex; gap: 12px; align-items: center; margin: 12px 16px 0; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.composer-network-attachment img { width: 112px; max-height: 66px; object-fit: contain; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.composer-network-attachment label, .composer-network-attachment small { display: block; font-size: var(--text-sm); }
+.composer-network-attachment label { margin-top: 4px; }
 .composer:focus-within { border-color: var(--accent); }
 .composer textarea { display: block; width: 100%; min-height: 70px; max-height: 190px; padding: 16px; resize: vertical; border: none; outline: none; background: transparent; color: var(--text-1); }
 .composer-bottom { display: flex; align-items: center; justify-content: space-between; padding: 0 8px 8px 16px; color: var(--text-3); font-size: var(--text-xs); }
@@ -1126,6 +1132,92 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .environment-view { display: flex; flex-direction: column; gap: 16px; }
 .environment-view .surface-heading h2 { display: flex; align-items: center; gap: 8px; }
 .environment-view .surface { min-width: 0; }
+.scenario-workspace.network-focused { max-width: none; }
+.scenario-workspace.network-focused .workspace-heading { padding: 12px 24px 4px; }
+.scenario-workspace.network-focused .workspace-tablist { margin-top: 8px; padding-inline: 24px; }
+.workspace-network { height: max(var(--diagram-min-height), calc(100dvh - 160px)); display: flex; flex-direction: column; min-width: 0; padding: 0 24px 16px; }
+.network-diagram { display: flex; flex: 1; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.network-diagram-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); max-height: none; padding: 16px; }
+.diagram-titlebar, .diagram-details-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.diagram-titlebar, .diagram-unavailable { flex-wrap: wrap; }
+.diagram-titlebar .muted { font-size: var(--text-sm); }
+.network-diagram h3 { margin: 0; font-size: var(--text-lg); }
+.network-diagram p, .diagram-toolbar p { margin: 0; }
+.diagram-toolbar, .diagram-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.diagram-toolbar { justify-content: space-between; }
+.diagram-controls .button-quiet { min-height: 32px; }
+.diagram-controls .button-quiet[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); }
+.diagram-body { display: flex; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.diagram-canvas { flex: 1; min-width: 0; position: relative; background: var(--bg); }
+.diagram-viewport { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.diagram-viewport, .diagram-viewport * { -webkit-user-select: none; user-select: none; }
+.diagram-viewport[data-dragging="true"] { cursor: grabbing; }
+.diagram-viewport:focus-visible { outline-offset: -2px; }
+.diagram-interface-labels text { fill: var(--text-2); font-size: 11px; font-weight: 550; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.diagram-edges path { fill: none; stroke: var(--text-3); stroke-width: 2px; stroke-linecap: round; stroke-linejoin: round; }
+.diagram-edges [data-kind="interface"] { stroke: var(--text-2); stroke-width: 2.5px; }
+.diagram-edges [data-kind="membership"] { stroke: var(--text-2); stroke-width: 2.5px; stroke-dasharray: 5 4; }
+.diagram-edges [data-kind="subnet"] { stroke: var(--text-1); stroke-width: 3px; }
+.diagram-edges [data-kind="host"] { stroke-width: 1.5px; }
+.diagram-edges [data-highlighted="true"] { stroke: var(--info); stroke-width: 3px; }
+.diagram-node { color: var(--text-2); cursor: pointer; outline: none; }
+.diagram-node[data-kind="host"], .diagram-node[data-equipment] { color: var(--text-1); }
+.diagram-node[data-equipment="firewall"] { color: var(--accent); }
+.diagram-node-box { fill: transparent; stroke: transparent; stroke-width: 1px; rx: var(--radius-sm); }
+.diagram-node[data-active="true"] .diagram-node-box { fill: var(--hover-tint); stroke: var(--border-strong); }
+.diagram-node[aria-pressed="true"] .diagram-node-box, .diagram-node:focus-visible .diagram-node-box { stroke: var(--accent); stroke-width: 2px; }
+.diagram-node-label { fill: var(--text-1); font-size: 15px; font-weight: 650; }
+.diagram-node[data-equipment] .diagram-node-label { paint-order: stroke; stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; }
+.diagram-node[data-kind="host"]:not([data-equipment]) .diagram-node-label { font: 600 11px ui-monospace, monospace; }
+.diagram-node-subtitle { fill: var(--text-2); font-family: ui-monospace, monospace; font-size: 13px; }
+.diagram-sensor-badge, .diagram-coverage-symbol circle, .diagram-coverage-symbol polygon { fill: var(--surface-2); stroke: var(--accent); stroke-width: 2px; }
+.diagram-sensor-stem, .diagram-coverage-symbol path { fill: none; stroke: var(--accent); stroke-width: 2px; }
+.diagram-marker text { fill: var(--accent); font-size: 11px; font-weight: 700; pointer-events: none; }
+.diagram-marker[data-active="true"] .diagram-sensor-badge,
+.diagram-marker[aria-pressed="true"] .diagram-sensor-badge, .diagram-marker:focus-visible .diagram-sensor-badge { fill: var(--accent-soft); stroke: var(--info); stroke-width: 2.5px; }
+.diagram-host-toggle, .diagram-host-page { color: var(--text-1); }
+.diagram-host-page .diagram-node-box { fill: var(--surface-2); stroke: var(--border-strong); }
+.diagram-host-page text { fill: currentColor; font-size: 12px; font-weight: 600; }
+.diagram-host-page[aria-disabled="true"] { opacity: .35; cursor: default; }
+.diagram-host-page[aria-disabled="false"]:hover .diagram-node-box { fill: var(--surface-3); }
+.diagram-overflow .diagram-node-box { fill: var(--surface-2); stroke: var(--border-strong); }
+.diagram-host-toggle:hover .diagram-node-box, .diagram-overflow:hover .diagram-node-box { fill: var(--surface-3); }
+.diagram-host-toggle text, .diagram-overflow text { fill: var(--text-2); font-size: 12px; }
+.diagram-preview { position: absolute; inset: auto auto 8px 8px; display: grid; gap: 4px; max-width: calc(100% - 16px); padding: 8px 12px; overflow-wrap: anywhere; pointer-events: none; background: var(--surface-3); border-radius: var(--radius-sm); box-shadow: var(--shadow-pop); }
+.diagram-inspector { flex: 0 0 min(var(--diagram-inspector-width), 40%); overflow: auto; min-width: 0; padding: 12px; background: var(--surface-1); border-left: 1px solid var(--border); overflow-wrap: anywhere; }
+.diagram-inspector .diagram-details-heading h4 { margin: 0; }
+.diagram-inspector h4, .diagram-inspector h5 { margin: 0 0 8px; font-size: var(--text-md); }
+.diagram-inspector p { margin: 8px 0; }
+.diagram-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; margin: 8px 0; }
+.diagram-facts dt { color: var(--text-2); }
+.diagram-facts dd { margin: 0; }
+.diagram-associations, .diagram-hosts ul { list-style: none; padding: 0; margin: 0; }
+.diagram-associations li, .diagram-hosts li { border-top: 1px solid var(--border); }
+.diagram-associations li { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 8px 0; align-items: baseline; }
+.diagram-associations li button { padding: 0; border: 0; background: transparent; color: var(--text-1); text-align: left; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.diagram-associations li span, .diagram-host span, .diagram-hosts h5 span { color: var(--text-2); font-size: var(--text-sm); }
+.diagram-hosts, .diagram-attached-devices { margin-top: 12px; }
+.diagram-host { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; text-align: left; padding: 8px 4px; }
+.diagram-host:hover, .diagram-host[aria-expanded="true"] { background: var(--hover-tint); }
+.diagram-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; font-size: var(--text-xs); }
+.diagram-pagination .button-quiet { font-size: var(--text-xs); padding: 0 8px; }
+.diagram-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; color: var(--text-2); font-size: var(--text-sm); }
+.diagram-legend span { display: inline-flex; align-items: center; gap: 8px; }
+.diagram-legend i { display: inline-block; width: 20px; border-top: 2px solid var(--text-2); }
+.diagram-legend i.diagram-membership-key { border-top-style: dashed; }
+.diagram-legend .diagram-key-mark { position: relative; display: inline-grid; place-items: center; min-width: 22px; height: 22px; color: var(--accent); font-size: var(--text-xs); font-weight: 650; }
+.diagram-key-mark::before { content: ""; position: absolute; width: 20px; height: 20px; border: 1px solid currentColor; border-radius: var(--radius-pill); }
+.diagram-key-mark[data-placement="span"]::before { width: 15px; height: 15px; border-radius: 0; transform: rotate(45deg); }
+.diagram-sensor-key { position: relative; }
+.diagram-sensor-key summary { cursor: pointer; }
+.diagram-sensor-key ul { display: flex; flex-wrap: wrap; gap: 4px 8px; list-style: none; margin: 0; padding: 0; }
+details.diagram-sensor-key[open] ul { position: absolute; bottom: calc(100% + 8px); z-index: 2; width: max-content; max-width: min(340px, 58vw); max-height: min(310px, 45vh); overflow: auto; display: grid; gap: 4px; padding: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.diagram-sensor-key button { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--radius-sm); text-align: left; }
+.diagram-sensor-key button[data-active="true"] { background: var(--info-soft); }
+.diagram-sensor-key button small { color: var(--text-2); }
+.diagram-findings { color: var(--warn); margin: 8px 0 0; overflow-wrap: anywhere; }
+.diagram-findings summary { cursor: pointer; }
+.diagram-findings ul, ul.diagram-findings { padding-left: 20px; }
 .environment-pack-list, .overlay-file-list, .merge-decisions, .pack-choice-list { list-style: none; padding: 0; margin: 8px 0 0; }
 .environment-pack-list li { display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); align-items: center; }
 .environment-pack-list li > svg { color: var(--ok); flex: none; }

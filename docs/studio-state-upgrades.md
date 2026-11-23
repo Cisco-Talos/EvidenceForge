@@ -70,6 +70,9 @@ Database version 6 lets a project name one default released pack for new scenari
 Studio. Existing projects start with none; the migration changes no rows. The default is guidance
 for Studio's Codex conversations only and never changes how a scenario file resolves.
 
+Database version 7 records optional network diagram context in Author drafts and pending chat
+messages. The upgrade preserves existing chat rows byte for byte.
+
 Packages live in `studio-upgrades/` beneath the private data directory, outside cache and runtime
 installations. User data locations and routine backup instructions are listed in the
 [Studio guide](studio.md#workspace-and-saved-studio-data).

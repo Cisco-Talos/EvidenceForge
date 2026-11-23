@@ -70,6 +70,7 @@ def test_environment_resolves_real_exact_pack_and_include_origins_without_writin
     assert report.field_origins["description"].endswith("-description.yaml")
     assert report.catalog_origins
     assert report.effective_scenario["environment"]["users"]
+    assert report.topology and report.topology.hosts
     declaration = next(entry for entry in report.declarations if entry.path == "description")
     assert declaration.value_found
     assert declaration.value == description
@@ -95,9 +96,16 @@ def test_source_declarations_keep_organization_input_values_before_scenario_over
     fixture = Path(__file__).resolve().parents[1] / "fixtures/scenarios/northstar-health-pack.yaml"
     data = yaml.safe_load(fixture.read_text())
     data.setdefault("environment", {})["description"] = "Scenario-specific environment"
+    data["environment"]["systems"] = [
+        {"hostname": "SCENARIO-01", "type": "server", "os": "Ubuntu 24.04", "ip": "192.0.2.10"}
+    ]
     source.write_text(yaml.safe_dump(data, sort_keys=False))
     report = inspect_environment(StudioSettings(workspace=workspace), source, workspace)
     assert report.valid, report.error
+    assert report.topology
+    assert [segment.name for segment in report.topology.segments] == ["clinical_lan", "server_lan"]
+    local_host = next(host for host in report.topology.hosts if host.hostname == "SCENARIO-01")
+    assert local_host.os_family == "linux" and local_host.segment_ids == []
     entries = [entry for entry in report.declarations if entry.path == "environment.description"]
     organization = next(entry for entry in entries if entry.layer == "Organization")
     scenario = next(entry for entry in entries if entry.layer == "Scenario")
@@ -324,3 +332,23 @@ def test_environment_cli_failures_remain_inspectable_and_do_not_write(
     assert report.overlay_files == []
     assert report.source_sha256 == sha256(before).hexdigest()
     assert source.read_bytes() == before
+
+
+def test_diagram_requires_capture_of_the_inspected_scenario_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _source(tmp_path)
+    revision = sha256(source.read_bytes()).hexdigest()
+    payload = {
+        "valid": True,
+        "effective_scenario": {"environment": {"systems": []}},
+        "declaration_sources": {f"sources/{revision[:16]}-{source.name}": "name: different\n"},
+    }
+    monkeypatch.setattr(
+        environment_module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, json.dumps(payload), ""),
+    )
+    report = inspect_environment(StudioSettings(workspace=tmp_path), source, tmp_path)
+    assert report.valid
+    assert report.topology is None

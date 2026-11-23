@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import type { Conversation, StudioApi, StudioEvent } from "../src/api";
+import type { ChatViewState, Conversation, StudioApi, StudioEvent } from "../src/api";
 import { ChatView } from "../src/ChatView";
 import { ChatQuestions } from "../src/ChatQuestions";
 import { ChatMarkdown } from "../src/ChatMarkdown";
@@ -11,11 +11,11 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 const conversation = { id: "chat", thread_id: "thread", title: "Pack", active: true } as Conversation;
 const emptyView = { draft: "", skill_name: "", follow_bottom: true, anchor: null, answers: {} };
 const seed: TimelineTurn = { id: "turn", status: "inProgress", started_at: Date.now() / 1000 - 24, items: [] };
-function harness(turns: TimelineTurn[] = [seed], active = true, pending: unknown[] = []) {
+function harness(turns: TimelineTurn[] = [seed], active = true, pending: unknown[] = [], savedView: ChatViewState = emptyView) {
   let emit: (event: StudioEvent) => void = () => undefined;
   let seq = 10;
   const request = vi.fn(async (path: string, method?: string, body?: Record<string, unknown>) => {
-    if (path.endsWith("/chat")) return { seq: 10, turns, active_turn_id: active ? "turn" : null, queue: [], queue_paused: false, view: emptyView };
+    if (path.endsWith("/chat")) return { seq: 10, turns, active_turn_id: active ? "turn" : null, queue: [], queue_paused: false, view: savedView };
     if (path.endsWith("/pending")) return pending;
     if (path.endsWith("/access")) return { mode: "draft" };
     if (path.endsWith("/messages")) return { id: body?.message_id, state: body?.mode === "queue" ? "queued" : "accepted", turn_id: "turn" };
@@ -27,6 +27,33 @@ function harness(turns: TimelineTurn[] = [seed], active = true, pending: unknown
   const event = (method: string, params: Record<string, unknown>) => act(() => emit({ seq: ++seq, entity_id: "chat", kind: "conversation.event", payload: { method, params: { turnId: "turn", ...params } } }));
   return { ...view, props, request, event };
 }
+
+test.each([true, false])("a diagram draft sends the topology with viewport inclusion set to %s", async (include) => {
+  const network = {
+    revision: "compiled-revision",
+    selected_id: "segment:dmz",
+    selection_label: "dmz",
+    topology: { segments: [], hosts: [], devices: [], findings: [] },
+    image: "data:image/png;base64,viewport",
+  };
+  const view = harness([], false, [], { ...emptyView, network_context: network });
+  const checkbox = await screen.findByRole("checkbox", { name: "Include current view" }) as HTMLInputElement;
+  expect(checkbox.checked).toBe(true);
+  expect(screen.getByRole("img", { name: "Current network diagram view" }).getAttribute("src")).toBe(network.image);
+  expect(view.request.mock.calls.some(([path]) => path.endsWith("/messages"))).toBe(false);
+  const user = userEvent.setup();
+  if (!include) {
+    await user.click(checkbox);
+    expect(screen.queryByRole("img", { name: "Current network diagram view" })).toBeNull();
+  }
+  await user.type(screen.getByRole("textbox", { name: "Message to Codex" }), "What is connected to this?");
+  const send = screen.getByRole("button", { name: "Send message" });
+  await user.click(send);
+  await waitFor(() => expect(view.request).toHaveBeenCalledWith("/v1/conversations/chat/messages", "POST", expect.objectContaining({
+    text: "What is connected to this?", network_context: { ...network, image: include ? network.image : null },
+  })));
+  await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Include current view" })).toBeNull());
+});
 
 test("commentary, commands and final answers stay ordered and use different presentation", async () => {
   const view = harness();

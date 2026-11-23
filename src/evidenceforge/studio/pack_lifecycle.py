@@ -23,6 +23,8 @@ from evidenceforge.artifacts.removal import (
 )
 from evidenceforge.composition.models import PackReference
 from evidenceforge.composition.packs import (
+    PACK_MANIFEST_FILENAME,
+    LoadedPack,
     PackRepository,
     _bounded_pack_tree,
     _read_regular_file_no_follow,
@@ -33,6 +35,7 @@ from evidenceforge.desktop.library import discover_packs, discover_scenarios
 from evidenceforge.models.exceptions import EvidenceForgeError, PackError
 from evidenceforge.studio.contexts import context_path
 from evidenceforge.studio.imports import _scenario_references
+from evidenceforge.studio.topology import PackTopology, project_topology
 from evidenceforge.utils import load_scenario_source_graph
 from evidenceforge.utils.files import LoadedSourceGraph
 
@@ -85,16 +88,36 @@ class PackDeleted(BaseModel):
     deleted_path: Path
 
 
+def _load_reviewed_pack(source: Path, workspace: Path) -> tuple[LoadedPack, list[LoadedPack]]:
+    reference, kind = parse_pack_cli_reference(str(source))
+    if kind is None:
+        raise PackError("Choose an industry or organization pack")
+    repository = PackRepository(workspace)
+    pack = repository.resolve(reference, expected_type=kind)
+    return pack, repository.validate_semantics(pack)
+
+
+def inspect_pack_topology(source: Path, workspace: Path) -> PackTopology:
+    """Inspect the selected organization model without recording a validation result."""
+    pack, _ = _load_reviewed_pack(source, workspace)
+    if pack.manifest.type != "organization":
+        raise PackError("Choose an organization pack")
+    return PackTopology(
+        reference=pack.selected().location,
+        source_sha256=hashlib.sha256(
+            dict(pack.semantic_file_bytes)[PACK_MANIFEST_FILENAME]
+        ).hexdigest(),
+        digest=pack.digest,
+        topology=project_topology(pack.environment),
+    )
+
+
 def review_pack(source: Path, workspace: Path) -> PackReview:
     """Validate a pack's complete locked closure through the canonical repository."""
     try:
-        reference, kind = parse_pack_cli_reference(str(source))
-        if kind is None:
-            raise PackError("Choose an industry or organization pack")
-        repository = PackRepository(workspace)
-        pack = repository.resolve(reference, expected_type=kind)
-        dependencies = repository.validate_semantics(pack)
+        pack, dependencies = _load_reviewed_pack(source, workspace)
         identity = pack.manifest
+        kind = identity.type
         return PackReview(
             valid=True,
             reference=f"draft:{kind}:{identity.name}@{identity.draft_id}"

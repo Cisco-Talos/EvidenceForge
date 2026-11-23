@@ -14,6 +14,7 @@ from evidenceforge.studio.state_database import (
     DATABASE_VERSION,
     MIGRATIONS,
     Migration,
+    inspect_database,
     migrate_database,
 )
 from evidenceforge.studio.state_io import StudioStateError
@@ -57,6 +58,31 @@ MOVES = (
         ),
     ),
 )
+
+
+def test_network_chat_migration_preserves_existing_drafts_and_queued_messages(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "studio.sqlite"
+    migrate_database(database, "test-runtime", migrations=MIGRATIONS[:-1])
+    draft = '{"conversation_id":"chat-1","view":{"draft":"Existing draft"}}'
+    queued = (
+        '{"id":"message-1","conversation_id":"chat-1","text":"Queued question",'
+        '"mode":"queue","state":"queued","created_at":12.0}'
+    )
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute("INSERT INTO chat_controls VALUES (?, ?)", ("chat-1", draft))
+        connection.execute(
+            "INSERT INTO chat_inputs VALUES (?, ?, ?)", ("message-1", "chat-1", queued)
+        )
+    assert inspect_database(database) == 6
+
+    migrate_database(database, "test-runtime")
+
+    assert inspect_database(database) == 7
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT payload FROM chat_controls").fetchone() == (draft,)
+        assert connection.execute("SELECT payload FROM chat_inputs").fetchone() == (queued,)
 
 
 def test_consecutive_sql_and_json_transforms_preserve_ids_and_timestamps(tmp_path: Path) -> None:

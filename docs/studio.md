@@ -535,6 +535,28 @@ within the scenario workspace. Changed scenario/dependency/configuration inputs 
 environment** trigger a new inspection. Progress and the last check time appear in the section
 header; refresh failures remain inline.
 
+The **Network** tab draws subnet rails labeled with their names and CIDR blocks. A shared subnet
+can form the backbone between modeled network devices. Solid lines show declared firewall
+interfaces, and dashed lines show device membership in a subnet. The sensor key identifies TAP
+circles with solid stems and SPAN diamonds with dashed stems. Each rail shows the sensors that
+fit. When space runs out, click its **+N** badge to see the remaining sensors. The firewall's
+details show its monitored subnets and log formats.
+Small host groups expand inline when space permits. Click a branch's host count to expand it,
+and use **Previous** and **Next** to browse larger subnets 12 hosts at a time. The subnet details
+also list its hosts and device associations. Select a host to see its IP address, operating
+system, primary users, and roles. Use **Sensors**, **Firewalls**, and
+**Hosts** to toggle layers.
+Drag the canvas or use the arrow keys to pan. **Fit to view** fits all visible layers, and
+**Expand diagram** fills the Studio window. Press Escape to return to the tab.
+
+Use **Ask about this diagram** to open an Author draft with the full topology for the displayed
+revision. **Ask about this** in the details panel also identifies the selected item. The draft
+includes a thumbnail of the current viewport by default. Clear **Include current view** to send
+the topology without the image.
+
+An organization pack's **Network** tab shows the selected version or draft's environment
+fragment. Open a consuming scenario to see its composed environment.
+
 ### Drafts and local releases
 
 New authored content uses Schema 3 drafts. Earlier scenario schemas 1/2 and pack schema 2 remain

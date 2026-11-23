@@ -27,7 +27,7 @@ from evidenceforge.studio.state_migrations import (
 )
 from evidenceforge.studio.state_schema import BASELINE_SQL, FTS_SQL, LEDGER_SQL, LEGACY_TABLE_SETS
 
-DATABASE_VERSION = 6
+DATABASE_VERSION = 7
 FTS_TABLES = {
     "items_fts",
     "items_fts_data",
@@ -145,6 +145,15 @@ MIGRATIONS = (
         description="Let a project name a default pack for new scenario authoring",
         affected=("projects",),
         # Existing projects have no default pack; the optional field needs no row rewrite.
+        sql="",
+    ),
+    Migration(
+        id="studio-db-0007",
+        source=6,
+        target=7,
+        description="Retain optional network diagram context in chat drafts and dispatch claims",
+        affected=("chat_controls", "chat_inputs"),
+        # Older records have no attachments; leave their payloads untouched.
         sql="",
     ),
 )
@@ -358,6 +367,12 @@ def validate_records(connection: sqlite3.Connection) -> None:
         from evidenceforge.studio.state_records_v6 import Project as ProjectV6
 
         models["projects"] = ProjectV6
+    if connection.execute("PRAGMA user_version").fetchone()[0] >= 7:
+        from evidenceforge.studio.state_records_v7 import ChatControl as ChatControlV7
+        from evidenceforge.studio.state_records_v7 import ChatInput as ChatInputV7
+
+        models["chat_controls"] = ChatControlV7
+        models["chat_inputs"] = ChatInputV7
     for table, model in models.items():
         if table not in existing:
             continue

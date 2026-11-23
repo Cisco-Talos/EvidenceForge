@@ -450,6 +450,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/packs/{item_id}/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pack Topology */
+        get: operations["pack_topology_v1_packs__item_id__topology_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/packs/{item_id}/review": {
         parameters: {
             query?: never;
@@ -2705,7 +2722,7 @@ export interface components {
         };
         /**
          * ChatDraftSubmission
-         * @description Retain the composer's dispatch identity across navigation or lost responses.
+         * @description Distinguish retries with and without the optional image.
          */
         ChatDraftSubmission: {
             /** Id */
@@ -2717,10 +2734,15 @@ export interface components {
              * @enum {string}
              */
             mode: "start" | "queue" | "steer";
+            /**
+             * Network View Included
+             * @default false
+             */
+            network_view_included: boolean;
         };
         /**
          * ChatInput
-         * @description A durable dispatch claim; uncertain work must never be blindly replayed.
+         * @description Keep the attachment bound to the queued message and its dispatch ID.
          */
         ChatInput: {
             /** Id */
@@ -2750,6 +2772,7 @@ export interface components {
             created_at: number;
             /** Error */
             error?: string | null;
+            network_context?: components["schemas"]["NetworkChatContext"] | null;
         };
         /**
          * ChatMessageRequest
@@ -2770,6 +2793,7 @@ export interface components {
             skill_name?: string | null;
             /** Expected Turn Id */
             expected_turn_id?: string | null;
+            network_context?: components["schemas"]["NetworkChatContext"] | null;
         };
         /**
          * ChatPreference
@@ -2923,7 +2947,7 @@ export interface components {
         };
         /**
          * ChatViewState
-         * @description Private composer and reading state, independent of authored files.
+         * @description Keep the captured view in the composer until it is sent.
          */
         ChatViewState: {
             /**
@@ -2949,6 +2973,12 @@ export interface components {
                 };
             };
             pending_message?: components["schemas"]["ChatDraftSubmission"] | null;
+            network_context?: components["schemas"]["NetworkChatContext"] | null;
+            /**
+             * Include Current View
+             * @default true
+             */
+            include_current_view: boolean;
         };
         /**
          * ClearJobHistoryRequest
@@ -3143,6 +3173,7 @@ export interface components {
             name?: string | null;
             /** Display Name */
             display_name?: string | null;
+            network_context?: components["schemas"]["NetworkChatContext"] | null;
         };
         /**
          * ConversationUpdate
@@ -3219,6 +3250,8 @@ export interface components {
             /** Description */
             description: string;
         };
+        /** @enum {string} */
+        DeviceKind: "network" | "ids" | "firewall";
         /**
          * DisplayNameContext
          * @description Bounded descriptive context supplied instead of filesystem access.
@@ -3296,6 +3329,7 @@ export interface components {
             effective_scenario?: {
                 [key: string]: unknown;
             };
+            topology?: components["schemas"]["TopologyGraph"] | null;
             /** Field Origins */
             field_origins?: {
                 [key: string]: string;
@@ -3807,6 +3841,29 @@ export interface components {
             code: "bubblewrap_missing" | "user_namespace_restricted";
         };
         /**
+         * NetworkChatContext
+         * @description The topology and optional viewport captured when a user opens Author from Network.
+         */
+        NetworkChatContext: {
+            /** Revision */
+            revision: string;
+            topology: components["schemas"]["TopologyGraph"];
+            /** Selected Id */
+            selected_id?: string | null;
+            /** Selection Label */
+            selection_label?: string | null;
+            /** Visible Layers */
+            visible_layers?: ("sensors" | "firewalls" | "hosts")[];
+            /** Expanded Subnet Ids */
+            expanded_subnet_ids?: string[];
+            /** Sensor Key */
+            sensor_key?: {
+                [key: string]: string;
+            };
+            /** Image */
+            image?: string | null;
+        };
+        /**
          * NoteHistoryEntry
          * @description Notes from one available exact release or draft, or an unavailable ancestor.
          */
@@ -4017,6 +4074,19 @@ export interface components {
              * @default
              */
             error: string;
+        };
+        /**
+         * PackTopology
+         * @description An exact organization pack fragment and its captured identity.
+         */
+        PackTopology: {
+            /** Reference */
+            reference: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /** Digest */
+            digest: string;
+            topology: components["schemas"]["TopologyGraph"];
         };
         /**
          * ParentComparison
@@ -5201,6 +5271,114 @@ export interface components {
             publisher_status?: components["schemas"]["PackPublisherStatus"] | null;
         };
         /**
+         * TopologyAssociation
+         * @description A monitored segment, an explicit firewall interface mapping, or both.
+         */
+        TopologyAssociation: {
+            /** Segment Id */
+            segment_id: string;
+            /** Monitored */
+            monitored: boolean;
+            /** Interface Name */
+            interface_name: string | null;
+        };
+        /**
+         * TopologyDevice
+         * @description One configured observation or control point and its segment associations.
+         */
+        TopologyDevice: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Hostname */
+            hostname: string;
+            kind: components["schemas"]["DeviceKind"];
+            /**
+             * Placement
+             * @enum {string}
+             */
+            placement: "span" | "tap";
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "inbound" | "outbound" | "bidirectional";
+            /** Log Formats */
+            log_formats: string[];
+            /** Description */
+            description: string;
+            /** Default Interface */
+            default_interface: string | null;
+            /** Associations */
+            associations: components["schemas"]["TopologyAssociation"][];
+        };
+        /**
+         * TopologyFinding
+         * @description An unresolved or ambiguous declaration in the diagram's source.
+         */
+        TopologyFinding: {
+            /** Entity Id */
+            entity_id: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * TopologyGraph
+         * @description Logical relationships from one environment snapshot, independent of layout.
+         */
+        TopologyGraph: {
+            /** Segments */
+            segments: components["schemas"]["TopologySegment"][];
+            /** Hosts */
+            hosts: components["schemas"]["TopologyHost"][];
+            /** Devices */
+            devices: components["schemas"]["TopologyDevice"][];
+            /** Findings */
+            findings: components["schemas"]["TopologyFinding"][];
+        };
+        /**
+         * TopologyHost
+         * @description One host and every segment that contains its configured address.
+         */
+        TopologyHost: {
+            /** Id */
+            id: string;
+            /** Hostname */
+            hostname: string;
+            /** Ip */
+            ip: string;
+            /** Os */
+            os: string;
+            /** Os Family */
+            os_family: string;
+            /** Segment Ids */
+            segment_ids: string[];
+            /** Primary Users */
+            primary_users?: string[];
+            /** Roles */
+            roles?: string[];
+        };
+        /**
+         * TopologySegment
+         * @description A configured segment with the address range and modeled exposure.
+         */
+        TopologySegment: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Cidr */
+            cidr: string;
+            /**
+             * Exposure
+             * @enum {string}
+             */
+            exposure: "internal" | "external" | "both";
+            /** Description */
+            description: string;
+        };
+        /**
          * TurnRequest
          * @description One user message and an optional explicit skill for this turn.
          */
@@ -5211,6 +5389,7 @@ export interface components {
             skill_name?: string | null;
             /** Client Message Id */
             client_message_id?: string | null;
+            network_context?: components["schemas"]["NetworkChatContext"] | null;
         };
         /**
          * TurnSubmission
@@ -6353,6 +6532,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pack_topology_v1_packs__item_id__topology_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackTopology"];
                 };
             };
             /** @description Validation Error */

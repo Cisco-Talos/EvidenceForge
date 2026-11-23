@@ -19,6 +19,7 @@ from evidenceforge.desktop.library import LibraryItem
 from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 from evidenceforge.studio.search import SearchMatch, index_sources, matching_excerpts, yaml_entries
 from evidenceforge.studio.state_records_v4 import ExampleInstallation
+from evidenceforge.studio.state_records_v7 import ChatControl, ChatViewState
 
 
 def indexed_draft_identity(path: Path, entries: list[dict[str, Any]]) -> str | None:
@@ -1121,8 +1122,10 @@ class StudioStore:
                 (str(workspace.resolve()), name),
             )
 
-    def save_conversation(self, conversation: Conversation) -> None:
-        """Persist a conversation independently of its selected UI view."""
+    def save_conversation(
+        self, conversation: Conversation, *, initial_view: ChatViewState | None = None
+    ) -> None:
+        """Persist a conversation and, when provided, its initial private composer."""
         conversation.workspace = conversation.workspace.resolve()
         with self._lock, self._db:
             self._db.execute(
@@ -1135,6 +1138,10 @@ class StudioStore:
                     conversation.model_dump_json(),
                 ),
             )
+            if initial_view is not None:
+                self.chat.save_control(
+                    ChatControl(conversation_id=conversation.id, view=initial_view)
+                )
 
     def conversations(self, workspace: Path, item_id: str | None = None) -> list[Conversation]:
         """List saved chats for a workspace or one scenario/pack."""

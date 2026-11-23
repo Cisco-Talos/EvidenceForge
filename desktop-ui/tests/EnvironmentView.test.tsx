@@ -1,16 +1,25 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
 import { Tooltip } from "radix-ui";
 import { afterEach, expect, test, vi } from "vitest";
-import { EnvironmentView } from "../src/EnvironmentView";
+import { EnvironmentView as EnvironmentContent } from "../src/EnvironmentView";
+import { useEnvironmentInspection } from "../src/useEnvironmentInspection";
 import type { AssetPage, CatalogItem, DependencyRow, EnvironmentReport, StudioApi } from "../src/api";
 
 const item = { id: "scenario", kind: "scenario", source_sha256: "source", name: "Example" } as CatalogItem;
+function EnvironmentView({ dependencyFingerprint, refreshVersion, ...props }: Omit<ComponentProps<typeof EnvironmentContent>, "inspection"> & {
+  dependencyFingerprint?: string; refreshVersion?: number;
+}) {
+  const inspection = useEnvironmentInspection({ api: props.api, item: props.item, enabled: true, dependencyFingerprint, refreshVersion });
+  return <EnvironmentContent {...props} inspection={inspection} />;
+}
 const report: EnvironmentReport = {
   source_sha256: "source", project_root: "/workspace", valid: true, error: "", compiled_sha256: "compiled", authored_kind: "scenario-2.0",
   selected_packs: [{ source: "project", publisher: "team", type: "organization", name: "office", version: "2.0.0", digest: "d".repeat(64), location: "project:team:organization:office@2.0.0" }, { source: "package", publisher: "evidenceforge", type: "industry", name: "healthcare", version: "1.0.0", digest: "a".repeat(64), location: "package:evidenceforge:industry:healthcare@1.0.0" }],
   effective_scenario: { environment: { users: [{ name: "alice" }] } }, field_origins: { description: "sources/brief.yaml" }, organization_model_origins: { "network.segments": "office/pack.yaml" }, catalog_origins: {}, catalog_field_origins: { "personas.analyst": "healthcare/pack.yaml" }, merge_decisions: [{ path: "users", action: "replace", lower_layer: "organization", higher_layer: "scenario", winner: "scenario" }],
+  topology: { segments: [{ id: "segment:clinical", name: "clinical", cidr: "10.0.0.0/24", exposure: "internal", description: "" }], hosts: [], devices: [], findings: [] },
   declarations: [{ path: "description", layer: "Scenario", source: "brief.yaml", source_key: "sources/brief.yaml", source_size: 70, line: 5, value: "Clinic exercise", value_found: true }, { path: "environment.network.segments", layer: "Organization", source: "office/pack.yaml", source_key: "packs/office/pack.yaml", value: [], value_found: true }, { path: "persona_catalog.analyst", layer: "Pack catalog", source: "healthcare/pack.yaml", source_key: "packs/healthcare/pack.yaml", value: false, value_found: true }],
   configuration: { context_path: null, cli_command: "eforge generate /workspace/scenario.yaml --project-root /workspace", scopes: [{ id: "workspace", name: "Workspace", root: "/workspace/.eforge/config", enabled: true, files: [{ path: "activity/dns_registry.yaml", size: 20 }] }, { id: "scenario", name: "Scenario", root: "/workspace/scenario-config", enabled: false, files: [] }] },
   overlay_root: "/workspace/.eforge/config", overlay_files: [{ path: "activity/dns_registry.yaml", size: 20 }], overlays_truncated: false,
@@ -62,6 +71,7 @@ test("embedded Environment shows dependency rows directly without readiness or p
 test("folded environment inspection headers expose selected values and composition results", async () => {
   setup();
   await screen.findByRole("heading", { name: "Packs 2" });
+  expect(screen.queryByRole("heading", { name: "Network diagram" })).toBeNull();
   expect(screen.getByText("project:team:organization:office@2.0.0")).toBeVisible();
   expect(screen.getByText("package:evidenceforge:industry:healthcare@1.0.0")).toBeVisible();
   expect(screen.queryByRole("button", { name: /Selected packs/ })).toBeNull();

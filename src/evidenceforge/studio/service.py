@@ -100,6 +100,7 @@ from evidenceforge.studio.chat import (
     ChatResultContent,
     ChatRuntime,
     ChatSnapshot,
+    chat_user_input,
 )
 from evidenceforge.studio.chat_permissions import (
     CHAT_CONFIG,
@@ -175,6 +176,7 @@ from evidenceforge.studio.pack_lifecycle import (
     PackDeleteRequest,
     PackDeleteReview,
     PackReview,
+    inspect_pack_topology,
     remove_workspace_pack,
     retired_pack_sources,
     review_pack,
@@ -197,7 +199,8 @@ from evidenceforge.studio.sessions import WindowSessions
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.startup_diagnostics import startup_phase
 from evidenceforge.studio.state_io import StudioStateError
-from evidenceforge.studio.state_records_v3 import ChatInput, ChatPreference, ChatViewState
+from evidenceforge.studio.state_records_v3 import ChatPreference
+from evidenceforge.studio.state_records_v7 import ChatInput, ChatViewState
 from evidenceforge.studio.state_upgrade import (
     OperationRequest,
     StateCoordinator,
@@ -216,6 +219,7 @@ from evidenceforge.studio.store import (
     StudioEvent,
     StudioStore,
 )
+from evidenceforge.studio.topology import NetworkChatContext, PackTopology
 
 
 def _archive_stem(name: str) -> str:
@@ -401,6 +405,7 @@ class ConversationRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, pattern=SCENARIO_NAME_PATTERN)
 
     display_name: DisplayName | None = None
+    network_context: NetworkChatContext | None = None
 
 
 class SourceRecoveryRequest(BaseModel):
@@ -432,6 +437,7 @@ class TurnRequest(BaseModel):
     text: str = Field(min_length=1)
     skill_name: str | None = None
     client_message_id: str | None = None
+    network_context: NetworkChatContext | None = None
 
 
 class TurnSubmission(Conversation):
@@ -2868,6 +2874,19 @@ def create_app(
             raise HTTPException(status_code=404, detail="Overlay file not found")
         return FileResponse(root / relative_path, filename=Path(relative_path).name)
 
+    @app.get("/v1/packs/{item_id}/topology")
+    async def pack_topology(
+        item_id: str, studio: StudioService = Depends(authorized)
+    ) -> PackTopology:
+        item = catalog_source(item_id, studio)
+        if item.kind != "organization_pack":
+            raise HTTPException(status_code=400, detail="Choose an organization pack")
+        try:
+            async with studio.asset_lock:
+                return await asyncio.to_thread(inspect_pack_topology, item.path, item.workspace)
+        except (EvidenceForgeError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/v1/packs/{item_id}/review")
     async def pack_review(item_id: str, studio: StudioService = Depends(authorized)) -> PackReview:
         item = catalog_source(item_id, studio)
@@ -4054,10 +4073,15 @@ def create_app(
     ) -> Conversation:
         if bool(request.item_id) == bool(request.draft_kind):
             raise HTTPException(status_code=400, detail="Choose one item or draft kind")
-        if request.item_id:
-            item = studio.store.item(request.item_id)
-            if item is None or item.workspace.resolve() != studio.settings.workspace.resolve():
-                raise HTTPException(status_code=404, detail="Scenario or pack not found")
+        item = studio.store.item(request.item_id) if request.item_id else None
+        if request.item_id and (
+            item is None or item.workspace.resolve() != studio.settings.workspace.resolve()
+        ):
+            raise HTTPException(status_code=404, detail="Scenario or pack not found")
+        if request.network_context and (
+            item is None or item.kind not in {"scenario", "organization_pack"}
+        ):
+            raise HTTPException(status_code=400, detail="Choose a scenario or organization pack")
         if request.project_id:
             if not request.draft_kind:
                 raise HTTPException(
@@ -4091,7 +4115,12 @@ def create_app(
                 description="",
                 project_root=conversation.workspace,
             )
-        studio.store.save_conversation(conversation)
+        studio.store.save_conversation(
+            conversation,
+            initial_view=ChatViewState(network_context=request.network_context)
+            if request.network_context
+            else None,
+        )
         await studio.emit(
             conversation.id, "conversation.created", json.loads(conversation.model_dump_json())
         )
@@ -4402,7 +4431,7 @@ def create_app(
                 "approvalPolicy": "never",
                 "config": isolated_chat_config(effective, access),
             }
-            inputs: list[dict[str, str]] = [{"type": "text", "text": request.text}]
+            inputs = chat_user_input(request.text, request.network_context)
             if skill_name:
                 skill = await studio.resolve_turn_skill(skill_name, conversation.workspace)
                 inputs.append({"type": "skill", "name": skill_name, "path": str(skill["path"])})
@@ -4603,7 +4632,10 @@ def create_app(
                 result = await submit_turn(
                     identity,
                     TurnRequest(
-                        text=entry.text, skill_name=entry.skill_name, client_message_id=entry.id
+                        text=entry.text,
+                        skill_name=entry.skill_name,
+                        client_message_id=entry.id,
+                        network_context=entry.network_context,
                     ),
                     studio,
                 )
