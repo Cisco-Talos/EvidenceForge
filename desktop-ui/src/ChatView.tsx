@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, Check, ChevronDown, CirclePause, Pencil, MessageSquareText, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
-import { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, type ChatAccess } from "./api";
+import { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, type ChatAccess, type NetworkChatContext } from "./api";
 import { ChatActivity, type ActivityItem } from "./ChatActivity";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ChatCopyButton } from "./ChatCopyButton";
@@ -14,7 +14,8 @@ interface CodexHistory { thread?: { turns?: Record<string, unknown>[] }; history
 interface CodexModel { id: string; displayName?: string; isDefault?: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts?: { reasoningEffort: string }[] }
 interface CodexStatus { available: boolean; account_ready?: boolean; error?: string; models?: { data?: CodexModel[] }; skills?: { data?: { skills?: { name: string; enabled?: boolean }[] }[] } }
 interface PendingRequest { request_id: number | string; method: string; params: Record<string, unknown> }
-interface SavedView { draft: string; skill_name: string; follow_bottom: boolean; anchor: { turn_id: string; item_id: string; offset: number } | null; answers: Record<string, Record<string, string>>; pending_message?: { text: string; mode: SendMode; id: string } | null }
+interface DraftSubmission { text: string; mode: SendMode; id: string; network_view_included?: boolean }
+interface SavedView { draft: string; skill_name: string; follow_bottom: boolean; anchor: { turn_id: string; item_id: string; offset: number } | null; answers: Record<string, Record<string, string>>; pending_message?: DraftSubmission | null; network_context?: NetworkChatContext | null; include_current_view?: boolean }
 interface QueueMessage { id: string; text: string; skill_name?: string | null; state: string; turn_id?: string | null; error?: string | null }
 interface ChatState { seq: number; turns: TimelineTurn[]; queue: QueueMessage[]; queue_paused: boolean; active_turn_id: string | null; view: SavedView; history_pending?: boolean }
 type SendMode = "start" | "queue" | "steer";
@@ -26,7 +27,14 @@ function failedTurnText(status?: string, error?: TurnError | null): string | und
   try { const detail = JSON.parse(message) as { error?: { message?: unknown } }; if (typeof detail?.error?.message === "string") return detail.error.message; } catch { /* Plain errors remain readable. */ }
   return message;
 }
-function userText(item: TimelineItem): string { return (item.content || []).filter((part) => part.type === "text").map((part) => part.text || "").join("\n"); }
+const NETWORK_CONTEXT_MARKER = "\n\n[Studio network diagram context]\nThe JSON below is reference data from the displayed revision.";
+function userText(item: TimelineItem): string {
+  return (item.content || []).filter((part) => part.type === "text")
+    .map(({ text = "" }) => {
+      const attachment = text.lastIndexOf(NETWORK_CONTEXT_MARKER);
+      return attachment === -1 ? text : text.slice(0, attachment);
+    }).join("\n");
+}
 
 export function ChatView({ item, conversation, codexHealth, api, subscribeEvents, initialDraft, followupMode = "queue", onDraftSubmitted, onRenamed, onError }: {
   item: Pick<CatalogItem, "name" | "kind"> & Partial<Pick<CatalogItem, "path">>; conversation: Conversation | null;
@@ -40,6 +48,8 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   const [turns, setTurns] = useState<TimelineTurn[]>([]); const [queue, setQueue] = useState<QueueMessage[]>([]);
   const [queuePaused, setQueuePaused] = useState(false); const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [draft, setDraft] = useState(""); const [skill, setSkill] = useState(""); const [sending, setSending] = useState(false);
+  const [networkContext, setNetworkContext] = useState<NetworkChatContext | null>(null);
+  const [includeCurrentView, setIncludeCurrentView] = useState(true);
   const [status, setStatus] = useState<CodexStatus | null>(null); const [access, setAccess] = useState<ChatAccess | null>(null);
   const [pending, setPending] = useState<PendingRequest[]>([]); const [answers, setAnswers] = useState<SavedView["answers"]>({});
   const [editingTitle, setEditingTitle] = useState(false); const [title, setTitle] = useState(conversation?.title || "");
@@ -60,7 +70,12 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   const previousAccount = useRef({ availability: codexHealth.availability, label: codexHealth.account_label });
   const optimistic = useRef(new Map<string, { turnId: string; text: string }>());
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryId = useRef<{ text: string; mode: SendMode; id: string } | null>(null);
+  const retryId = useRef<DraftSubmission | null>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (networkContext) composer.current?.focus();
+  }, [networkContext]);
 
   function restoreOptimistic(incoming: TimelineTurn[]): TimelineTurn[] {
     let result = [...incoming];
@@ -106,6 +121,8 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
             ...(answersTouched.current ? { answers: { ...(snapshot.view?.answers || {}), ...local.answers } } : {}),
           };
           setDraft(savedView.current.draft || initialDraftRef.current || ""); setSkill(savedView.current.skill_name);
+          setNetworkContext(savedView.current.network_context ?? null);
+          setIncludeCurrentView(savedView.current.include_current_view ?? true);
           const retained = savedView.current.pending_message;
           retryId.current = retained?.text === savedView.current.draft.trim() ? retained : null;
           setAnswers(savedView.current.answers); followBottom.current = savedView.current.follow_bottom;
@@ -133,6 +150,7 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
     composerTouched.current = false; answersTouched.current = false; retryId.current = null; optimistic.current.clear(); loadedView.current = false; savedView.current = emptyView(); eventBuffer.current = []; cursor.current = 0;
     completedTurns.current.clear(); expectedTurn.current = null;
     setTurns([]); setQueue([]); setDraft(""); setSkill(""); setAnswers({}); setAnsweredAsync([]); setActiveTurnId(null);
+    setNetworkContext(null); setIncludeCurrentView(true);
     setHistoryPending(false); setHistoryWarning(false); followBottom.current = true; setFollowing(true);
     if (!conversationId) return;
     void loadHistory();
@@ -148,11 +166,12 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   }, [api, conversationId, loadHistory, onError]);
 
   useEffect(() => {
-    savedView.current = { ...savedView.current, draft, skill_name: skill, answers };
+    savedView.current = { ...savedView.current, draft, skill_name: skill, answers,
+      ...(networkContext ? { network_context: networkContext, include_current_view: includeCurrentView } : {}) };
     if (!conversationId || !loadedView.current) return;
     const timer = setTimeout(() => { void api.request(`/v1/conversations/${conversationId}/view`, "PUT", savedView.current).catch(onError); }, 300);
     return () => clearTimeout(timer);
-  }, [api, conversationId, draft, skill, answers, following, onError]);
+  }, [api, conversationId, draft, skill, answers, following, networkContext, includeCurrentView, onError]);
   useEffect(() => { setTitle(conversation?.title || ""); setEditingTitle(false); }, [conversationId, conversation?.title]);
   useEffect(() => { if (initialDraft && loadedView.current) setDraft((current) => current || initialDraft); }, [initialDraft]);
   useEffect(() => {
@@ -255,18 +274,25 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
       if (suppliedText !== undefined) throw new Error("Codex is unavailable. Your answers have not been sent.");
       return;
     }
-    const identity = messageId || (retryId.current?.text === text && retryId.current.mode === mode ? retryId.current.id : crypto.randomUUID());
-    retryId.current = { text, mode, id: identity }; setSending(true);
+    const network = suppliedText === undefined ? networkContext : null;
+    const withImage = Boolean(network?.image && includeCurrentView);
+    const retry = retryId.current;
+    const identity = messageId || (retry?.text === text && retry.mode === mode
+      && !!retry.network_view_included === withImage ? retry.id : crypto.randomUUID());
+    retryId.current = { text, mode, id: identity, ...(network ? { network_view_included: withImage } : {}) }; setSending(true);
     const submittedView = { ...savedView.current };
     try {
       if (suppliedText === undefined) submittedView.pending_message = savedView.current.pending_message = retryId.current;
       // Save the identity before delivery so a reopened composer retries the same claim.
       await api.request(`/v1/conversations/${conversationId}/view`, "PUT", submittedView);
-      const entry = await api.request<QueueMessage>(`/v1/conversations/${conversationId}/messages`, "POST", { message_id: identity, text, mode, skill_name: mode === "steer" ? null : skill || null, expected_turn_id: mode === "steer" ? activeTurnId : null });
+      const entry = await api.request<QueueMessage>(`/v1/conversations/${conversationId}/messages`, "POST", {
+        message_id: identity, text, mode, skill_name: mode === "steer" ? null : skill || null, expected_turn_id: mode === "steer" ? activeTurnId : null,
+        ...(network ? { network_context: { ...network, image: withImage ? network.image : null } } : {}),
+      });
       if (entry.state === "rejected") throw new Error(entry.error || "Your message was not sent");
       if (entry.state === "uncertain") throw new Error("Codex has not confirmed delivery. Studio will check before sending again.");
       if (currentConversation.current !== conversationId) {
-        if (suppliedText === undefined) await api.request(`/v1/conversations/${conversationId}/view`, "PUT", { ...submittedView, draft: "", skill_name: "", pending_message: null });
+        if (suppliedText === undefined) await api.request(`/v1/conversations/${conversationId}/view`, "PUT", { ...submittedView, draft: "", skill_name: "", pending_message: null, ...(network ? { network_context: null } : {}) });
         return;
       }
       if (entry.state !== "queued" && entry.turn_id) {
@@ -276,6 +302,10 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
       if (suppliedText === undefined) {
         if (savedView.current.draft.trim() === text) { setDraft(""); setSkill(""); savedView.current = { ...savedView.current, draft: "", skill_name: "", pending_message: null }; }
         else savedView.current.pending_message = null;
+        if (network) {
+          savedView.current.network_context = null;
+          setNetworkContext(null);
+        }
       }
       retryId.current = null;
       if (entry.turn_id) { expectedTurn.current = entry.turn_id; if (!completedTurns.current.has(entry.turn_id)) setActiveTurnId(entry.turn_id); }
@@ -329,6 +359,20 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
     </div></div>
     {!following && <button className="jump-latest" onClick={() => { followBottom.current = true; setFollowing(true); savedView.current.follow_bottom = true; if (body.current) body.current.scrollTop = body.current.scrollHeight; }}>Jump to latest <ChevronDown size={14} /></button>}
     {!!queue.length && <div className="chat-queue"><div className="queue-heading"><strong>{queuePaused ? "Queue paused" : "Queued messages"}</strong>{queuePaused && <button onClick={() => void api.request(`/v1/conversations/${conversationId}/queue/resume`, "POST").then(() => loadHistory()).catch(onError)}>Resume queue</button>}</div>{queue.map((entry) => <div className="queue-entry" key={entry.id}>{editingQueue === entry.id ? <><textarea aria-label="Edit queued message" value={queueText} onChange={(event) => setQueueText(event.target.value)} /><button disabled={!queueText.trim()} onClick={() => void editQueued(entry)}>Save</button><button onClick={() => setEditingQueue(null)}>Cancel</button></> : <><span>{entry.text}{entry.error && <small className="error-text">{entry.error}</small>}</span>{entry.state === "queued" ? <>{activeTurnId && !entry.skill_name && <button aria-label="Steer current work with this message" title="Send this message into the running turn now instead of waiting" onClick={() => void steerQueued(entry)}>Steer now</button>}<button aria-label="Edit queued message" onClick={() => { setEditingQueue(entry.id); setQueueText(entry.text); }}>Edit</button><button aria-label="Remove queued message" onClick={() => void api.request(`/v1/conversations/${conversationId}/messages/${entry.id}`, "DELETE").then(() => loadHistory()).catch(onError)}>Remove</button></> : <small>{entry.state === "uncertain" ? "Checking delivery…" : "Sending…"}</small>}</>}</div>)}</div>}
-    <div className="composer-wrap"><div className="composer"><textarea placeholder={isNewDraft ? `Describe your new ${draftKindLabel.toLowerCase()}…` : `Ask about ${item.name}…`} aria-label="Message to Codex" value={draft} onChange={(event) => { composerTouched.current = true; setDraft(event.target.value); savedView.current.draft = event.target.value; }} onKeyDown={(event) => { if (event.key !== "Enter" || event.shiftKey || event.altKey || event.nativeEvent.isComposing) return; event.preventDefault(); const alternative = /Mac/i.test(navigator.platform) ? event.metaKey : event.ctrlKey; const mode = conversation.active && alternative ? followupMode === "queue" ? "steer" : "queue" : currentMode; void send(mode).catch(() => undefined); }} /><div className="composer-bottom"><div className="composer-options"><select aria-label="Skill for this turn" title="Skills apply to new or queued turns" value={skill} onChange={(event) => { composerTouched.current = true; setSkill(event.target.value); savedView.current.skill_name = event.target.value; }}><option value="">{conversation.thread_id ? "Automatic skill" : `${draftKindLabel} skill`}</option>{skills.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}</select><span>Enter to {currentMode === "start" ? "send" : currentMode} · {conversation.active ? "Cmd/Ctrl+Enter for the other mode · " : ""}Shift/Alt+Enter for a new line</span></div><div className="composer-actions">{conversation.active && <button className="interrupt-button" aria-label="Stop Codex turn" onClick={() => void api.request(`/v1/conversations/${conversationId}/interrupt`, "POST").then(() => loadHistory()).catch((error) => onError(String(error)))}><CirclePause size={17} /></button>}<button aria-label={modeLabel(currentMode)} title={modeLabel(currentMode)} disabled={!draft.trim() || sending || !enabled || (currentMode === "steer" && !activeTurnId)} onClick={() => void send().catch(() => undefined)}><ArrowUp size={16} /></button>{conversation.active && <DropdownMenu.Root open={sendMenu} onOpenChange={setSendMenu}><DropdownMenu.Trigger asChild><button aria-label="Choose Queue or Steer"><ChevronDown size={14} /></button></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="send-mode-menu" side="top" align="end" sideOffset={6}><DropdownMenu.Item disabled={!draft.trim() || sending || !enabled} onSelect={() => void send("queue").catch(() => undefined)}>Queue message</DropdownMenu.Item><DropdownMenu.Item disabled={!draft.trim() || sending || !enabled || !activeTurnId} onSelect={() => void send("steer").catch(() => undefined)}>Steer current work</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}</div></div></div>{codexHealth.state !== "connected" && <p className="chat-unavailable">Codex {codexHealth.state}: {codexHealth.detail}. Use the status dot above to reconnect.</p>}{status && !status.available && codexHealth.state === "connected" && <p className="chat-unavailable">{status.error || "Codex is unavailable"}</p>}{status?.account_ready === false && <p className="chat-unavailable">Sign in to Codex under Settings → Authoring & tools, or use Login in the Codex status dialog, before sending a message.</p>}</div>
+    <div className="composer-wrap"><div className="composer">
+      {networkContext && <div className="composer-network-attachment">
+        {includeCurrentView && networkContext.image && <img src={networkContext.image} alt="Current network diagram view" />}
+        <div>
+          <strong>{networkContext.selection_label ? `Network diagram · ${networkContext.selection_label}` : "Network diagram"}</strong>
+          <label><input type="checkbox" checked={includeCurrentView && !!networkContext.image} disabled={sending || !networkContext.image}
+            onChange={(event) => {
+              const include = event.currentTarget.checked;
+              setIncludeCurrentView(include);
+              savedView.current.include_current_view = include;
+            }} /> Include current view</label>
+          {!networkContext.image && <small className="muted">The view could not be captured. Topology context is attached.</small>}
+        </div>
+      </div>}
+      <textarea ref={composer} placeholder={isNewDraft ? `Describe your new ${draftKindLabel.toLowerCase()}…` : `Ask about ${item.name}…`} aria-label="Message to Codex" value={draft} onChange={(event) => { composerTouched.current = true; setDraft(event.target.value); savedView.current.draft = event.target.value; }} onKeyDown={(event) => { if (event.key !== "Enter" || event.shiftKey || event.altKey || event.nativeEvent.isComposing) return; event.preventDefault(); const alternative = /Mac/i.test(navigator.platform) ? event.metaKey : event.ctrlKey; const mode = conversation.active && alternative ? followupMode === "queue" ? "steer" : "queue" : currentMode; void send(mode).catch(() => undefined); }} /><div className="composer-bottom"><div className="composer-options"><select aria-label="Skill for this turn" title="Skills apply to new or queued turns" value={skill} onChange={(event) => { composerTouched.current = true; setSkill(event.target.value); savedView.current.skill_name = event.target.value; }}><option value="">{conversation.thread_id ? "Automatic skill" : `${draftKindLabel} skill`}</option>{skills.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}</select><span>Enter to {currentMode === "start" ? "send" : currentMode} · {conversation.active ? "Cmd/Ctrl+Enter for the other mode · " : ""}Shift/Alt+Enter for a new line</span></div><div className="composer-actions">{conversation.active && <button className="interrupt-button" aria-label="Stop Codex turn" onClick={() => void api.request(`/v1/conversations/${conversationId}/interrupt`, "POST").then(() => loadHistory()).catch((error) => onError(String(error)))}><CirclePause size={17} /></button>}<button aria-label={modeLabel(currentMode)} title={modeLabel(currentMode)} disabled={!draft.trim() || sending || !enabled || (currentMode === "steer" && !activeTurnId)} onClick={() => void send().catch(() => undefined)}><ArrowUp size={16} /></button>{conversation.active && <DropdownMenu.Root open={sendMenu} onOpenChange={setSendMenu}><DropdownMenu.Trigger asChild><button aria-label="Choose Queue or Steer"><ChevronDown size={14} /></button></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="send-mode-menu" side="top" align="end" sideOffset={6}><DropdownMenu.Item disabled={!draft.trim() || sending || !enabled} onSelect={() => void send("queue").catch(() => undefined)}>Queue message</DropdownMenu.Item><DropdownMenu.Item disabled={!draft.trim() || sending || !enabled || !activeTurnId} onSelect={() => void send("steer").catch(() => undefined)}>Steer current work</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}</div></div></div>{codexHealth.state !== "connected" && <p className="chat-unavailable">Codex {codexHealth.state}: {codexHealth.detail}. Use the status dot above to reconnect.</p>}{status && !status.available && codexHealth.state === "connected" && <p className="chat-unavailable">{status.error || "Codex is unavailable"}</p>}{status?.account_ready === false && <p className="chat-unavailable">Sign in to Codex under Settings → Authoring & tools, or use Login in the Codex status dialog, before sending a message.</p>}</div>
   </section>;
 }

@@ -2216,7 +2216,7 @@ test("workspace opens on an Overview with a readiness strip, section tabs and no
   const { container } = await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   const tabs = screen.getByRole("tablist", { name: "Workspace sections" });
-  expect(within(tabs).getAllByRole("tab").map((entry) => entry.getAttribute("aria-label"))).toEqual(["Overview", "Author", "Environment", "Validate", "Generate & Evaluate"]);
+  expect(within(tabs).getAllByRole("tab").map((entry) => entry.getAttribute("aria-label"))).toEqual(["Overview", "Author", "Environment", "Network", "Validate", "Generate & Evaluate"]);
   expect(within(tabs).getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
   const readiness = screen.getByRole("region", { name: "Readiness" });
   expect(within(readiness).getAllByRole("listitem").map((entry) => entry.querySelector("strong")?.textContent)).toEqual(["Author", "Validate", "Generate", "Evaluate"]);
@@ -2425,6 +2425,10 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
     };
     request.mockImplementation(async (path, ...args) => {
       if (path === "/v1/scenarios/alpha/environment") return environment;
+      if (path === "/v1/packs/selected-pack/topology") return {
+        source_sha256: pack.source_sha256, reference: `project:${reference}`, digest: "pack-digest",
+        topology: { segments: [{ id: "segment:office", name: "office", cidr: "10.0.0.0/24", exposure: "internal", description: "" }], hosts: [], devices: [], findings: [] },
+      };
       if (/^\/v1\/items\/[^/]+\/assets\?/.test(path)) return { revision: "compiled", category: "users", categories: [], total: 0, matching: 0, page: 0, page_size: 50, entries: [] };
       return implementation(path, ...args);
     });
@@ -2439,10 +2443,17 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
       expect(screen.getByTitle("Version 1.0.0")).toHaveTextContent("1.0.0");
       expect(screen.getByRole("region", { name: "Validate & Release", exact: true })).toBeVisible();
       expect(screen.getByRole("region", { name: "Assets", exact: true })).toBeVisible();
-      expect(screen.queryByRole("region", { name: "Environment", exact: true })).toBeNull();
       expect(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Packs" })).toHaveClass("selected");
       expect(container.querySelector(".back-link")).toHaveTextContent("Packs");
       expect(pack.hidden).toBe(true);
+      const packEnvironment = screen.queryByRole("tab", { name: "Network", exact: true });
+      if (kind === "organization_pack") {
+        expect(packEnvironment).toBeVisible();
+        await user.click(packEnvironment!);
+        expect(await screen.findByRole("button", { name: /Segment office/ })).toBeVisible();
+      } else {
+        expect(packEnvironment).toBeNull();
+      }
     } finally { snapshot.items = originalItems; snapshot.dependencies = originalDependencies; request.mockImplementation(implementation); }
   });
 }
@@ -2509,6 +2520,56 @@ test("Environment loads lazily and reuses its inspection until inputs change or 
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(inspections).toBe(4);
   } finally { request.mockImplementation(original); snapshot.items = originalItems; snapshot.dependencies = originalDependencies; }
+});
+
+test("Network and Environment share one lazily resolved scenario revision", async () => {
+  const apiRequest = vi.mocked(useStudio().api!.request);
+  const original = apiRequest.getMockImplementation()!;
+  const originalConversations = snapshot.conversations;
+  const created = { ...originalConversations[0], id: "network-question", title: "New conversation", thread_id: null };
+  snapshot.conversations = [...originalConversations, created];
+  let captured: unknown;
+  const path = "/v1/scenarios/alpha/environment";
+  const report: EnvironmentReport = {
+    source_sha256: "sha-alpha", project_root: workspace, valid: true, error: "", compiled_sha256: "compiled",
+    authored_kind: "scenario-2.0", selected_packs: [], effective_scenario: { environment: {} }, field_origins: {},
+    organization_model_origins: {}, catalog_origins: {}, catalog_field_origins: {}, merge_decisions: [], declarations: [],
+    overlay_root: `${workspace}/.eforge/config`, overlay_files: [], overlays_truncated: false,
+    topology: { segments: [{ id: "segment:office", name: "office", cidr: "10.0.0.0/24", exposure: "internal", description: "" }], hosts: [], devices: [], findings: [] },
+  };
+  apiRequest.mockImplementation(async (...args) => {
+    if (args[0] === path) return report;
+    if (args[0] === "/v1/conversations" && args[1] === "POST") {
+      captured = (args[2] as { network_context: unknown }).network_context;
+      return created;
+    }
+    if (args[0] === "/v1/conversations/network-question/chat") return {
+      seq: 0, turns: [], queue: [], active_turn_id: null, queue_paused: false, view: { network_context: captured },
+    };
+    if (args[0].startsWith("/v1/items/alpha/assets?")) return { revision: "compiled", category: "users", categories: [], total: 0, matching: 0, page: 0, page_size: 50, entries: [] };
+    return original(...args);
+  });
+  try {
+    await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    await user.click(screen.getByRole("tab", { name: "Network" }));
+    expect(await screen.findByRole("button", { name: /Segment office/ })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Assets" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "Environment" }));
+    expect(screen.queryByRole("heading", { name: "Network diagram" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Open network diagram" }));
+    expect(screen.getByRole("button", { name: /Segment office/ })).toBeVisible();
+    expect(apiRequest.mock.calls.filter(([endpoint]) => endpoint === path)).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: /Segment office/ }));
+    await user.click(screen.getByRole("button", { name: "Ask about this", exact: true }));
+    expect(await screen.findByRole("textbox", { name: "Message to Codex" })).toBeVisible();
+    expect(captured).toMatchObject({ revision: "compiled", selected_id: "segment:office", topology: report.topology });
+    expect(apiRequest.mock.calls.some(([endpoint]) => endpoint.endsWith("/messages"))).toBe(false);
+  } finally {
+    apiRequest.mockImplementation(original);
+    snapshot.conversations = originalConversations;
+  }
 });
 
 test("Environment refresh remains busy through inspection and shows inspection failures inline", async () => {

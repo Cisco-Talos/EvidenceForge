@@ -1,6 +1,6 @@
 import { CatalogObjectMenu } from "./CatalogObjectMenu";
 import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { ArrowUpRight, Check, Search } from "lucide-react";
 import { Modal } from "./Modal";
 import type { CatalogItem, DependencyHealth, EnvironmentReport, SelectedPack, StudioApi } from "./api";
@@ -11,7 +11,8 @@ import { SourceDeclarations } from "./SourceDeclarations";
 import { InspectionSection } from "./InspectionSection";
 import { DependencyRows } from "./ImportDialog";
 import { dependencyPackItem, selectedPackItem } from "./environmentPackLinks";
-import { RequestFeedback, type RequestState } from "./RequestFeedback";
+import { RequestFeedback } from "./RequestFeedback";
+import type { useEnvironmentInspection } from "./useEnvironmentInspection";
 
 export function packReference(pack: Pick<SelectedPack, "source" | "publisher" | "type" | "name" | "version" | "location">): string {
   return pack.source === "path" ? pack.location : `${pack.source}:${pack.publisher}:${pack.type}:${pack.name}@${pack.version}`;
@@ -60,32 +61,21 @@ function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus 
   </Modal>;
 }
 
-export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, onOpenPack, onChanged, api, onPrepare, onError, onInspection, embedded = false }: {
-  item: CatalogItem; packs: CatalogItem[]; dependencyFingerprint?: string; dependencyHealth?: DependencyHealth;
-  refreshVersion?: number; onImportPacks?: () => void; onChanged?: () => Promise<void>; api: StudioApi;
+export function EnvironmentView({ item, packs, dependencyHealth, inspection, onImportPacks, onOpenPack, onChanged, api, onPrepare, onError, embedded = false }: {
+  item: CatalogItem; packs: CatalogItem[]; dependencyHealth?: DependencyHealth;
+  inspection: ReturnType<typeof useEnvironmentInspection>;
+  onImportPacks?: () => void; onChanged?: () => Promise<void>; api: StudioApi;
   onOpenPack?: (pack: CatalogItem) => void;
-  onInspection?: (state: RequestState) => void;
   onPrepare: (prompt: string) => Promise<void>; onError: (message: string) => void; embedded?: boolean;
 }) {
-  const [report, setReport] = useState<EnvironmentReport | null>(null);
-  const [refresh, setRefresh] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [checkedAt, setCheckedAt] = useState<number>();
+  const { report, pending: loading, error, completedAt, requestKey, refresh } = inspection;
   const pickerTrigger = useRef<HTMLButtonElement>(null);
   const [picker, setPicker] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    setReport(null); setLoading(true); setError("");
-    onInspection?.({ pending: true });
-    void api.request<EnvironmentReport>(`/v1/scenarios/${item.id}/environment`, "GET", undefined, 180000).then((value) => { if (!cancelled) { setReport(value); const completedAt = Date.now() / 1000; setCheckedAt(completedAt); onInspection?.({ pending: false, completedAt }); } }).catch((failure) => { if (!cancelled) { setError(String(failure)); onInspection?.({ pending: false, error: String(failure) }); } }).finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; onInspection?.({ pending: false }); };
-  }, [api, item.id, item.source_sha256, dependencyFingerprint, refresh, refreshVersion]);
   const packRows = dependencyHealth?.rows.filter((row) => row.kind === "pack") || [];
   const otherRows = dependencyHealth?.rows.filter((row) => row.kind !== "pack") || [];
   const fileErrors = otherRows.filter((row) => ["missing", "conflict"].includes(row.status));
   const packCount = packRows.length || report?.selected_packs.length || 0;
-  const refreshAction: ObjectAction = { id: "refresh", label: "Refresh environment", group: "work", disabled: loading, reason: "Environment is refreshing", run: () => setRefresh((value) => value + 1) };
+  const refreshAction: ObjectAction = { id: "refresh", label: "Refresh environment", group: "work", disabled: loading, reason: "Environment is refreshing", run: refresh };
   const packActions: ObjectAction[] = [
     { id: "choose", label: "Choose packs…", group: "work", disabled: !report || loading, reason: "Wait for the environment inspection", run: () => setPicker(true) },
     ...(onImportPacks ? [{ id: "import", label: "Import packs…", group: "manage" as const, run: onImportPacks }] : []),
@@ -102,12 +92,12 @@ export function EnvironmentView({ item, packs, dependencyFingerprint, dependency
       {fileErrors.length > 0 && <div className="environment-file-errors"><h3>Files needing attention</h3><DependencyRows rows={fileErrors} /></div>}
       {otherRows.length > fileErrors.length && <InspectionSection title="Included files and dependencies" count={`${otherRows.length - fileErrors.length} checks`}><DependencyRows rows={otherRows.filter((row) => !fileErrors.includes(row))} /></InspectionSection>}
     </section>
-    {!onInspection && <RequestFeedback pending={loading} label="Resolving environment…" error={error} completedAt={checkedAt} completedLabel="Checked" />}
+    {!embedded && <RequestFeedback pending={loading} label="Resolving environment…" error={error} completedAt={completedAt} completedLabel="Checked" />}
     {report && <>
       {!report.valid && <p role="alert" className="field-error">{report.error} Use Validation to review findings, or prepare a repair in chat.</p>}
       {report.source_sha256 !== item.source_sha256 && <p className="run-revision-note">The source changed during inspection. Refresh the library to load this revision.</p>}
-      {report.valid && <AssetBrowser key={item.id} item={item} api={api} refreshVersion={`${dependencyFingerprint}:${refreshVersion}:${refresh}`} onChanged={async () => { setRefresh((value) => value + 1); await onChanged?.(); }} />}
-      <ConfigurationLayers item={item} report={report} api={api} onRefresh={() => setRefresh((value) => value + 1)} onPrepare={onPrepare} onError={onError} />
+      {report.valid && <AssetBrowser key={item.id} item={item} api={api} refreshVersion={requestKey} onChanged={async () => { refresh(); await onChanged?.(); }} />}
+      <ConfigurationLayers item={item} report={report} api={api} onRefresh={refresh} onPrepare={onPrepare} onError={onError} />
       {report.valid && <>
         <InspectionSection title="Resolved scenario model" count={report.authored_kind} summary={(() => { const environment = report.effective_scenario.environment as Record<string, unknown> | undefined; return ["users", "systems", "groups"].map((key) => Array.isArray(environment?.[key]) ? `${environment[key].length} ${environment[key].length === 1 ? key.slice(0, -1) : key}` : "").filter(Boolean).join(" · ") || "No environment entities"; })()}><p className="muted">Scenario fields after pack composition. Runtime catalogs also use the selected configuration layers.</p><ChatMarkdown text={"```json\n" + JSON.stringify({ environment: report.effective_scenario.environment, baseline_activity: report.effective_scenario.baseline_activity }, null, 2) + "\n```"} /></InspectionSection>
         <SourceDeclarations key={item.id} item={item} report={report} api={api} onError={onError} />

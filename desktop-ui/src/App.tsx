@@ -5,7 +5,7 @@ import { Activity, ArrowLeft, ArrowUpRight, Bookmark, ChevronDown, Download, Fil
 import { DropdownMenu, Tooltip } from "radix-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { CatalogItem, CodexHealth, Conversation, ItemKind, PackPublisherStatus, PackReview, Project, SavedView, StudioApiError, StudioJob, type ExportProgress, type PackCreation, type ValidationResult } from "./api";
+import { CatalogItem, CodexHealth, Conversation, ItemKind, PackPublisherStatus, PackReview, Project, SavedView, StudioApiError, StudioJob, type ExportProgress, type NetworkChatContext, type PackCreation, type ValidationResult } from "./api";
 import { formatBundleSize, formatTime, shortPath } from "./components";
 import { BundleLibrary } from "./BundleLibrary";
 import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
@@ -636,16 +636,23 @@ function App() {
     finally { setBusy(false); }
   }
 
-  async function createConversation(target: CatalogItem | null = item) {
+  async function createConversation(target: CatalogItem | null = item, networkContext?: NetworkChatContext) {
     if (!api || !target) return;
-    openItem(target);
+    if (!networkContext) openItem(target);
     try {
-      const created = await api.request<Conversation>("/v1/conversations", "POST", { item_id: target.id });
+      const created = await api.request<Conversation>("/v1/conversations", "POST", {
+        item_id: target.id,
+        ...(networkContext ? { network_context: networkContext } : {}),
+      });
       await studio.reload();
+      if (networkContext) openItem(target);
       if (created.item_id && created.item_id !== target.id) setSelectedId(created.item_id);
       setSelectedConversation(created.id);
       setWorkspaceTarget("conversations");
-    } catch (error) { setNotice(String(error)); }
+    } catch (error) {
+      if (networkContext) throw error;
+      setNotice(String(error));
+    }
   }
 
   async function prepareEnvironmentChange(text: string) {
@@ -1031,7 +1038,7 @@ function App() {
       {showLibrary && item && !snapshot.missing_sources?.includes(item.id) && <ScenarioWorkspace onProperties={(section = "general") => setPropertiesTarget({ id: item.id, section })} key={item.id} item={item} snapshot={snapshot} conversations={conversations} selectedConversation={selectedConversation} target={workspaceTarget} jobs={itemJobs} api={api} codexHealth={codexHealth} busy={busy} validation={studio.validations[item.id] || snapshot.validations[item.id]?.result} validationActivity={validationActivities[`${item.workspace}:${item.id}`]} focusJobId={focusJobId} initialDraft={fixDraft?.conversationId === selectedConversation ? fixDraft.text : undefined} subscribeEvents={studio.subscribeEvents}
         onNavigate={(target, jobId) => { setWorkspaceTarget(target); if (jobId !== undefined) setFocusJobId(jobId); }}
         onOpenConversation={(chat) => { setSelectedConversation(chat.id); setWorkspaceTarget("conversations"); }}
-        onCreateConversation={() => void createConversation()} onRenameConversation={(chat) => { setEditingConversation(chat); setEditingTitle(chat.title); }} onDeleteConversation={setDeletingConversation}
+        onCreateConversation={() => void createConversation()} onAskNetwork={(context) => createConversation(item, context)} onRenameConversation={(chat) => { setEditingConversation(chat); setEditingTitle(chat.title); }} onDeleteConversation={setDeletingConversation}
         onProjectChange={(id) => void assignProject(item, id)} onClone={() => item.kind === "scenario" ? beginScenarioClone(item) : void beginPackClone(item)} onExportPack={() => void exportPack(item)} onDeleteScenario={() => setDeletingScenario(item)} onDeletePack={() => setDeletingPack(item)} onHidden={() => void setItemHidden(item, !item.hidden)} onViewYaml={() => void viewYaml()} onImportPacks={() => setPackImportOpen(true)} onOpenPack={(entry) => { setSection("packs"); openItem(entry); }} onGenerate={startGeneration} onValidate={() => void validateItem()} onFix={() => void fixValidationInChat()} onPrepare={prepareEnvironmentChange} onDraftSubmitted={(conversationId) => setFixDraft((current) => current?.conversationId === conversationId ? null : current)} onChanged={studio.reload} onOpenArtifact={async (path) => { const items = await api.request<CatalogItem[]>("/v1/items"); const found = items.find((entry) => entry.path === path); if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); } }} onError={setNotice} />}
 
       {section === "jobs" && <div className="page activity-page">
