@@ -116,3 +116,46 @@ Design and prioritized recommendations: [network diagram review](../design/netwo
   - Blocks reserve width for gutter link labels.
 - An invariant test checks that link labels never overlap subnets, devices or collapsed cards, and
   that cross-site labels never overlap sites.
+
+### Milestone C (implemented, awaiting review, uncommitted)
+
+- `project_coverage` (topology.py) asks `NetworkVisibilityEngine.get_observing_sensors` and
+  `routed_connection` about every ordered pair of subnets plus the Internet, using one
+  representative address each (a real host, else an address near the range start; Internet from
+  documentation ranges outside every segment). Talos: 396 paths, about 150 KB, 1.3 s. It is stored
+  as `RoutedTopologyGraph.coverage` and left out of chat contexts.
+- `networkCoverage.ts`:
+  - Tiers: full, protocol, alerts, connection, firewall, none.
+  - A subnet's weakest inbound tier drives the lens outline.
+  - Rows are grouped by tier, with path tracing through links, forwarders, endpoints and sensors.
+- Firewall details list NAT and policy.
+- Export: a split button saves a PNG of exactly the current view; the menu copies it instead.
+  Desktop saving uses a new narrow Tauri command, `save_diagram_image` (`src-tauri/src/diagram_export.rs`):
+  - It takes the PNG as the raw IPC body and checks the signature, IHDR and a 64 MB limit.
+  - The native save dialog starts in the remembered export folder.
+  - The write is atomic, through a temporary sibling and a rename.
+  - It adds no service route and does not change the `save_studio_export` allowlist.
+  - Rust tests cover the PNG check, name sanitizing and header decoding.
+- The lens outline uses inbound traffic from other subnets and the Internet only. Traffic within a
+  subnet shows separately as "Unobserved within". Transit-link segments are excluded from peers.
+- The toolbar order is Layers, lens, search, name, Ask, Refresh, Export, Expand.
+- `networkDiff.ts`: a session-scoped "last shown revision" per item (`historyKey`). It is read
+  purely during render and recorded in an effect, so it is StrictMode safe.
+- Tests found a real duplicate-key bug: the coverage section and host list shared a key.
+
+### Milestone C review follow-ups
+
+- The toolbar stays on one row: the search box shrinks to 200px and the name truncates first. It
+  wraps only below an 820px container. **Ask** shows an icon and a short label, and **Layers**
+  shows its count only when a layer is hidden. Export feedback floats under the toolbar, and the
+  segment-based notice sits below it.
+- Links between stacked sites no longer cross subnet cards. Each end leaves its site straight
+  down or up when the run is clear. Otherwise it runs along the device's row to the frame's inner
+  padding and down that edge (`crosses`, `orthogonalPath` in `networkDiagramLayout.ts`).
+- The Coverage lens is renamed **Visibility**, matching the industry term and
+  `NetworkVisibilityEngine`. Internal identifiers still say coverage.
+- Firewall rule filter (6+ rules), `firewallRuleFilter` in `networkSearch.ts`:
+  - A full IP address matches the rules that apply to it, as `firewall_policy.py` evaluates them.
+  - A port number matches listed ports exactly; other input matches text.
+  - Filtered rules keep their policy numbers.
+

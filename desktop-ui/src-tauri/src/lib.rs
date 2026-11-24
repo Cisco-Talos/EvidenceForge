@@ -1,4 +1,5 @@
 mod about;
+mod diagram_export;
 mod helper_lifecycle;
 #[cfg(target_os = "linux")]
 mod linux_desktop;
@@ -265,7 +266,8 @@ pub fn run() {
             choose_bundle_folder,
             choose_import_file,
             native_export::save_studio_export,
-            native_export::cancel_studio_export
+            native_export::cancel_studio_export,
+            diagram_export::save_diagram_image
         ])
         .build(context)
         .expect("error while building tauri application")

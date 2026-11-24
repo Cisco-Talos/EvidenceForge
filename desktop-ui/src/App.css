@@ -1145,14 +1145,23 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .network-diagram { display: flex; flex: 1; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
 .network-diagram-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); max-height: none; padding: 16px; }
 .network-diagram p, .diagram-toolbar p { margin: 0; }
-.diagram-toolbar, .diagram-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.diagram-toolbar { justify-content: space-between; }
+/* One row: view controls on the left shrink (search narrows, the name truncates) before anything wraps. */
+.network-diagram { container-type: inline-size; }
+.diagram-toolbar, .diagram-controls { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
+.diagram-toolbar { position: relative; justify-content: space-between; gap: 16px; }
+.diagram-toolbar > .diagram-controls:first-child { flex: 1 1 0; min-width: 0; }
+.diagram-toolbar > .diagram-controls:last-child { flex: none; }
+.diagram-controls > * { flex: none; }
+@container (max-width: 820px) {
+  .diagram-toolbar { flex-wrap: wrap; }
+  .diagram-toolbar > .diagram-controls:first-child { flex-basis: 100%; }
+}
 .diagram-controls .button-quiet { min-height: 32px; }
 .diagram-controls .button-quiet.icon-only { width: 32px; padding: 0; justify-content: center; }
-.diagram-context { font-size: var(--text-sm); }
+.diagram-controls > .diagram-context { flex: 0 100 auto; min-width: 0; overflow: hidden; font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
 .diagram-unavailable { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .diagram-layers { position: relative; }
-.diagram-layers > button { display: inline-flex; align-items: center; gap: 6px; }
+.diagram-layers > button, .diagram-ask { display: inline-flex; align-items: center; gap: 6px; }
 .diagram-layers-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 4; display: grid; gap: 2px; min-width: 250px; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
 .diagram-layer-row { display: flex; align-items: center; gap: 4px; border-radius: var(--radius-sm); }
 .diagram-layer-row:hover { background: var(--hover-tint); }
@@ -1160,9 +1169,65 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .diagram-layer-help { display: grid; place-items: center; width: 24px; height: 24px; margin-right: 4px; color: var(--text-3); border-radius: var(--radius-sm); cursor: help; }
 .diagram-layer-help:hover, .diagram-layer-help:focus-visible { color: var(--text-1); }
 .diagram-preview-logs { color: var(--text-2); font-size: var(--text-sm); }
+/* Coverage lens: each tier has one color everywhere it appears */
+.network-diagram [data-tier="full"], .diagram-zone[data-coverage="full"] { --tier: var(--ok); }
+.network-diagram [data-tier="protocol"], .diagram-zone[data-coverage="protocol"] { --tier: var(--info); }
+.network-diagram [data-tier="alerts"], .diagram-zone[data-coverage="alerts"] { --tier: var(--syntax-keyword); }
+.network-diagram [data-tier="connection"], .diagram-zone[data-coverage="connection"] { --tier: var(--warn); }
+.network-diagram [data-tier="firewall"], .diagram-zone[data-coverage="firewall"] { --tier: var(--text-2); }
+.network-diagram [data-tier="none"], .diagram-zone[data-coverage="none"] { --tier: var(--err); }
+.diagram-zone[data-coverage] .diagram-zone-box { stroke: var(--tier); stroke-width: 2.4px; fill: color-mix(in srgb, var(--tier) 7%, transparent); }
+.diagram-zone[data-coverage="none"] .diagram-zone-box { stroke-dasharray: 6 4; }
+.diagram-zone[data-traced] .diagram-zone-box { stroke: var(--accent); stroke-width: 2.6px; }
+.diagram-device[data-traced] .diagram-device-box { stroke: var(--accent); stroke-width: 2.4px; }
+.diagram-within-blind { fill: var(--err); font-size: 10.5px; font-weight: 650; }
+.diagram-within-key { color: var(--err); font-size: var(--text-xs); font-weight: 650; }
+.diagram-tier-mark { display: inline-block; flex: none; width: 12px; height: 9px; border: 2px solid var(--tier); border-radius: 3px; }
+.diagram-tier-mark[data-tier="none"] { border-style: dashed; }
+.diagram-lens { display: inline-flex; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.diagram-lens button { min-height: 32px; padding: 0 12px; border: 0; border-radius: 0; background: transparent; color: var(--text-2); font-weight: 550; }
+.diagram-lens button + button { border-left: 1px solid var(--border-strong); }
+.diagram-lens button[aria-pressed="true"] { background: var(--surface-3); color: var(--text-1); }
+.diagram-lens button:disabled { opacity: .45; cursor: default; }
+.diagram-coverage { margin-top: 12px; }
+.diagram-coverage-direction { display: inline-flex; margin: 0 0 8px; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.diagram-coverage-direction button { padding: 3px 10px; border: 0; border-radius: 0; background: transparent; color: var(--text-2); font-size: var(--text-sm); }
+.diagram-coverage-direction button + button { border-left: 1px solid var(--border-strong); }
+.diagram-coverage-direction button[aria-pressed="true"] { background: var(--surface-3); color: var(--text-1); }
+.diagram-coverage-group h6 { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; color: var(--text-1); font-size: var(--text-sm); font-weight: 650; }
+.diagram-coverage-group ul { list-style: none; margin: 0; padding: 0 0 0 20px; }
+.diagram-coverage-group li { display: grid; gap: 1px; padding: 4px 6px; border-radius: var(--radius-sm); }
+.diagram-coverage-group li:hover { background: var(--hover-tint); }
+.diagram-coverage-group li button { justify-self: start; padding: 0; border: 0; background: transparent; color: var(--text-1); text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+.diagram-coverage-group li span, .diagram-coverage-group li small { color: var(--text-2); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.diagram-coverage-group li small { color: var(--warn); }
+.diagram-coverage-note { font-size: var(--text-xs); }
+.diagram-policy { margin: 0; padding-left: 22px; font-size: var(--text-sm); }
+.diagram-policy li { padding: 3px 0; overflow-wrap: anywhere; }
+.diagram-policy li[data-action="deny"] strong { color: var(--err); }
+.diagram-policy li[data-action="permit"] strong { color: var(--ok); }
+/* Changes since the last revision shown */
+.diagram-changes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 6px 12px; font-size: var(--text-sm); color: var(--text-2); border: 1px solid var(--border); border-left: 3px solid var(--info); border-radius: var(--radius-sm); background: var(--surface-1); }
+.diagram-changes strong { color: var(--text-1); }
+.diagram-changes details { position: relative; }
+.diagram-changes summary { cursor: pointer; }
+.diagram-changes details ul { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; min-width: 220px; margin: 0; padding: 8px 12px; list-style: none; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.diagram-changes details li small { color: var(--text-3); }
+.network-diagram [data-change="added"] { --change: var(--ok); }
+.network-diagram [data-change="changed"] { --change: var(--warn); }
+.diagram-zone[data-change] .diagram-zone-box, .diagram-host-card[data-change] .diagram-host-box,
+.diagram-device[data-change] .diagram-device-box, .diagram-chip[data-change] .diagram-chip-box { stroke: var(--change); stroke-width: 2.4px; }
+/* Export feedback floats under the toolbar, so it never pushes the controls onto another row. */
+.diagram-copy-status { position: absolute; top: calc(100% + 8px); right: 0; z-index: 4; padding: 4px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-1); font-size: var(--text-sm); white-space: nowrap; box-shadow: var(--shadow-pop); }
+.diagram-export { position: relative; display: inline-flex; }
+.diagram-export > .icon-only { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.diagram-export-more { min-height: 32px; width: 22px; padding: 0; justify-content: center; border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.diagram-export-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 5; display: grid; min-width: 220px; padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.diagram-export-menu button { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-1); text-align: left; }
+.diagram-export-menu button:hover, .diagram-export-menu button:focus-visible { background: var(--hover-tint); }
 /* Search */
-.diagram-search { position: relative; display: flex; align-items: center; }
-.diagram-search input { width: 300px; height: 32px; padding: 0 30px 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-1); color: var(--text-1); }
+.diagram-controls > .diagram-search { position: relative; display: flex; flex: 0 1 260px; min-width: 200px; align-items: center; }
+.diagram-search input { width: 100%; height: 32px; padding: 0 30px 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-1); color: var(--text-1); }
 .diagram-search input:focus { border-color: var(--accent-line); outline: none; }
 .diagram-search kbd { position: absolute; right: 8px; padding: 0 5px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text-3); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }
 .diagram-search-results { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 420px; max-width: 80vw; margin: 0; padding: 4px; list-style: none; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
@@ -1331,7 +1396,7 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .diagram-associations li, .diagram-hosts li { border-top: 1px solid var(--border); }
 .diagram-associations li { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 7px 0; align-items: baseline; }
 .diagram-associations li button, .diagram-facts dd button, .diagram-inspector p button { padding: 0; border: 0; background: transparent; color: var(--text-1); text-align: left; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
-.diagram-associations li span, .diagram-host span, .diagram-hosts h5 span { color: var(--text-2); font-size: var(--text-sm); }
+.diagram-associations li span, .diagram-host span, .diagram-hosts h5 span, .diagram-inspector h5 > span { color: var(--text-2); font-size: var(--text-sm); }
 .diagram-hosts { margin-top: 12px; }
 .diagram-host { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; text-align: left; padding: 8px 4px; }
 .diagram-host:hover, .diagram-host[aria-expanded="true"] { background: var(--hover-tint); }

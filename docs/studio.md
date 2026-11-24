@@ -589,7 +589,7 @@ log formats, contained subnets and hosts. Filter a subnet's host list by name, a
 system, role or user. Select a host there to show it on the map: its subnet expands, and so does
 its site if collapsed.
 
-Use **Find host, IP, subnet or sensor** above the map, or press `/`, to search hostnames, IP and
+Use the **Find host, IP or subnet** box above the map, or press `/`, to search hostnames, IP and
 public addresses, subnet names and ranges, sensors and devices. A complete IP address also finds
 the most specific subnet that contains it, even when no host uses that address. Use the arrow keys
 and Enter to choose a match. Choosing it turns on a hidden layer when needed and reveals the item.
@@ -599,6 +599,35 @@ A breadcrumb shows where you are and leads back to the overview; Escape also ret
 site in the breadcrumb, or double-click a site's label on the map, to fit the whole site; a
 collapsed site expands first. While you are zoomed in, a small overview map shows the visible
 area; select a point on it, or drag across it, to move the view.
+
+Select **Visibility** to outline each subnet by the weakest network evidence for traffic reaching it
+from other subnets and the Internet: protocol logs and IDS alerts, protocol logs, IDS alerts alone,
+connection records only, firewall logs only, or nothing. **Unobserved within** marks a subnet whose
+own hosts can talk to each other without any network sensor seeing it, as with a TAP on its
+uplink. The generation engine's own routing and visibility rules compute this for
+the displayed revision, from one representative address in each subnet and one Internet address.
+A subnet's or host's details list that traffic under **Network evidence**, grouped the same way,
+with a row for traffic within the subnet and one for the Internet. Switch between traffic **to**
+and **from** the subnet, and hover over a row to trace its path on the map: the links it crosses,
+the devices that forward it, and the sensors that see it. Rows also note flows that are not
+delivered, such as traffic a firewall denies. Visibility needs network sensors; it is unavailable
+for an environment without them or one that cannot be compiled, such as an incomplete pack.
+
+A firewall's details include its address translation and its policy rules in order, ending with
+its default action. A firewall with six or more rules has a filter: type text or a port number, or
+a full IP address to find the rules that apply to it through its subnet, a range, `any` or
+`external`. Filtered rules keep their place numbers in the policy.
+
+Select the export button to save an image of the map exactly as shown, with its current zoom,
+collapsed sites, layers and selection, as a PNG; fit or focus the view first to choose what it
+includes. Its menu can copy the same image to the clipboard instead. The toolbar reads from view
+controls to actions: **Layers**, the **Topology** and **Visibility** lens, search, the item's name,
+then **Ask** (about this diagram), **Refresh environment**, export and expand. It stays on one row,
+shortening the search box and the name first, and wraps only in a narrow window.
+
+After an Author edit, the diagram notes what changed since the revision you last viewed in this
+Studio session: added and changed subnets, hosts, sensors and devices are outlined, and removed
+ones are listed. Hide the outlines or dismiss the note when you are done.
 
 A warning mark on a subnet, device, sensor or host means the environment has a finding about it.
 Select the item to read the finding in its details. The findings list below the map links to each

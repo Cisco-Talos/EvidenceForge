@@ -300,3 +300,62 @@ def test_pack_diagrams_are_read_only_and_bound_to_exact_catalog_items(
             "/v1/workspaces/select", headers=HEADERS, json={"path": str(tmp_path / "other")}
         )
         assert client.get(endpoint, headers=HEADERS).status_code == 404
+
+
+def test_coverage_follows_engine_visibility_for_span_tap_and_the_internet() -> None:
+    environment = {
+        "systems": [
+            {"hostname": "WS-1", "ip": "10.1.0.10", "type": "workstation", "os": "Windows 11"},
+            {"hostname": "WS-2", "ip": "10.1.0.11", "type": "workstation", "os": "Windows 11"},
+            {"hostname": "SRV-1", "ip": "10.2.0.10", "type": "server", "os": "Linux"},
+        ],
+        "network": {
+            "segments": [
+                {"name": "lan", "cidr": "10.1.0.0/24", "exposure": "internal"},
+                {"name": "servers", "cidr": "10.2.0.0/24", "exposure": "internal"},
+            ],
+            "sensors": [
+                {
+                    "name": "lan-span",
+                    "type": "network",
+                    "placement": "span",
+                    "monitoring_segments": ["lan"],
+                },
+                {
+                    "name": "srv-tap",
+                    "type": "network",
+                    "placement": "tap",
+                    "monitoring_segments": ["servers"],
+                },
+            ],
+        },
+    }
+    coverage = project_topology(environment).coverage
+    assert coverage is not None
+    paths = {(path.source, path.destination): path.sensors for path in coverage.paths}
+    # SPAN sees traffic inside its subnet; TAP sees only traffic crossing the boundary.
+    assert paths[("segment:lan", "segment:lan")] == ["device:lan-span"]
+    assert paths[("segment:servers", "segment:servers")] == []
+    assert paths[("segment:lan", "segment:servers")] == ["device:lan-span", "device:srv-tap"]
+    assert paths[("internet", "segment:servers")] == ["device:srv-tap"]
+    assert coverage.endpoints["segment:lan"] == "10.1.0.10"
+    assert coverage.endpoints["internet"] == "198.51.100.200"
+    assert ("internet", "internet") not in paths
+    # Without sensors there is no evidence to describe.
+    environment["network"]["sensors"] = []
+    assert project_topology(environment).coverage is None
+
+
+def test_routed_coverage_records_the_hops_each_flow_crosses() -> None:
+    fixture = Path(__file__).parents[1] / "fixtures" / "scenarios" / "routed-two-site.yaml"
+    environment = yaml.safe_load(fixture.read_text())["environment"]
+    coverage = project_topology(environment).coverage
+    assert coverage is not None
+    paths = {(path.source, path.destination): path for path in coverage.paths}
+    intersite = paths[("segment:hq-clients", "segment:mfg-clients")]
+    assert intersite.delivered is True
+    assert [hop.link for hop in intersite.hops] == ["users", "intersite", "plant"]
+    assert "device:zeek-wan" in intersite.sensors
+    inbound = paths[("internet", "segment:dmz")]
+    assert [hop.link for hop in inbound.hops][0] == "upstream"
+    assert {"device:EDGE", "device:zeek-outside", "device:zeek-dmz"} <= set(inbound.sensors)

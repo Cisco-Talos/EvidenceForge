@@ -3194,6 +3194,43 @@ export interface components {
             draft_display_name?: string | null;
         };
         /**
+         * CoverageHop
+         * @description One link a flow crosses, entered from a forwarding device or the source.
+         */
+        CoverageHop: {
+            /** Link */
+            link: string;
+            /** Forwarder */
+            forwarder?: string | null;
+        };
+        /**
+         * CoveragePath
+         * @description The sensors that observe a flow from one subnet (or the Internet) to another.
+         */
+        CoveragePath: {
+            /** Source */
+            source: string;
+            /** Destination */
+            destination: string;
+            /**
+             * Sensors
+             * @description Observing device IDs.
+             */
+            sensors?: string[];
+            /**
+             * Delivered
+             * @description Routed only: whether it arrives.
+             */
+            delivered?: boolean | null;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Hops */
+            hops?: components["schemas"]["CoverageHop"][];
+        };
+        /**
          * DependencyHealth
          * @description Live dependency readiness independent of optional scenario validation.
          */
@@ -4701,6 +4738,7 @@ export interface components {
             };
             /** Public Cidrs */
             public_cidrs?: string[];
+            coverage?: components["schemas"]["TopologyCoverage"] | null;
         };
         /**
          * RoutingDevice
@@ -5418,6 +5456,24 @@ export interface components {
             monitored: boolean;
             /** Interface Name */
             interface_name: string | null;
+        };
+        /**
+         * TopologyCoverage
+         * @description Which sensors see traffic between every pair of subnets and the Internet.
+         *
+         *     Computed by the generation engine's visibility rules, from one representative address per
+         *     subnet. A source equal to its destination means traffic within that subnet.
+         */
+        TopologyCoverage: {
+            /**
+             * Endpoints
+             * @description Representative addresses.
+             */
+            endpoints?: {
+                [key: string]: string;
+            };
+            /** Paths */
+            paths?: components["schemas"]["CoveragePath"][];
         };
         /**
          * TopologyDevice

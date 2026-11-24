@@ -1051,11 +1051,31 @@ function layoutWith(model: DiagramModel, layers: DiagramLayers, columns: number,
       mid = { x: (gapLeft + (left.y === right.y ? rightSite.x : jog)) / 2, y: left.y };
     } else if (stacked) {
       const [upper, lower] = a.y <= b.y ? [a, b] : [b, a];
+      const [upperId, lowerId] = a.y <= b.y ? [first.equipmentId, second.equipmentId] : [second.equipmentId, first.equipmentId];
       const gapY = upperSite.y + upperSite.height + (lowerSite.y - upperSite.y - upperSite.height) / 2;
-      const from = upper.y + (hidden.has(a.y <= b.y ? first.equipmentId : second.equipmentId) ? 0 : GLYPH / 2);
-      const to = lower.y - (hidden.has(a.y <= b.y ? second.equipmentId : first.equipmentId) ? 0 : GLYPH / 2);
-      path = `M ${upper.x} ${from} V ${gapY} H ${lower.x} V ${to}`;
-      mid = { x: lower.x + 12, y: gapY + 4 };
+      const clear = (x1: number, y1: number, x2: number, y2: number) => !crosses(state, [upperId, lowerId], x1, y1, x2, y2);
+      // Leave a site straight down or up when nothing is in the way; otherwise along the device's
+      // own row to the site's side, and down (or up) inside the frame's edge.
+      const exit = (glyph: { x: number; y: number }, id: string, site: PlacedSite, edgeY: number) => {
+        if (hidden.has(id)) return { points: [] as [number, number][], x: glyph.x, start: glyph.y };
+        const outward = Math.sign(edgeY - glyph.y);
+        const start = glyph.y + outward * GLYPH / 2;
+        if (clear(glyph.x, start, glyph.x, edgeY)) return { points: [], x: glyph.x, start };
+        const towards = lower.x >= upper.x ? [1, -1] : [-1, 1];
+        for (const side of id === upperId ? towards : towards.map((s) => -s)) {
+          // The run follows the frame's inner padding, which subnet cards never occupy.
+          const sideX = side > 0 ? site.x + site.width - SITE_PAD / 2 : site.x + SITE_PAD / 2;
+          if (clear(glyph.x + side * GLYPH / 2, glyph.y, sideX, glyph.y) && clear(sideX, glyph.y, sideX, edgeY)) {
+            return { points: [[glyph.x + side * GLYPH / 2, glyph.y], [sideX, glyph.y]] as [number, number][], x: sideX, start: glyph.y };
+          }
+        }
+        return { points: [], x: glyph.x, start };
+      };
+      const top = exit(upper, upperId, upperSite, upperSite.y + upperSite.height);
+      const bottom = exit(lower, lowerId, lowerSite, lowerSite.y);
+      path = orthogonalPath([...top.points.length ? top.points : [[top.x, top.start] as [number, number]], [top.x, gapY], [bottom.x, gapY],
+        ...bottom.points.length ? [...bottom.points].reverse() : [[bottom.x, bottom.start] as [number, number]]]);
+      mid = { x: bottom.x + 12, y: gapY + 4 };
       labelAnchor = "start";
     } else {
       const laneY = below + lane++ * 12;
@@ -1136,6 +1156,30 @@ export function siteDeviceLine(devices: string[]): string {
 }
 
 /** A collapsed site card wide enough for its summary lines. */
+/** An M/H/V path through corner points that differ in only one coordinate at a time. */
+function orthogonalPath(points: [number, number][]): string {
+  const [[x0, y0], ...rest] = points;
+  let [x, y] = [x0, y0];
+  const commands = [`M ${x0} ${y0}`];
+  for (const [nx, ny] of rest) {
+    if (nx !== x) commands.push(`H ${nx}`);
+    if (ny !== y) commands.push(`V ${ny}`);
+    [x, y] = [nx, ny];
+  }
+  return commands.join(" ");
+}
+
+/** Whether a straight horizontal or vertical run would pass over a subnet card or another device. */
+function crosses(state: LayoutState, except: string[], x1: number, y1: number, x2: number, y2: number): boolean {
+  const [left, right] = [Math.min(x1, x2), Math.max(x1, x2)];
+  const [top, bottom] = [Math.min(y1, y2), Math.max(y1, y2)];
+  const overlaps = (x: number, y: number, width: number, height: number) =>
+    left < x + width && right > x && top < y + height && bottom > y;
+  return state.zones.some(({ x, y, width, height }) => overlaps(x, y, width, height))
+    || state.equipment.some(({ equipment, x, y }) => !except.includes(equipment.id)
+      && overlaps(x - GLYPH / 2, y - GLYPH / 2, GLYPH, GLYPH));
+}
+
 function collapsedWidth(part: Component): number {
   const devices = part.trees.flatMap(function names(tree): string[] { return [tree.equipment.name, ...tree.children.flatMap(names)]; });
   return Math.max(COLLAPSED_SITE.width, Math.min(420, textWidth(siteDeviceLine(devices), 11) + 40), textWidth(part.label, 14) + 40);

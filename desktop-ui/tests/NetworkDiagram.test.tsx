@@ -987,6 +987,35 @@ test("stacked sites connect through the gap between them, never from below", () 
   expect(Math.min(...ys)).toBeGreaterThanOrEqual(upper.y);
 });
 
+test.each([
+  ["both expanded", (scene: DiagramScene) => scene.sites.map(({ id }) => [id, true])],
+  ["the lower site collapsed", (scene: DiagramScene) => scene.sites.map(({ id }, index) => [id, index === 0])],
+])("a link between stacked sites never crosses a subnet card (%s)", (_name, choices) => {
+  // Several HQ subnets put a row of cards under the VPN router, as in a real headquarters.
+  const base = twoSites();
+  const lans = ["a", "b", "c", "d", "e"];
+  const topology: TopologyGraph = { ...base,
+    segments: [...base.segments, ...lans.map((name, index) => segment(`hq-${name}`, `10.1.${10 + index}.0/24`))],
+    routing: { ...base.routing!, links: { ...base.routing!.links, ...Object.fromEntries(lans.map((name, index) =>
+      [`hq-${name}`, { segment: `hq-${name}`, interfaces: { core: { name, ip: `10.1.${10 + index}.1` } } }])) } } };
+  const narrow = { width: 900, height: 1400 };
+  const open = layoutNetworkDiagram(topology, LAYERS, { viewport: narrow });
+  const scene = layoutNetworkDiagram(topology, LAYERS, { viewport: narrow, siteChoices: Object.fromEntries(choices(open)) });
+  const [upper, lower] = [...scene.sites].sort((a, b) => a.y - b.y);
+  expect(lower.y).toBeGreaterThan(upper.y + upper.height);
+  const points = pathPoints(scene.wires.find(({ key }) => key === "link:site-wan")!.path);
+  const zones = scene.zones.flatMap(function flatten(zone): typeof scene.zones { return [zone, ...zone.children.flatMap(flatten)]; });
+  expect(zones.length).toBeGreaterThan(0);
+  points.slice(1).forEach(([x, y], index) => {
+    const [px, py] = points[index];
+    expect(px === x || py === y).toBe(true);
+    for (const zone of zones) {
+      const crosses = Math.min(px, x) < zone.x + zone.width && Math.max(px, x) > zone.x && Math.min(py, y) < zone.y + zone.height && Math.max(py, y) > zone.y;
+      expect(crosses, `${zone.zone.name} at ${px},${py} → ${x},${y}`).toBe(false);
+    }
+  });
+});
+
 test("sites that each reach the Internet share the top row under their own clouds", () => {
   const topology = twoSites();
   const both: TopologyGraph = { ...topology, devices: [...topology.devices, firewall("PLANT-FW", {}, { name: "plantfw" })],

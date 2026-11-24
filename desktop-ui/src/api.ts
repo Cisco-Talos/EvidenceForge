@@ -188,6 +188,31 @@ export class StudioApi {
     }
   }
 
+  /** Save an image the page rendered: a native save dialog in Studio, a download in a browser. */
+  async saveImage(image: Blob, filename: string): Promise<DownloadResult> {
+    if (!isTauri()) {
+      const objectUrl = URL.createObjectURL(image);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      return { status: "browser" };
+    }
+    const location = await this.request<{ directory: string | null }>("/v1/export-location").catch(() => ({ directory: null }));
+    const headers: Record<string, string> = { "x-eforge-filename": encodeURIComponent(filename) };
+    if (location.directory) headers["x-eforge-directory"] = encodeURIComponent(location.directory);
+    const saved = await invoke<string | null>("save_diagram_image", new Uint8Array(await image.arrayBuffer()), { headers });
+    if (!saved) return { status: "cancelled" };
+    const separator = Math.max(saved.lastIndexOf("/"), saved.lastIndexOf("\\"));
+    if (separator > 0) {
+      await this.request("/v1/export-location", "PUT", { directory: saved.slice(0, separator) }).catch(() => undefined);
+    }
+    return { status: "saved", path: saved };
+  }
+
   async cancelExport(id: string): Promise<void> {
     if (isTauri()) await invoke("cancel_studio_export", { id });
   }

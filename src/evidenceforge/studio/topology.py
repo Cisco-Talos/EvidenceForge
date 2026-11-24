@@ -8,7 +8,7 @@ import ipaddress
 from collections import Counter
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG, SourceCatalogError
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
@@ -193,12 +193,53 @@ class NetworkChatContext(BaseModel):
         return value
 
 
+class CoverageHop(BaseModel):
+    """One link a flow crosses, entered from a forwarding device or the source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    link: str
+    forwarder: str | None = None
+
+
+class CoveragePath(BaseModel):
+    """The sensors that observe a flow from one subnet (or the Internet) to another."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str
+    destination: str
+    sensors: list[str] = Field(default_factory=list, description="Observing device IDs.")
+    delivered: bool | None = Field(default=None, description="Routed only: whether it arrives.")
+    reason: str = ""
+    hops: list[CoverageHop] = Field(default_factory=list)
+
+
+class TopologyCoverage(BaseModel):
+    """Which sensors see traffic between every pair of subnets and the Internet.
+
+    Computed by the generation engine's visibility rules, from one representative address per
+    subnet. A source equal to its destination means traffic within that subnet.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    endpoints: dict[str, str] = Field(default_factory=dict, description="Representative addresses.")
+    paths: list[CoveragePath] = Field(default_factory=list)
+
+
+INTERNET_ENDPOINT = "internet"
+# Documentation addresses stand in for the Internet. They are used only if no segment holds them.
+_INTERNET_CANDIDATES = ("198.51.100.200", "203.0.113.200", "2001:db8:ffff::200")
+
+
 class RoutedTopologyGraph(TopologyGraph):
     """Topology with optional authored routing and physical TAP attachments."""
 
     routing: RoutingTopology | None = None
     link_taps: dict[str, LinkTap] = Field(default_factory=dict)
     public_cidrs: list[str] = Field(default_factory=list)
+    coverage: TopologyCoverage | None = None
 
 
 class RoutedNetworkChatContext(NetworkChatContext):
@@ -321,6 +362,101 @@ def _primary_segment(ip: str, segment_ids: list[str], cidrs: dict[str, str]) -> 
         if best is None or prefix > best[0] or (prefix == best[0] and segment_id < best[1]):
             best = (prefix, segment_id)
     return best[1] if best else None
+
+
+def _representative(network: ipaddress.IPv4Network | ipaddress.IPv6Network, offset: int) -> str:
+    """An address inside a range, near its start, that is not the network address."""
+    size = network.num_addresses
+    if size <= 2:
+        return str(network.network_address + (size - 1))
+    return str(network.network_address + max(1, min(offset, size - 2)))
+
+
+def project_coverage(
+    environment: dict[str, Any], segments: list[TopologySegment], hosts: list[TopologyHost]
+) -> TopologyCoverage | None:
+    """Ask the engine which sensors observe traffic between every pair of subnets.
+
+    Returns None when the environment declares no sensors or cannot be compiled, for example
+    an incomplete pack fragment.
+    """
+    raw = environment.get("network")
+    if not isinstance(raw, dict) or not raw.get("sensors") or not segments:
+        return None
+    try:
+        network = NetworkConfig.model_validate(raw)
+        systems = [System.model_validate(entry) for entry in environment.get("systems") or []]
+        engine = NetworkVisibilityEngine(network, systems)
+    except (ValidationError, ValueError, TypeError):
+        return None
+    ranges: dict[str, ipaddress.IPv4Network | ipaddress.IPv6Network] = {}
+    for segment in segments:
+        try:
+            ranges[segment.id] = ipaddress.ip_network(segment.cidr, strict=False)
+        except ValueError:
+            continue
+    members: dict[str, list[str]] = {}
+    for host in hosts:
+        if host.primary_segment_id:
+            members.setdefault(host.primary_segment_id, []).append(host.ip)
+    for addresses in members.values():
+        addresses.sort(key=ipaddress.ip_address)
+    # Prefer real hosts; an empty subnet uses addresses near the start of its range.
+    first = {
+        segment_id: (members.get(segment_id) or [_representative(network_range, 10)])[0]
+        for segment_id, network_range in ranges.items()
+    }
+    second = {
+        segment_id: (members.get(segment_id, [])[1:] or [_representative(network_range, 11)])[0]
+        for segment_id, network_range in ranges.items()
+    }
+    endpoints = dict(first)
+    families = {network_range.version for network_range in ranges.values()}
+    for candidate in _INTERNET_CANDIDATES:
+        address = ipaddress.ip_address(candidate)
+        if address.version in families and not any(
+            address in network_range
+            for network_range in ranges.values()
+            if network_range.version == address.version
+        ):
+            endpoints[INTERNET_ENDPOINT] = candidate
+            break
+    device_ids = {
+        (sensor.hostname or sensor.name): f"device:{sensor.hostname or sensor.name}"
+        for sensor in network.sensors
+    }
+    paths: list[CoveragePath] = []
+    for source, source_ip in endpoints.items():
+        for destination, destination_ip in endpoints.items():
+            if source == destination == INTERNET_ENDPOINT:
+                continue
+            if source == destination:
+                destination_ip = second[destination]
+            if source_ip == destination_ip:
+                continue
+            try:
+                observed = engine.get_observing_sensors(source_ip, destination_ip)
+                flow = engine.routed_connection(source_ip, destination_ip)
+            except ValueError:
+                continue
+            paths.append(
+                CoveragePath(
+                    source=source,
+                    destination=destination,
+                    sensors=sorted(
+                        device_ids[sensor.hostname or sensor.name] for sensor in observed
+                    ),
+                    delivered=None if flow is None else flow.forward.delivered,
+                    reason="" if flow is None else flow.forward.reason,
+                    hops=[]
+                    if flow is None
+                    else [
+                        CoverageHop(link=hop.link, forwarder=hop.forwarder)
+                        for hop in flow.forward.hops
+                    ],
+                )
+            )
+    return TopologyCoverage(endpoints=endpoints, paths=paths)
 
 
 def project_topology(environment: dict[str, Any]) -> RoutedTopologyGraph:
@@ -497,7 +633,9 @@ def project_topology(environment: dict[str, Any]) -> RoutedTopologyGraph:
                 default_action=sensor.default_action if sensor.type == "firewall" else None,
             )
         )
+    coverage = project_coverage(environment, diagram_segments, hosts)
     return RoutedTopologyGraph(
+        coverage=coverage,
         segments=diagram_segments,
         hosts=hosts,
         devices=devices,

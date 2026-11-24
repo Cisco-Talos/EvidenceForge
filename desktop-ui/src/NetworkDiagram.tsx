@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useEffectEvent, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import {
-  AppWindow, BrickWallFire, ChevronDown, CircleHelp, Cloud, Database, Expand, FileText, Folder, Globe, Info, KeyRound, Layers,
-  Mail, Maximize, Minimize, Monitor, Network, Server, X, ZoomIn, ZoomOut,
+  AppWindow, BrickWallFire, ChevronDown, CircleHelp, ClipboardCopy, Cloud, Download, Database, Expand, FileText, Folder, Globe, Info, KeyRound, Layers,
+  Mail, Maximize, Minimize, Monitor, Network, Server, Sparkles, X, ZoomIn, ZoomOut,
 } from "lucide-react";
 import { Tooltip } from "radix-ui";
-import { searchDiagram, type SearchResult } from "./networkSearch";
-import type { NetworkChatContext, TopologyGraph } from "./api";
-import { captureNetworkView } from "./captureNetworkView";
+import { firewallRuleFilter, searchDiagram, type SearchResult } from "./networkSearch";
+import { groupRows, indexCoverage, INTERNET, TIER_LABELS, TIER_ORDER, traceEntities, type CoverageIndex, type Direction } from "./networkCoverage";
+import type { DownloadResult, NetworkChatContext, TopologyGraph } from "./api";
+import { captureNetworkView, captureViewImage, copyViewImage } from "./captureNetworkView";
+import { changesSinceLastShown, rememberShown, type DiagramChanges } from "./networkDiff";
 import { Modal } from "./Modal";
 import {
-  buildDiagramModel, categoryLabel, hostCategory, layoutNetworkDiagram, MIN_READABLE_SCALE, shortOs, siteDeviceLine,
+  buildDiagramModel, categoryLabel, hostCategory, layoutNetworkDiagram, MIN_READABLE_SCALE, shortOs, siteDeviceLine, textWidth,
   type DiagramDevice, type DiagramEntity, type DiagramHost, type DiagramLayers, type DiagramLinkKind, type DiagramScene,
   type Bounds, type Detail, type Equipment, type HostCategory, type PlacedChip, type PlacedHost, type PlacedZone, type Zone,
 } from "./networkDiagramLayout";
@@ -192,8 +194,76 @@ function EvidenceList({ device }: { device: DiagramDevice }) {
   </span>)}</>;
 }
 
-function DiagramInspector({ entity, scene, graph, onSelect, onFocus, onClose, askAction }: {
-  entity: DiagramEntity; scene: DiagramScene; graph: TopologyGraph;
+/** Which network evidence exists for traffic to or from one subnet, grouped by how much it shows. */
+function CoverageSection({ zone, coverage, scene, onTrace, onSelect, hostNote }: {
+  zone: Zone; coverage: CoverageIndex; scene: DiagramScene; hostNote?: string;
+  onTrace: (entities: Set<string> | null) => void; onSelect: (id: string) => void;
+}) {
+  const [direction, setDirection] = useState<Direction>("to");
+  const groups = groupRows(coverage.rows(zone.id, direction), zone.id);
+  if (!groups.length) return null;
+  const peerName = (peer: string) => peer === INTERNET ? "the Internet" : scene.model.zones.get(peer)?.name ?? peer;
+  const sensorName = (id: string) => coverage.devices.get(id)?.hostname ?? id;
+  return <section className="diagram-coverage" aria-label="Network evidence">
+    <h5>Network evidence</h5>
+    <div className="diagram-coverage-direction" role="group" aria-label="Traffic direction">
+      <button type="button" aria-pressed={direction === "to"} onClick={() => setDirection("to")}>To this subnet</button>
+      <button type="button" aria-pressed={direction === "from"} onClick={() => setDirection("from")}>From this subnet</button>
+    </div>
+    {hostNote && <p className="muted">{hostNote}</p>}
+    {groups.map(({ tier, rows }) => <div key={tier} className="diagram-coverage-group" data-tier={tier}>
+      <h6><span className="diagram-tier-mark" data-tier={tier} aria-hidden="true" />{TIER_LABELS[tier]}</h6>
+      <ul>{rows.map(({ peer, path }) => <li key={peer}
+        onMouseEnter={() => onTrace(traceEntities(path, scene.model))} onMouseLeave={() => onTrace(null)}>
+        <button type="button" onFocus={() => onTrace(traceEntities(path, scene.model))} onBlur={() => onTrace(null)}
+          onClick={() => peer !== zone.id && onSelect(peer === INTERNET ? [...scene.model.internets.keys()][0] ?? peer : peer)}>
+          {peer === zone.id ? "Within this subnet" : `${direction === "to" ? "From" : "To"} ${peerName(peer)}`}
+        </button>
+        <span>{path.sensors.length ? path.sensors.map(sensorName).join(", ") : "No sensor"}</span>
+        {path.delivered === false && <small>Not delivered{path.reason ? `: ${path.reason}` : ""}</small>}
+      </li>)}</ul>
+    </div>)}
+    <p className="muted diagram-coverage-note">From the generation engine's routing and visibility rules for this revision. Hover over a row to trace its path.</p>
+  </section>;
+}
+
+/** Short rule lists are read at a glance; longer ones get a filter. */
+const RULE_FILTER_THRESHOLD = 6;
+
+function FirewallRules({ device, segments }: { device: DiagramDevice; segments: TopologyGraph["segments"] }) {
+  const [filter, setFilter] = useState("");
+  const nat = device.nat_rules ?? [];
+  const policy = device.policy ?? [];
+  if (!nat.length && !policy.length && !device.default_action) return null;
+  const matcher = firewallRuleFilter(filter, segments);
+  // Keep each rule's position, because policy is evaluated in order.
+  const shownNat = nat.map((rule, index) => ({ rule, index })).filter(({ rule }) => !matcher || matcher.nat(rule));
+  const shownPolicy = policy.map((rule, index) => ({ rule, index })).filter(({ rule }) => !matcher || matcher.policy(rule));
+  const count = (shown: number, total: number) => <span>{shown === total ? total : `${shown} of ${total}`}</span>;
+  const total = nat.length + policy.length;
+  return <>
+    {total >= RULE_FILTER_THRESHOLD && <input type="search" className="diagram-host-filter diagram-rule-filter" {...PLAIN_INPUT}
+      placeholder={`Filter ${total} rules`} aria-label="Filter firewall rules" value={filter} onChange={(event) => setFilter(event.target.value)}
+      title="Filter by action, subnet, address or port. A full IP address finds the rules that apply to it." />}
+    {matcher && !shownNat.length && !shownPolicy.length && !device.default_action && <p className="muted">No rules match.</p>}
+    {shownNat.length > 0 && <><h5>Address translation {count(shownNat.length, nat.length)}</h5><ul className="diagram-associations">
+      {shownNat.map(({ rule, index }) => <li key={index}>{rule.type === "static"
+        ? <><code>{rule.real_ip}</code><span>↔</span><code>{rule.mapped_ip}</code><span>static NAT</span></>
+        : <><span>{(rule.src ?? []).join(", ") || "any"}</span><span>→</span><code>{rule.mapped_ip}</code><span>dynamic PAT</span></>}
+      </li>)}
+    </ul></>}
+    {(policy.length > 0 || device.default_action) && <><h5>Policy {policy.length > 0 && count(shownPolicy.length, policy.length)}</h5><ol className="diagram-policy">
+      {shownPolicy.map(({ rule, index }) => <li key={index} value={index + 1} data-action={rule.action}>
+        <strong>{rule.action}</strong> {rule.src} → {rule.dst}{rule.ports?.length ? ` · ports ${rule.ports.join(", ")}` : ""}
+      </li>)}
+      {device.default_action && <li value={policy.length + 1} data-action={device.default_action}><strong>{device.default_action}</strong> everything else</li>}
+    </ol></>}
+  </>;
+}
+
+function DiagramInspector({ entity, scene, graph, coverage, onTrace, onSelect, onFocus, onClose, askAction }: {
+  entity: DiagramEntity; scene: DiagramScene; graph: TopologyGraph; coverage?: CoverageIndex;
+  onTrace: (entities: Set<string> | null) => void;
   onSelect: (id: string) => void; onFocus: (id: string) => void; onClose: () => void; askAction?: ReactNode;
 }) {
   const findings = graph.findings.filter((finding) => finding.entity_id === entity.id
@@ -234,11 +304,14 @@ function DiagramInspector({ entity, scene, graph, onSelect, onFocus, onClose, as
       </ul></>}
       {zone.link && <><h5>Interfaces</h5><ul className="diagram-associations">{Object.entries(zone.link.link.interfaces).map(([device, iface]) =>
         <li key={device}><strong>{device}</strong><span>{iface.name}</span><code>{iface.ip}</code></li>)}</ul></>}
-      {zone.hosts.length > 0 && <HostTable key={zone.id} hosts={zone.hosts} onSelect={onSelect} />}
+      {coverage && !zone.unassigned && <CoverageSection key={"coverage:" + zone.id} zone={zone} coverage={coverage} scene={scene} onTrace={onTrace} onSelect={onSelect} />}
+      {zone.hosts.length > 0 && <HostTable key={"hosts:" + zone.id} hosts={zone.hosts} onSelect={onSelect} />}
     </>;
   } else if (entity.kind === "host") {
     const zone = [...model.zones.values()].find(({ hosts }) => hosts.includes(entity.host));
-    body = <><HostFacts host={entity.host} />{zone && <p>In {link(zone.id, zone.name)}</p>}</>;
+    body = <><HostFacts host={entity.host} />{zone && <p>In {link(zone.id, zone.name)}</p>}
+      {coverage && zone && !zone.unassigned && <CoverageSection key={"coverage:" + zone.id} zone={zone} coverage={coverage} scene={scene} onTrace={onTrace} onSelect={onSelect}
+        hostNote={`For traffic between subnets, measured from a representative address in ${zone.name}.`} />}</>;
   } else if (entity.kind === "equipment") {
     const { equipment } = entity;
     const attachments = model.attachments.filter(({ equipmentId }) => equipmentId === equipment.id);
@@ -253,6 +326,7 @@ function DiagramInspector({ entity, scene, graph, onSelect, onFocus, onClose, as
         {equipment.device.default_interface !== null && <><dt>Default interface</dt><dd>{equipment.device.default_interface}</dd></>}
       </dl>}
       {equipment.device?.description && <p>{equipment.device.description}</p>}
+      {equipment.device && <FirewallRules device={equipment.device} segments={graph.segments} />}
       {equipment.host && <HostFacts host={equipment.host} />}
       {(attachments.length > 0 || transits.length > 0) && <><h5>Interfaces</h5><ul className="diagram-associations">
         {attachments.map((attachment) => {
@@ -379,7 +453,7 @@ function DiagramSearch({ search, onChoose }: { search: (query: string) => Search
   return <div className="diagram-search" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false); }}>
     <input ref={input} type="search" role="combobox" aria-label="Find in diagram" {...PLAIN_INPUT} aria-expanded={open && results.length > 0}
       aria-controls={list} aria-activedescendant={open && results[index] ? `${list}-${index}` : undefined}
-      placeholder="Find host, IP, subnet or sensor" value={query}
+      placeholder="Find host, IP or subnet" value={query}
       onChange={(event) => { setQuery(event.target.value); setIndex(0); setOpen(true); }}
       onFocus={() => setOpen(true)}
       onKeyDown={(event) => {
@@ -396,6 +470,58 @@ function DiagramSearch({ search, onChoose }: { search: (query: string) => Search
       </li>)}
       {!results.length && <li className="diagram-search-empty" role="presentation">No matches</li>}
     </ul>}
+  </div>;
+}
+
+async function browserSave(image: Blob, filename: string): Promise<DownloadResult> {
+  const objectUrl = URL.createObjectURL(image);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  return { status: "browser" };
+}
+
+/** Saves the image on click; the menu beside it can copy it to the clipboard instead. */
+function ExportMenu({ onSave, onCopy }: { onSave: () => void; onCopy: () => void }) {
+  const [open, setOpen] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => { if (!menu.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const choose = (action: () => void) => { setOpen(false); action(); };
+  return <div className="diagram-export" ref={menu} onKeyDown={(event) => { if (event.key === "Escape" && open) { event.stopPropagation(); setOpen(false); } }}>
+    <button type="button" className="button-quiet icon-only" aria-label="Save image of this view" title="Save an image of this view" onClick={onSave}>
+      <Download size={16} aria-hidden="true" />
+    </button>
+    <button type="button" className="button-quiet diagram-export-more" aria-label="More export options" aria-haspopup="menu" aria-expanded={open}
+      onClick={() => setOpen(!open)}><ChevronDown size={14} aria-hidden="true" /></button>
+    {open && <div className="diagram-export-menu" role="menu" aria-label="Export">
+      <button type="button" role="menuitem" onClick={() => choose(onSave)}><Download size={14} aria-hidden="true" />Save image as PNG…</button>
+      <button type="button" role="menuitem" onClick={() => choose(onCopy)}><ClipboardCopy size={14} aria-hidden="true" />Copy image to clipboard</button>
+    </div>}
+  </div>;
+}
+
+function ChangesBanner({ changes, showing, onToggle, onDismiss }: {
+  changes: DiagramChanges; showing: boolean; onToggle: () => void; onDismiss: () => void;
+}) {
+  const parts = [changes.added.size && `${changes.added.size} added`, changes.changed.size && `${changes.changed.size} changed`,
+    changes.removed.length && `${changes.removed.length} removed`].filter(Boolean);
+  return <div className="diagram-changes" role="status">
+    <span><strong>Changed since the revision you last viewed:</strong> {parts.join(", ")}</span>
+    {changes.removed.length > 0 && <details>
+      <summary>Removed</summary>
+      <ul>{changes.removed.map(({ id, label, kind }) => <li key={id}>{label} <small>{kind}</small></li>)}</ul>
+    </details>}
+    <button type="button" className="button-quiet" aria-pressed={showing} onClick={onToggle}>{showing ? "Hide changes" : "Show changes"}</button>
+    <button type="button" className="icon-button" aria-label="Dismiss changes" onClick={onDismiss}><X size={14} aria-hidden="true" /></button>
   </div>;
 }
 
@@ -478,7 +604,7 @@ function LayersMenu({ layers, available, showScopes, scopeCount, onLayer, onScop
   const total = keys.filter((key) => available[key]).length;
   return <div className="diagram-layers" ref={menu} onKeyDown={(event) => { if (event.key === "Escape" && open) { event.stopPropagation(); setOpen(false); } }}>
     <button type="button" className="button-quiet" aria-expanded={open} aria-haspopup="true" onClick={() => setOpen(!open)}>
-      <Layers size={15} aria-hidden="true" /> Layers <span className="muted">{shown}/{total}</span><ChevronDown size={14} aria-hidden="true" />
+      <Layers size={15} aria-hidden="true" /> Layers {shown < total && <span className="muted">{shown}/{total}</span>}<ChevronDown size={14} aria-hidden="true" />
     </button>
     {open && <div className="diagram-layers-panel" role="group" aria-label="Diagram layers">
       <Tooltip.Provider delayDuration={200}>
@@ -546,9 +672,15 @@ function DiagramKey({ scene, showScopes, scopes, segments }: { scene: DiagramSce
   </details>;
 }
 
-export function NetworkDiagram({ graph, context, description, actions, revision, onAsk }: {
+export function NetworkDiagram({ graph, context, description, actions, revision, onAsk, historyKey, exportName, onSaveImage }: {
   graph: TopologyGraph; context?: string; description?: string; actions?: ReactNode;
   revision?: string; onAsk?: (context: NetworkChatContext) => Promise<void>;
+  /** File name, without extension, suggested when saving the diagram image. */
+  exportName?: string;
+  /** Saves a rendered image; Studio passes its native save dialog. Defaults to a browser download. */
+  onSaveImage?: (image: Blob, filename: string) => Promise<DownloadResult>;
+  /** Identifies the item across revisions, so the diagram can show what changed since it was last shown. */
+  historyKey?: string;
 }) {
   const title = useId();
   const viewport = useRef<SVGSVGElement>(null);
@@ -570,6 +702,13 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
   const [pendingReveal, setPendingReveal] = useState<{ id: string; tries: number; fit?: boolean } | null>(null);
   const [focusZone, setFocusZone] = useState<string | null>(null);
   const [focusSite, setFocusSite] = useState<string | null>(null);
+  const [lens, setLens] = useState<"topology" | "coverage">("topology");
+  const [trace, setTrace] = useState<Set<string> | null>(null);
+  const [changes, setChanges] = useState<DiagramChanges | null>(() => historyKey && revision ? changesSinceLastShown(historyKey, revision, graph) : null);
+  const [showChanges, setShowChanges] = useState(true);
+  const [exportStatus, setExportStatus] = useState("");
+  useEffect(() => { if (historyKey && revision) rememberShown(historyKey, revision, graph); }, [historyKey, revision, graph]);
+  const changeOf = (id: string) => !changes || !showChanges ? undefined : changes.added.has(id) ? "added" : changes.changed.has(id) ? "changed" : undefined;
   const [size, setSize] = useState(INITIAL_SIZE);
   const [camera, setCamera] = useState<Camera | "fit" | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -751,6 +890,10 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
       y: (area.top + area.bottom) / 2 - (box.y + box.height / 2) * view.scale });
   }
 
+  const coverage = useMemo(() => indexCoverage(graph, (id) => id === INTERNET || fullModel.zones.has(id)), [graph, fullModel]);
+  // A traced flow lights the links it crosses and the devices that forward it.
+  const traced = (entities: string[]) => !!trace && (entities.some((id) => id.startsWith("link:") && trace.has(id))
+    || (entities.some((id) => trace.has(id) && scene.model.equipment.has(id)) && entities.some((id) => trace.has(id) && scene.model.zones.has(id))));
   const search = useCallback((query: string) => searchDiagram(graph, fullModel, query), [graph, fullModel]);
   const hostZone = (id: string) => [...fullModel.zones.values()].find(({ hosts }) => hosts.some((member) => member.id === id));
 
@@ -816,6 +959,26 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     setSelected((current) => current === id ? null : id);
   }
 
+  /** Save or copy exactly the map as shown: its zoom, pan, collapsed sites and layers. */
+  async function exportImage(mode: "save" | "copy") {
+    if (!viewport.current) return;
+    const done = (message: string) => { setExportStatus(message); window.setTimeout(() => setExportStatus(""), 4000); };
+    try {
+      if (mode === "copy") {
+        setExportStatus("Copying…");
+        await copyViewImage(viewport.current);
+        done("Image copied");
+      } else {
+        const image = await captureViewImage(viewport.current);
+        const name = `${(exportName ?? "network-diagram").trim().replace(/[\\/:*?"<>|]+/g, "-") || "network-diagram"}.png`;
+        const result = await (onSaveImage ?? browserSave)(image, name);
+        done(result.status === "cancelled" ? "" : result.status === "saved" ? "Image saved" : "Image downloaded");
+      }
+    } catch (error) {
+      done(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function askAbout(entity?: DiagramEntity) {
     if (!onAsk || !revision || !viewport.current || asking) return;
     setAsking(true);
@@ -823,7 +986,7 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     try {
       const image = await captureNetworkView(viewport.current).catch(() => null);
       await onAsk({
-        revision, topology: graph, image, firewall_scopes_visible: showScopes && scopes.length > 0,
+        revision, topology: { ...graph, coverage: undefined }, image, firewall_scopes_visible: showScopes && scopes.length > 0,
         selected_id: entity?.id, selection_label: entity && entityLabel(entity),
         visible_layers: [
           ...(layers.sensors && layerAvailability.sensors ? ["sensors" as const] : []),
@@ -856,8 +1019,8 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     const family = placed.device.evidence?.[0]?.family ?? "other";
     const width = placed.width;
     return <g key={placed.key} className="diagram-node diagram-chip" transform={`translate(${x + placed.x} ${y + placed.y})`}
-      data-family={family} data-placement={placed.device.placement} data-related={active === placed.device.id}
-      data-finding={findings.has(placed.device.id) || undefined}
+      data-family={family} data-placement={placed.device.placement} data-related={active === placed.device.id || !!trace?.has(placed.device.id)}
+      data-finding={findings.has(placed.device.id) || undefined} data-change={changeOf(placed.device.id)}
       {...interactive(placed.device.id, sensorLabel(placed.device) + findingLabel(placed.device.id))}>
       <rect className="diagram-chip-box" width={width} height={18} rx={9} />
       {placed.device.placement === "tap" ? <circle className="diagram-chip-mark" cx={10} cy={9} r={3.4} />
@@ -871,6 +1034,7 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     const { host } = card;
     return <g key={zone.zone.id + host.id} className="diagram-node diagram-host-card" transform={`translate(${zone.x + card.x} ${zone.y + card.y})`}
       data-compact={compact || undefined} data-public={!!host.public_address || undefined} data-finding={findings.has(host.id) || undefined}
+      data-change={changeOf(host.id)}
       {...interactive(host.id, hostLabel(host) + findingLabel(host.id))}>
       <rect className="diagram-host-box" width={card.width} height={card.height} rx={compact ? 6 : 8} />
       {compact ? <>
@@ -895,13 +1059,19 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
       <g key={model.id} className="diagram-node diagram-zone" transform={`translate(${zone.x} ${zone.y})`}
         data-unassigned={model.unassigned || undefined} data-covered={covered.has(model.id) || undefined}
         data-finding={findings.has(model.id) || undefined} onDoubleClick={() => focusOn(model.id)}
-        {...interactive(model.id, zoneLabel(model) + findingLabel(model.id))}>
+        data-coverage={lens === "coverage" ? coverage?.weakest(model.id) : undefined} data-traced={trace?.has(model.id) || undefined}
+        data-change={changeOf(model.id)}
+        {...interactive(model.id, zoneLabel(model) + findingLabel(model.id)
+          + (lens === "coverage" && coverage?.within(model.id) === "none" ? ", traffic within it is not observed" : ""))}>
         {segmentScopes?.map((scope, index) => <rect key={scope.id} className="diagram-scope-highlight" x={-4 - index * 4} y={-4 - index * 4}
           width={zone.width + 8 + index * 8} height={zone.height + 8 + index * 8} rx={12 + index * 2} style={{ color: scope.color }} strokeDasharray={scope.dash}>
           <title>{scope.label}</title></rect>)}
         <rect className="diagram-zone-box" width={zone.width} height={zone.height} />
         <text x={12} y={20} className="diagram-zone-name" aria-hidden="true">{model.name}</text>
         {findings.has(model.id) && <FindingBadge x={zone.width - 14} y={14} messages={findings.get(model.id)!} />}
+        {lens === "coverage" && coverage?.within(model.id) === "none" && <text x={zone.width - (findings.has(model.id) ? 30 : 12)}
+          y={12 + textWidth(model.name, 13.5) + 14 + textWidth("Unobserved within", 10.5) + (findings.has(model.id) ? 30 : 12) > zone.width ? 35 : 20} textAnchor="end"
+          className="diagram-within-blind" aria-hidden="true">Unobserved within<title>No network sensor sees traffic between hosts in this subnet</title></text>}
         {model.cidr && <text x={12} y={35} className="diagram-zone-cidr" aria-hidden="true">{model.cidr}</text>}
         {zone.summary.length > 0 && <g aria-hidden="true" transform={`translate(12 ${zone.chips.length ? 70 : 46})`}>
           {(() => {
@@ -969,25 +1139,35 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     <h3 id={title} className="sr-only">Network diagram</h3>
     <div className="diagram-toolbar">
       <div className="diagram-controls">
-        {hasNodes && <DiagramSearch search={search} onChoose={({ id }) => selectFromDetails(id)} />}
         <LayersMenu layers={layers} available={layerAvailability} showScopes={showScopes} scopeCount={scopes.length}
           onLayer={(key) => { setLayers({ ...layers, [key]: !layers[key] }); setHovered(null); setFocused(null); setCamera(null); }}
           onScopes={() => setShowScopes(!showScopes)} />
-        {(description || (expanded && context)) && <p className="muted diagram-context">{description || context}</p>}
-        {hasNodes && scene.model.inferredLinks && <p className="diagram-notice" title="Add authored routing for exact links and paths.">
-          <strong>Segment-based model:</strong> dashed links are inferred from firewall interfaces and monitored segments.
-        </p>}
+        {hasNodes && <div className="diagram-lens" role="group" aria-label="Diagram view">
+          <button type="button" aria-pressed={lens === "topology"} onClick={() => setLens("topology")}>Topology</button>
+          <button type="button" aria-pressed={lens === "coverage"} disabled={!coverage} onClick={() => setLens("coverage")}
+            title={coverage ? "Outline each subnet by the weakest network evidence for traffic reaching it from elsewhere"
+              : "Visibility needs network sensors and a compiled environment"}>Visibility</button>
+        </div>}
+        {hasNodes && <DiagramSearch search={search} onChoose={({ id }) => selectFromDetails(id)} />}
+        {(description || context) && <p className="muted diagram-context" title={description || context}>{description || context}</p>}
       </div>
       <div className="diagram-controls">
+        {onAsk && revision && hasNodes && <button type="button" className="button-quiet diagram-ask" disabled={asking}
+          aria-label="Ask about this diagram" title="Ask about this diagram" onClick={() => void askAbout()}>
+          <Sparkles size={15} aria-hidden="true" />Ask</button>}
         {actions}
-        {onAsk && revision && hasNodes && <button type="button" className="button-quiet" disabled={asking}
-          onClick={() => void askAbout()}>Ask about this diagram</button>}
+        {exportStatus && <span className="muted diagram-copy-status" role="status">{exportStatus}</span>}
+        {hasNodes && <ExportMenu onSave={() => void exportImage("save")} onCopy={() => void exportImage("copy")} />}
         {expanded
           ? <button ref={restoreButton} type="button" className="button-quiet icon-only" aria-label="Exit expanded view" title="Exit expanded view" onClick={() => resizeDiagram(false)}><Minimize size={16} aria-hidden="true" /></button>
           : hasNodes && <button ref={expandButton} type="button" className="button-quiet icon-only" aria-label="Expand diagram" title="Expand diagram" onClick={() => resizeDiagram(true)}><Expand size={16} aria-hidden="true" /></button>}
       </div>
     </div>
+    {hasNodes && scene.model.inferredLinks && <p className="diagram-notice" title="Add authored routing for exact links and paths.">
+      <strong>Segment-based model:</strong> dashed links are inferred from firewall interfaces and monitored segments.
+    </p>}
     {askError && <p role="alert">{askError}</p>}
+    {changes && <ChangesBanner changes={changes} showing={showChanges} onToggle={() => setShowChanges(!showChanges)} onDismiss={() => setChanges(null)} />}
     {graph.segments.length === 0 && <p className="muted">No network segments are declared.</p>}
     {hasNodes ? <div className="diagram-body">
       <div ref={trackCanvas} className="diagram-canvas" role="group" tabIndex={0} data-focused={focusZone || focusSite ? true : undefined}
@@ -1007,7 +1187,8 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
               </g>;
             })}
             <g aria-hidden="true" className="diagram-edges">{scene.wires.map((wire) =>
-              <path key={wire.key} d={wire.path} data-style={wire.style} data-link-kind={wire.linkKind} data-highlighted={highlighted(wire.entities)} />)}
+              <path key={wire.key} d={wire.path} data-style={wire.style} data-link-kind={wire.linkKind}
+                data-highlighted={trace ? traced(wire.entities) : highlighted(wire.entities)} />)}
             </g>
             {/* Collapsed site cards sit above the links, which then end at the card's edge. */}
             {scene.sites.filter(({ collapsed }) => collapsed).map((site) => {
@@ -1030,7 +1211,8 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
               {internet.inferred && <text x={34} y={12} className="diagram-device-subtitle" aria-hidden="true">inferred from public addresses</text>}
             </g>)}
             {scene.equipment.map(({ equipment, x, y, labelSide }) => <g key={equipment.id} className="diagram-node diagram-device" transform={`translate(${x} ${y})`}
-              data-kind={equipment.kind} data-finding={findings.has(equipment.id) || undefined}
+              data-kind={equipment.kind} data-finding={findings.has(equipment.id) || undefined} data-traced={trace?.has(equipment.id) || undefined}
+              data-change={changeOf(equipment.id)}
               {...interactive(equipment.id, equipmentLabel(equipment) + findingLabel(equipment.id))}>
               <rect className="diagram-device-box" x={-24} y={-24} width={48} height={48} rx={11} />
               {findings.has(equipment.id) && <FindingBadge x={22} y={-22} messages={findings.get(equipment.id)!} />}
@@ -1062,7 +1244,11 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
           {preview.kind === "host" && <span>{preview.host.ip} · {preview.host.os}</span>}
           {preview.kind === "equipment" && <span>{preview.equipment.subtitle}</span>}
         </div>}
-        <DiagramKey scene={scene} showScopes={showScopes} scopes={scopes} segments={graph.segments} />
+        {lens === "coverage" && coverage ? <details className="diagram-key" open aria-label="Diagram key">
+          <summary>Weakest evidence for traffic into each subnet from elsewhere</summary>
+          <ul>{TIER_ORDER.map((tier) => <li key={tier}><span className="diagram-tier-mark" data-tier={tier} aria-hidden="true" />{TIER_LABELS[tier]}</li>)}
+            <li><span className="diagram-within-key" aria-hidden="true">Unobserved within</span>No sensor sees traffic between the subnet's own hosts</li></ul>
+        </details> : <DiagramKey scene={scene} showScopes={showScopes} scopes={scopes} segments={graph.segments} />}
         <div className="diagram-zoom" role="group" aria-label="Diagram view">
           <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoom(1.25)}><ZoomIn size={16} aria-hidden="true" /></button>
           <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoom(0.8)}><ZoomOut size={16} aria-hidden="true" /></button>
@@ -1073,10 +1259,10 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
         {(focusZone || focusSite || view.scale > scale * 1.75) && <Minimap scene={scene} view={view} size={size}
           onCenter={(x, y) => setCamera({ ...view, x: size.width / 2 - x * view.scale, y: size.height / 2 - y * view.scale })} />}
       </div>
-      {pinned && <DiagramInspector entity={pinned} scene={scene} graph={graph}
-        askAction={onAsk && revision && <button type="button" className="button-quiet" disabled={asking}
-          onClick={() => void askAbout(pinned)}>Ask about this</button>}
-        onSelect={(id) => selectFromDetails(id)} onFocus={focusOn} onClose={() => { setSelected(null); canvas.current?.focus(); }} />}
+      {pinned && <DiagramInspector entity={pinned} scene={scene} graph={graph} coverage={coverage} onTrace={setTrace}
+        askAction={onAsk && revision && <button type="button" className="button-quiet diagram-ask" disabled={asking}
+          onClick={() => void askAbout(pinned)}><Sparkles size={15} aria-hidden="true" />Ask about this</button>}
+        onSelect={(id) => selectFromDetails(id)} onFocus={focusOn} onClose={() => { setSelected(null); setTrace(null); canvas.current?.focus(); }} />}
     </div> : (graph.segments.length > 0 || graph.devices.length > 0 || graph.hosts.length > 0) && <p className="muted">No diagram items in the selected layers.</p>}
     {graph.findings.length > 0 && <details className="diagram-findings">
       <summary>{graph.findings.length} diagram {graph.findings.length === 1 ? "finding" : "findings"}</summary>

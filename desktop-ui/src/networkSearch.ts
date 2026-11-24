@@ -105,3 +105,39 @@ export function searchDiagram(graph: TopologyGraph, model: DiagramModel, rawQuer
   return scored.sort((a, b) => a.score - b.score || a.order - b.order).slice(0, RESULT_LIMIT)
     .map(({ id, kind, label, detail }) => ({ id, kind, label, detail }));
 }
+
+type PolicyRule = NonNullable<TopologyGraph["devices"][number]["policy"]>[number];
+type NatRule = NonNullable<TopologyGraph["devices"][number]["nat_rules"]>[number];
+export type RuleFilter = { policy: (rule: PolicyRule) => boolean; nat: (rule: NatRule) => boolean };
+
+/**
+ * Match firewall rules to a filter. A complete IP address matches the rules that apply to it, the
+ * way the engine evaluates policy: `any`, its subnet by name, `external` when no subnet contains it,
+ * the exact address or a containing range. A port number matches rules that list it. Anything else
+ * matches text in the rule.
+ */
+export function firewallRuleFilter(rawQuery: string, segments: TopologyGraph["segments"]): RuleFilter | null {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) return null;
+  const text = (values: (string | null | undefined)[]) => values.some((value) => value?.toLowerCase().includes(query));
+  const address = parseAddress(query);
+  if (address) {
+    const subnets = new Set(segments.filter(({ cidr }) => containsAddress(cidr, address) !== null).map(({ name }) => name.toLowerCase()));
+    const applies = (spec: string) => {
+      const value = spec.trim().toLowerCase();
+      if (value === "any" || subnets.has(value) || (value === "external" && !subnets.size)) return true;
+      const exact = parseAddress(value);
+      return exact ? exact.bits === address.bits && exact.value === address.value : value.includes("/") && containsAddress(value, address) !== null;
+    };
+    return {
+      policy: (rule) => applies(rule.src) || applies(rule.dst),
+      nat: (rule) => [rule.real_ip, rule.mapped_ip].some((ip) => ip?.trim().toLowerCase() === query)
+        || (rule.type !== "static" && ((rule.src ?? []).length ? (rule.src ?? []).some(applies) : true)),
+    };
+  }
+  const port = /^\d{1,5}$/.test(query) ? query : null;
+  return {
+    policy: (rule) => text([rule.action, rule.src, rule.dst]) || (rule.ports ?? []).some((value) => port ? String(value) === port : String(value).includes(query)),
+    nat: (rule) => text([rule.type === "static" ? "static nat" : "dynamic pat", rule.real_ip, rule.mapped_ip, ...(rule.src ?? [])]),
+  };
+}

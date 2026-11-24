@@ -256,7 +256,8 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
       {item.kind === "organization_pack"
         ? <PackEnvironmentView key={item.id} item={item} api={api} subscribeEvents={subscribeEvents} onChanged={onChanged} onAsk={onAskNetwork} />
         : scenarioGraph
-          ? <NetworkDiagram key={environmentReport?.compiled_sha256} graph={scenarioGraph} context={artifactTitle(item)}
+          ? <NetworkDiagram key={environmentReport?.compiled_sha256} graph={scenarioGraph} context={artifactTitle(item)} historyKey={item.id}
+              exportName={`${artifactTitle(item)} network`} onSaveImage={(image, name) => api.saveImage(image, name)}
               revision={environmentReport?.compiled_sha256 || item.source_sha256} onAsk={onAskNetwork}
               actions={<ActionShortcut action={environmentAction} />} />
           : <div className="diagram-unavailable">

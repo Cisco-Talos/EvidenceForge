@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { TopologyGraph } from "../src/api";
 import { buildDiagramModel } from "../src/networkDiagramLayout";
-import { containsAddress, parseAddress, searchDiagram } from "../src/networkSearch";
+import { containsAddress, firewallRuleFilter, parseAddress, searchDiagram } from "../src/networkSearch";
 
 test("complete IPv4 and IPv6 addresses parse, and partial input does not", () => {
   expect(parseAddress("10.40.20.44")).toEqual({ value: 0x0a28142cn, bits: 32 });
@@ -33,4 +33,32 @@ test("an address lands in its most specific subnet, even when no host uses it", 
   expect(searchDiagram(graph, model, "10.40.20.250").map(({ kind, label }) => [kind, label])).toEqual([["containing", "eng"]]);
   expect(searchDiagram(graph, model, "10.40.20.10")[0]).toMatchObject({ kind: "host", label: "A", detail: "10.40.20.10 · eng" });
   expect(searchDiagram(graph, model, "  ")).toEqual([]);
+});
+
+test("a firewall rule filter finds the rules that apply to an address, a port, or matching text", () => {
+  const segments = [{ id: "segment:users", name: "users", cidr: "10.1.0.0/24", exposure: "internal" as const, description: "" },
+    { id: "segment:dmz", name: "dmz", cidr: "10.9.0.0/24", exposure: "internal" as const, description: "" }];
+  const policy = [
+    { src: "users", dst: "dmz", ports: ["443"], action: "permit" as const },
+    { src: "external", dst: "dmz", ports: ["80", "4433"], action: "permit" as const },
+    { src: "10.1.0.0/16", dst: "any", ports: [], action: "deny" as const },
+    { src: "10.9.0.7", dst: "external", ports: ["53"], action: "permit" as const },
+  ];
+  const nat = [{ type: "static" as const, src: [], real_ip: "10.9.0.7", mapped_ip: "203.0.113.7" },
+    { type: "dynamic_pat" as const, src: ["users"], mapped_ip: "203.0.113.1", real_ip: "" }];
+  const matching = (query: string) => {
+    const filter = firewallRuleFilter(query, segments)!;
+    return [policy.flatMap((rule, index) => filter.policy(rule) ? [index] : []), nat.flatMap((rule, index) => filter.nat(rule) ? [index] : [])];
+  };
+  expect(firewallRuleFilter("  ", segments)).toBeNull();
+  // A user's address: its subnet by name, a containing range and "any" all apply, and so does its PAT.
+  expect(matching("10.1.0.20")).toEqual([[0, 2], [1]]);
+  // A DMZ server: its subnet, its exact address, and its static translation.
+  expect(matching("10.9.0.7")).toEqual([[0, 1, 2, 3], [0]]);
+  // An address in no subnet is "external".
+  expect(matching("198.51.100.9")).toEqual([[1, 2, 3], []]);
+  // A port number matches listed ports exactly, not as a substring.
+  expect(matching("443")).toEqual([[0], []]);
+  expect(matching("deny")).toEqual([[2], []]);
+  expect(matching("pat")).toEqual([[], [1]]);
 });

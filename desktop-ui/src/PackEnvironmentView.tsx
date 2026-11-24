@@ -55,7 +55,8 @@ export function PackEnvironmentView({ item, api, subscribeEvents, onChanged, onA
   const refreshAction = <button type="button" className="button-quiet" disabled={pending} onClick={() => void refreshEnvironment()}>Refresh environment</button>;
   const description = `Organization pack fragment · ${item.version || "Draft"}`;
   return !pending && current?.report
-    ? <NetworkDiagram key={current.report.digest} graph={current.report.topology} revision={current.report.digest}
+    ? <NetworkDiagram key={current.report.digest} graph={current.report.topology} revision={current.report.digest} historyKey={item.id}
+      exportName={`${item.name} network`} onSaveImage={(image, name) => api.saveImage(image, name)}
       description={description} actions={refreshAction} onAsk={onAsk} />
     : <div className="diagram-unavailable">
       {refreshAction}
