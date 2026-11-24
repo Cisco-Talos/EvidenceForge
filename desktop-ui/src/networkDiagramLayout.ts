@@ -369,7 +369,9 @@ const SITE_GAP = 72;
 const SITE_PAD = 20;
 const SITE_LABEL = 22;
 const CLOUD_HEIGHT = 46;
-const UPLINK = 70;
+/** Clear space between the Internet band and the sites below it. */
+const UPLINK_BAND = 56;
+const CLOUD_SPACING = 220;
 const HOST_CARD_WIDTH = 188;
 const HOST_CARD_HEIGHT = 48;
 const HOST_GAP = 8;
@@ -679,7 +681,14 @@ function treeBlock(state: LayoutState, tree: Tree, internets: Internet[]): Block
   const gridSpan = inset + gridWidth;
   const centerOffset = Math.max(glyphArea - GLYPH / 2, inset + gridWidth / 2);
   const sideLabel = side ? Math.max(textWidth(side.equipment.name, 13), textWidth(side.equipment.subtitle, 11)) / 2 : 0;
-  const sideExtent = side ? centerOffset + SIDE_STEP + Math.max(GLYPH / 2, sideLabel) + 8 : 0;
+  // A side link is long enough for its name, both end labels and its sensor chips, with padding.
+  const sideLink = side?.via && "ends" in side.via ? side.via : undefined;
+  const sideEnds = sideLink ? sideLink.ends.filter(({ equipmentId }) => equipmentId === equipment.id || equipmentId === side!.equipment.id) : [];
+  const sideStep = Math.max(SIDE_STEP, GLYPH + (sideLink ? Math.max(
+    textWidth(sideLink.name, 11) + 2 * LABEL_PAD,
+    sideEnds.reduce((sum, end) => sum + textWidth(endLabel(end, sideLink.segment?.cidr), 10.5, true), 0) + 3 * LABEL_PAD,
+    linkLabelWidth({ ...sideLink, name: "", segment: undefined }, true) + 2 * LABEL_PAD) : 0));
+  const sideExtent = side ? centerOffset + sideStep + Math.max(GLYPH / 2, sideLabel) + 8 : 0;
   // A site root that receives a cross-site link keeps its left side clear for that link.
   const labelAbove = tree.depth === 0 && !internets.length && state.interSite.has(equipment.id);
   const sideTop = (side || labelAbove) && !internets.length ? 36 : 0;
@@ -687,10 +696,14 @@ function treeBlock(state: LayoutState, tree: Tree, internets: Internet[]): Block
   const sideChips = sideTransit?.sensors.length ? 28 : 0;
   const childrenWidth = children.reduce((sum, child) => sum + child.width, 0) + Math.max(0, children.length - 1) * BLOCK_GAP;
   const childrenHeight = children.length ? Math.max(...children.map(({ height }) => height)) : 0;
-  const ownTop = (internets.length ? CLOUD_HEIGHT + UPLINK : 0) + sideTop;
-  const upperWidth = Math.max(glyphArea, gridSpan, sideExtent) + (children.length ? 30 : 0);
-  const internetWidth = internets.length * 180;
-  const width = Math.max(upperWidth, childrenWidth, internetWidth);
+  // Internet boundaries are outside every site; they are placed in a band above all of them.
+  const ownTop = sideTop;
+  // Links to child devices run down a gutter on the right, labeled beside it.
+  const gutterLabels = Math.max(0, ...belowTrees.map(({ via }) => via && "ends" in via
+    ? Math.max(textWidth(via.name, 11), via.segment ? textWidth(via.segment.cidr, 10.5, true) : 0,
+      ...via.sensors.map((placement) => 14 + chipWidth(chipLabel(placement, true)))) : 0));
+  const upperWidth = Math.max(glyphArea, gridSpan, sideExtent) + (children.length ? 30 + gutterLabels + 8 : 0);
+  const width = Math.max(upperWidth, childrenWidth);
   const height = ownTop + GLYPH + sideChips + (rows.length ? 30 + gridHeight : 12) + (children.length ? 36 + childrenHeight : 0);
   return {
     width, height,
@@ -702,7 +715,7 @@ function treeBlock(state: LayoutState, tree: Tree, internets: Internet[]): Block
       state.glyphs.set(equipment.id, { x: gx, y: gy });
       state.equipment.push({ equipment, x: gx, y: gy, labelSide: labelAbove ? "above" : "left" });
       if (side) {
-        const sx = gx + SIDE_STEP;
+        const sx = gx + sideStep;
         state.glyphs.set(side.equipment.id, { x: sx, y: gy });
         state.equipment.push({ equipment: side.equipment, x: sx, y: gy, labelSide: "above" });
         const via = side.via;
@@ -721,30 +734,10 @@ function treeBlock(state: LayoutState, tree: Tree, internets: Internet[]): Block
             text: [far.interfaceName, interfaceSuffix(far.ip, cidr)].filter(Boolean).join(" ") });
           state.labels.push({ key: transit.id + ":name", x: mid, y: gy - 20, text: transit.name, anchor: "middle", kind: "link" });
           // Sensor chips sit under the link, centered on their TAP marks.
-          const room = SIDE_STEP - GLYPH - 12;
+          const room = sideStep - GLYPH - 12;
           placeTaps(state, transit.id, transit.sensors, mid, gy, room);
         }
       }
-      // Declared Internet boundaries sit above the root device.
-      internets.forEach((internet, index) => {
-        const cx = gx + (index - (internets.length - 1) / 2) * 180;
-        state.internets.push({ internet, x: cx, y: y + CLOUD_HEIGHT / 2 });
-        for (const attachment of internet.attachments.filter(({ equipmentId }) => equipmentId === equipment.id)) {
-          const top = y + CLOUD_HEIGHT;
-          state.wires.push({ key: attachment.key, style: attachment.style, linkKind: attachment.linkKind,
-            entities: [equipment.id, internet.id, ...internet.sensors.map(({ device }) => device.id)],
-            path: cx === gx ? `M ${gx} ${top} V ${gy - GLYPH / 2}` : `M ${cx} ${top} V ${top + UPLINK / 2} H ${gx} V ${gy - GLYPH / 2}` });
-          const text = interfaceText(attachment) || (attachment.ip ?? "");
-          if (text) state.labels.push({ key: attachment.key + ":label", x: gx + 10, y: gy - GLYPH / 2 - 8, text, anchor: "start", kind: "interface" });
-          internet.sensors.forEach((placement, tapIndex) => {
-            const ty = top + 18 + tapIndex * 24;
-            const chip = chipLabel(placement, true);
-            state.taps.push({ key: internet.id + placement.device.id, x: cx, y: ty, entities: [internet.id, placement.device.id],
-              chip: { key: internet.id + placement.device.id + ":chip", device: placement.device, via: "tap", scope: placement.scope,
-                x: cx - 14 - chipWidth(chip), y: ty - 9, width: chipWidth(chip), label: chip } });
-          });
-        }
-      });
       // Access links: a bus above each row of zones, joined along the grid's left gutter.
       let rowTop = gy + GLYPH / 2 + 30 + sideChips;
       const busX = gridLeft - GUTTER_GAP;
@@ -835,6 +828,25 @@ function treeBlock(state: LayoutState, tree: Tree, internets: Internet[]): Block
   };
 }
 
+/** Clear space on each side of a link's labels, and the jog a link between sites takes near its end. */
+const LABEL_PAD = 14;
+const LINK_JOG = 18;
+
+function transitTitle(transit: Transit): string {
+  return transit.kind === "network" ? transit.name : `${transit.name} · ${transit.kind.toUpperCase()}`;
+}
+
+/** The widest label a link carries along its length: its name, address range, or sensor chips. */
+function linkLabelWidth(transit: Transit, withChips: boolean): number {
+  const chips = withChips && transit.sensors.length
+    ? transit.sensors.reduce((sum, placement) => sum + chipWidth(chipLabel(placement, false)) + 6, -6) : 0;
+  return Math.max(textWidth(transitTitle(transit), 11), transit.segment ? textWidth(transit.segment.cidr, 10.5, true) : 0, chips);
+}
+
+function endLabel(end: Transit["ends"][number], cidr: string | undefined): string {
+  return [end.interfaceName, interfaceSuffix(end.ip, cidr)].filter(Boolean).join(" ");
+}
+
 /** TAP marks along a horizontal link with their chips below, named only when the names fit. */
 function placeTaps(state: LayoutState, linkId: string, sensors: SensorPlacement[], center: number, y: number, room: number) {
   if (!sensors.length) return;
@@ -891,6 +903,8 @@ function layoutWith(model: DiagramModel, layers: DiagramLayers, columns: number,
     interSite: new Set([...model.transits.values()].filter(({ kind }) => kind !== "network").flatMap(({ ends }) => ends.map(({ equipmentId }) => equipmentId))) };
   const sites: PlacedSite[] = [];
   const collapsedSite = new Map<string, string>();
+  /** Devices inside collapsed sites: only their cross-site links are drawn, ending at the card. */
+  const hidden = new Set<string>();
   const showSites = model.routed && parts.filter(({ trees }) => trees.length).length > 1;
   const collapsedByDefault = parts.filter(({ trees }) => trees.length).length > EXPANDED_SITE_LIMIT;
   let x = MARGIN;
@@ -898,27 +912,52 @@ function layoutWith(model: DiagramModel, layers: DiagramLayers, columns: number,
   const pending: { part: Component; block: Block; collapsed: boolean }[] = [];
   parts.forEach((part, index) => {
     const collapsed = showSites && part.trees.length > 0 && (options.siteChoices?.[part.id] ?? !(collapsedByDefault && index > 0)) === false;
-    const block: Block = collapsed ? { width: COLLAPSED_SITE.width, height: COLLAPSED_SITE.height, place: () => undefined }
+    const block: Block = collapsed ? { width: collapsedWidth(part), height: COLLAPSED_SITE.height, place: () => undefined }
       : part.trees.length ? stackTrees(state, part.trees) : looseBlock(state, part.unattached);
     pending.push({ part, block, collapsed });
   });
   // Sites and components share one row; with many, they wrap to keep the diagram near the viewport aspect.
   const aspect = options.viewport.width / Math.max(1, options.viewport.height);
   const totalArea = pending.reduce((sum, { block }) => sum + (block.width + SITE_GAP) * (block.height + SITE_GAP), 0);
-  const rowLimit = Math.max(...pending.map(({ block }) => block.width), Math.sqrt(totalArea * aspect));
-  let y = MARGIN;
+  // Internet-facing components share the top row, so their uplinks come straight down from the band.
+  const facing = pending.filter(({ part }) => part.internetFacing);
+  const facingWidth = facing.reduce((sum, { block }) => sum + block.width + 2 * SITE_PAD + SITE_GAP, -SITE_GAP);
+  // Wrap only when one row would be wider than the canvas.
+  const rowLimit = Math.max(...pending.map(({ block }) => block.width), Math.sqrt(totalArea * aspect), facingWidth,
+    options.viewport.width - 2 * MARGIN);
+  // Reserve a band above every site for Internet boundaries and the TAPs on their uplinks.
+  const boundaryTaps = Math.max(0, ...[...model.internets.values()].map(({ sensors }) => sensors.length));
+  const band = model.internets.size ? CLOUD_HEIGHT + UPLINK_BAND + boundaryTaps * 24 : 0;
+  let y = MARGIN + band;
   let rowHeight = 0;
+  const membersOf = new Map(parts.map((part) => [part.id, new Set(part.trees.flatMap(function ids(tree): string[] {
+    return [tree.equipment.id, ...tree.children.flatMap(ids)]; }))]));
+  // Neighbouring sites leave room for the labels of the links between them.
+  const gapBetween = (a: Component, b: Component) => {
+    const left = membersOf.get(a.id)!;
+    const right = membersOf.get(b.id)!;
+    const widths = [...model.transits.values()]
+      .filter(({ ends }) => ends.some(({ equipmentId }) => left.has(equipmentId)) && ends.some(({ equipmentId }) => right.has(equipmentId)))
+      .map((transit) => linkLabelWidth(transit, true) + 2 * LABEL_PAD + LINK_JOG);
+    return Math.max(SITE_GAP, ...widths);
+  };
+  let previous: Component | undefined;
+  let previousRight = 0;
   for (const { part, block, collapsed } of pending) {
-    const pad = showSites && part.trees.length ? SITE_PAD : 0;
-    const label = showSites && part.trees.length ? SITE_LABEL : 0;
+    const framed = showSites && part.trees.length > 0;
+    if (previous && framed && x > MARGIN) x = previousRight + gapBetween(previous, part);
+    // A collapsed site is its own card, so it needs no frame padding or label band.
+    const pad = framed && !collapsed ? SITE_PAD : 0;
+    const label = framed && !collapsed ? SITE_LABEL : 0;
     const outerWidth = block.width + pad * 2;
-    if (x > MARGIN && x + outerWidth - MARGIN > rowLimit) { x = MARGIN; y += rowHeight + SITE_GAP; rowHeight = 0; }
+    if (x > MARGIN && x + outerWidth - MARGIN > rowLimit) { x = MARGIN; y += rowHeight + SITE_GAP; rowHeight = 0; previous = undefined; }
     block.place(x + pad, y + pad + label);
     if (collapsed) {
       // Links into a collapsed site end at its summary card.
       for (const id of part.trees.flatMap(function ids(tree): string[] { return [tree.equipment.id, ...tree.children.flatMap(ids)]; })) {
         state.glyphs.set(id, { x: x + outerWidth / 2, y: y + (block.height + pad * 2 + label) / 2 });
         collapsedSite.set(id, part.id);
+        hidden.add(id);
       }
       for (const zone of part.trees.flatMap(function zones(tree): Zone[] { return [...tree.zones, ...tree.children.flatMap(zones)]; })) {
         for (const member of [zone, ...zone.children]) {
@@ -927,20 +966,49 @@ function layoutWith(model: DiagramModel, layers: DiagramLayers, columns: number,
         }
       }
     }
-    if (pad) {
+    if (framed) {
       const total = part.trees.flatMap(function devices(tree): string[] { return [tree.equipment.name, ...tree.children.flatMap(devices)]; });
       sites.push({ id: part.id, label: part.label, x, y, width: outerWidth, height: block.height + pad * 2 + label, collapsed,
         summary: collapsed ? { zones: part.zoneCount, hosts: part.hostCount, devices: total } : undefined });
     }
-    x += outerWidth + (pad ? SITE_GAP : BLOCK_GAP);
+    previous = part;
+    previousRight = x + outerWidth;
+    x += outerWidth + (framed ? SITE_GAP : BLOCK_GAP);
     rowHeight = Math.max(rowHeight, block.height + pad * 2 + label);
     tallest = Math.max(tallest, y + rowHeight);
   }
-  // An Internet boundary on a device below the root sits to that device's right.
-  for (const internet of model.internets.values()) {
-    if (state.internets.some((placed) => placed.internet === internet)) continue;
-    const owner = internet.attachments.map(({ equipmentId }) => state.glyphs.get(equipmentId)).find(Boolean);
-    if (owner) state.internets.push({ internet, x: owner.x + 150, y: owner.y - 40 });
+  // Each Internet boundary is centered over the devices it connects to, in the band above all
+  // sites. Its uplinks reach into the sites, or end at a collapsed site's card.
+  const clouds = [...model.internets.values()].flatMap((internet) => {
+    const anchors = internet.attachments.flatMap((attachment) => {
+      const glyph = state.glyphs.get(attachment.equipmentId);
+      return glyph ? [{ attachment, glyph }] : [];
+    });
+    if (!anchors.length) return [];
+    return [{ internet, anchors, x: anchors.reduce((sum, { glyph }) => sum + glyph.x, 0) / anchors.length }];
+  }).sort((a, b) => a.x - b.x || a.internet.id.localeCompare(b.internet.id, "en"));
+  clouds.forEach((cloud, index) => { if (index > 0) cloud.x = Math.max(cloud.x, clouds[index - 1].x + CLOUD_SPACING); });
+  for (const { internet, anchors, x: cx } of clouds) {
+    const top = MARGIN + CLOUD_HEIGHT;
+    state.internets.push({ internet, x: cx, y: MARGIN + CLOUD_HEIGHT / 2 });
+    const turn = top + 18 + internet.sensors.length * 24;
+    anchors.forEach(({ attachment, glyph }, index) => {
+      const collapsedEnd = hidden.has(attachment.equipmentId);
+      const end = collapsedEnd ? glyph.y : glyph.y - GLYPH / 2;
+      const bend = turn + index * 8;
+      state.wires.push({ key: attachment.key, style: attachment.style, linkKind: attachment.linkKind,
+        entities: [attachment.equipmentId, internet.id, ...internet.sensors.map(({ device }) => device.id)],
+        path: glyph.x === cx ? `M ${cx} ${top} V ${end}` : `M ${cx} ${top} V ${bend} H ${glyph.x} V ${end}` });
+      const text = interfaceText(attachment) || (attachment.ip ?? "");
+      if (text && !collapsedEnd) state.labels.push({ key: attachment.key + ":label", x: glyph.x + 10, y: end - 8, text, anchor: "start", kind: "interface" });
+    });
+    internet.sensors.forEach((placement, index) => {
+      const ty = top + 16 + index * 24;
+      const label = chipLabel(placement, true);
+      state.taps.push({ key: internet.id + placement.device.id, x: cx, y: ty, entities: [internet.id, placement.device.id],
+        chip: { key: internet.id + placement.device.id + ":chip", device: placement.device, via: "tap", scope: placement.scope,
+          x: cx - 14 - chipWidth(label), y: ty - 9, width: chipWidth(label), label } });
+    });
   }
   // Links between sites, and any other link outside the device trees, run below everything.
   let lane = 0;
@@ -956,22 +1024,39 @@ function layoutWith(model: DiagramModel, layers: DiagramLayers, columns: number,
     const a = state.glyphs.get(first.equipmentId);
     const b = state.glyphs.get(second.equipmentId);
     const treeLinked = state.wires.some(({ key }) => key === first.equipmentId + ":" + second.equipmentId || key === second.equipmentId + ":" + first.equipmentId);
-    if (!a || !b || treeLinked) continue;
+    // A link inside one collapsed site is part of its summary card, not the map.
+    const insideCollapsed = hidden.has(first.equipmentId) && hidden.has(second.equipmentId)
+      && collapsedSite.get(first.equipmentId) === collapsedSite.get(second.equipmentId);
+    if (!a || !b || treeLinked || insideCollapsed) continue;
     const [left, right] = a.x <= b.x ? [a, b] : [b, a];
     const [leftEnd, rightEnd] = a.x <= b.x ? [first, second] : [second, first];
     const leftSite = siteFor(leftEnd.equipmentId);
     const rightSite = siteFor(rightEnd.equipmentId);
-    const adjacent = leftSite && rightSite && leftSite !== rightSite && Math.abs(rightSite.x - (leftSite.x + leftSite.width) - SITE_GAP) < 2;
+    const adjacent = leftSite && rightSite && leftSite !== rightSite && leftSite.y === rightSite.y
+      && sites.indexOf(rightSite) === sites.indexOf(leftSite) + 1;
+    // Sites stacked in a column connect straight down, through the gap between them.
+    const [upperSite, lowerSite] = leftSite && rightSite && leftSite.y <= rightSite.y ? [leftSite, rightSite] : [rightSite, leftSite];
+    const stacked = !adjacent && upperSite && lowerSite && upperSite !== lowerSite && upperSite.y + upperSite.height < lowerSite.y
+      && Math.max(upperSite.x, lowerSite.x) < Math.min(upperSite.x + upperSite.width, lowerSite.x + lowerSite.width);
     const entities = [first.equipmentId, second.equipmentId, transit.id, ...transit.sensors.map(({ device }) => device.id)];
     let path: string;
     let mid: { x: number; y: number };
+    let labelAnchor: DiagramLabel["anchor"] = "middle";
     if (adjacent) {
-      const gap = leftSite.x + leftSite.width + SITE_GAP / 2;
-      path = `M ${left.x + GLYPH / 2} ${left.y} H ${gap} V ${right.y} H ${right.x - GLYPH / 2}`;
-      // Label the longer horizontal run, which has room beside the devices.
-      const leftRun = gap - (left.x + GLYPH / 2);
-      const rightRun = right.x - GLYPH / 2 - gap;
-      mid = leftRun >= rightRun ? { x: (left.x + GLYPH / 2 + gap) / 2, y: left.y } : { x: (gap + right.x - GLYPH / 2) / 2, y: right.y };
+      // The link jogs just before the right site, so its labels sit centered in the gap on a straight run.
+      const gapLeft = leftSite.x + leftSite.width;
+      const jog = rightSite.x - LINK_JOG;
+      path = left.y === right.y ? `M ${left.x + GLYPH / 2} ${left.y} H ${right.x - GLYPH / 2}`
+        : `M ${left.x + GLYPH / 2} ${left.y} H ${jog} V ${right.y} H ${right.x - GLYPH / 2}`;
+      mid = { x: (gapLeft + (left.y === right.y ? rightSite.x : jog)) / 2, y: left.y };
+    } else if (stacked) {
+      const [upper, lower] = a.y <= b.y ? [a, b] : [b, a];
+      const gapY = upperSite.y + upperSite.height + (lowerSite.y - upperSite.y - upperSite.height) / 2;
+      const from = upper.y + (hidden.has(a.y <= b.y ? first.equipmentId : second.equipmentId) ? 0 : GLYPH / 2);
+      const to = lower.y - (hidden.has(a.y <= b.y ? second.equipmentId : first.equipmentId) ? 0 : GLYPH / 2);
+      path = `M ${upper.x} ${from} V ${gapY} H ${lower.x} V ${to}`;
+      mid = { x: lower.x + 12, y: gapY + 4 };
+      labelAnchor = "start";
     } else {
       const laneY = below + lane++ * 12;
       path = `M ${left.x} ${left.y + GLYPH / 2} V ${laneY} H ${right.x} V ${right.y + GLYPH / 2}`;
@@ -979,31 +1064,29 @@ function layoutWith(model: DiagramModel, layers: DiagramLayers, columns: number,
     }
     state.wires.push({ key: transit.id, style: "interface", linkKind: transit.kind, entities, path });
     const cidr = transit.segment?.cidr;
-    state.labels.push({ key: transit.id + ":name", x: mid.x, y: mid.y - 8, text: transit.kind === "network" ? transit.name : `${transit.name} · ${transit.kind.toUpperCase()}`, anchor: "middle", kind: "link" });
-    if (cidr) state.labels.push({ key: transit.id + ":cidr", x: mid.x, y: mid.y + 16, text: cidr, anchor: "middle", kind: "link-detail" });
-    state.labels.push({ key: transit.id + ":left", x: left.x + GLYPH / 2 + 6, y: left.y + 16, kind: "interface", anchor: "start",
+    // With sensor chips under the link, the name and range both sit above it.
+    const chipsBelow = transit.sensors.length > 0 && !hidden.has(leftEnd.equipmentId) && !hidden.has(rightEnd.equipmentId);
+    state.labels.push({ key: transit.id + ":name", x: mid.x, y: mid.y - (chipsBelow && cidr ? 21 : 8), text: transitTitle(transit), anchor: labelAnchor, kind: "link" });
+    if (cidr) state.labels.push({ key: transit.id + ":cidr", x: mid.x, y: chipsBelow ? mid.y - 7 : mid.y + 16, text: cidr, anchor: labelAnchor, kind: "link-detail" });
+    // Interface labels and sensors at a collapsed end would sit on its summary card.
+    if (!hidden.has(leftEnd.equipmentId)) state.labels.push({ key: transit.id + ":left", x: left.x + GLYPH / 2 + 6, y: left.y + 16, kind: "interface", anchor: "start",
       text: [leftEnd.interfaceName, interfaceSuffix(leftEnd.ip, cidr)].join(" ") });
-    state.labels.push({ key: transit.id + ":right", x: right.x - GLYPH / 2 - 6, y: right.y + 16, kind: "interface", anchor: "end",
+    if (!hidden.has(rightEnd.equipmentId)) state.labels.push({ key: transit.id + ":right", x: right.x - GLYPH / 2 - 6, y: right.y + 16, kind: "interface", anchor: "end",
       text: [rightEnd.interfaceName, interfaceSuffix(rightEnd.ip, cidr)].join(" ") });
-    placeTaps(state, transit.id, transit.sensors, mid.x, mid.y, 160);
+    if (!hidden.has(leftEnd.equipmentId) && !hidden.has(rightEnd.equipmentId)) placeTaps(state, transit.id, transit.sensors, mid.x, mid.y, 160);
   }
   // Secondary attachments, such as a subnet shared by two devices, enter the zone from its right edge.
   for (const attachment of model.attachments) {
     if (drawn.has(attachment.key) || state.wires.some(({ key }) => key === attachment.key)) continue;
+    if (hidden.has(attachment.equipmentId)) continue;
     const glyph = state.glyphs.get(attachment.equipmentId);
     const zone = state.zones.find(({ zone }) => zone.id === attachment.targetId);
-    const internet = state.internets.find(({ internet }) => internet.id === attachment.targetId);
-    if (!glyph || (!zone && !internet)) continue;
-    let path: string;
-    if (zone) {
-      const laneX = Math.max(zone.x + zone.width, glyph.x + GLYPH / 2) + 14 + (lane++ % 6) * 8;
-      const entryY = zone.y + 20;
-      path = `M ${glyph.x + GLYPH / 2} ${glyph.y + 10} H ${laneX} V ${entryY} H ${zone.x + zone.width}`;
-      const text = interfaceText(attachment, zone.zone);
-      if (text) state.labels.push({ key: attachment.key + ":label", x: zone.x + zone.width + 6, y: entryY - 6, text, anchor: "start", kind: "interface" });
-    } else {
-      path = `M ${glyph.x + GLYPH / 2} ${glyph.y - 8} H ${internet!.x} V ${internet!.y + CLOUD_HEIGHT / 2}`;
-    }
+    if (!glyph || !zone) continue;
+    const laneX = Math.max(zone.x + zone.width, glyph.x + GLYPH / 2) + 14 + (lane++ % 6) * 8;
+    const entryY = zone.y + 20;
+    const path = `M ${glyph.x + GLYPH / 2} ${glyph.y + 10} H ${laneX} V ${entryY} H ${zone.x + zone.width}`;
+    const text = interfaceText(attachment, zone.zone);
+    if (text) state.labels.push({ key: attachment.key + ":label", x: zone.x + zone.width + 6, y: entryY - 6, text, anchor: "start", kind: "interface" });
     state.wires.push({ key: attachment.key, style: attachment.style, linkKind: attachment.linkKind,
       entities: wireEntities(attachment, zone?.zone), path });
   }
@@ -1025,6 +1108,7 @@ function layoutWith(model: DiagramModel, layers: DiagramLayers, columns: number,
     bounds.set(placed.equipment.id, { x: placed.x - GLYPH / 2, y: placed.y - GLYPH / 2, width: GLYPH, height: GLYPH });
   }
   for (const item of model.equipment.values()) if (!entities.has(item.id)) entities.set(item.id, { kind: "equipment", id: item.id, equipment: item });
+  for (const site of sites) bounds.set("site:" + site.id, site);
   for (const placed of state.internets) {
     entities.set(placed.internet.id, { kind: "internet", id: placed.internet.id, internet: placed.internet });
     bounds.set(placed.internet.id, { x: placed.x - 30, y: placed.y - CLOUD_HEIGHT / 2, width: 60, height: CLOUD_HEIGHT });
@@ -1041,12 +1125,53 @@ function layoutWith(model: DiagramModel, layers: DiagramLayers, columns: number,
       ...[...model.internets.values()].filter(({ sensors }) => sensors.some((placement) => placement.device.id === device.id)).map(({ id }) => id),
     ]);
   }
-  const right = Math.max(MARGIN, ...zonesFlat.map((zone) => zone.x + zone.width), ...sites.map((site) => site.x + site.width),
-    ...state.equipment.map((item) => item.x + GLYPH), ...state.internets.map((item) => item.x + 160),
-    ...state.taps.map((tap) => tap.chip.x + tap.chip.width), ...state.labels.map((label) => label.x + (label.anchor === "start" ? textWidth(label.text) : 0)));
-  const bottom = Math.max(tallest, below + (lane ? lane * 12 + 30 : 0), ...state.taps.map((tap) => tap.chip.y + 20));
-  return { model, width: right + MARGIN, height: bottom + MARGIN, detail, zones: state.zones, equipment: state.equipment,
+  const extent = drawnExtent(state, zonesFlat, sites);
+  return { model, width: Math.max(extent.right, MARGIN) + MARGIN, height: Math.max(extent.bottom, tallest) + MARGIN, detail, zones: state.zones, equipment: state.equipment,
     internets: state.internets, sites, wires: state.wires, labels: state.labels, taps: state.taps, entities, bounds, coverage, collapsedSite };
+}
+
+/** The device line a collapsed site card shows: up to three names, then a count. */
+export function siteDeviceLine(devices: string[]): string {
+  return devices.slice(0, 3).join(", ") + (devices.length > 3 ? ` +${devices.length - 3}` : "");
+}
+
+/** A collapsed site card wide enough for its summary lines. */
+function collapsedWidth(part: Component): number {
+  const devices = part.trees.flatMap(function names(tree): string[] { return [tree.equipment.name, ...tree.children.flatMap(names)]; });
+  return Math.max(COLLAPSED_SITE.width, Math.min(420, textWidth(siteDeviceLine(devices), 11) + 40), textWidth(part.label, 14) + 40);
+}
+
+/** The far edges of everything drawn, so fitting the view never leaves anything out. */
+function drawnExtent(state: LayoutState, zones: PlacedZone[], sites: PlacedSite[]): { right: number; bottom: number } {
+  let right = 0;
+  let bottom = 0;
+  const include = (x: number, y: number) => { right = Math.max(right, x); bottom = Math.max(bottom, y); };
+  for (const wire of state.wires) {
+    const tokens = wire.path.trim().split(/\s+/);
+    let x = 0;
+    let y = 0;
+    for (let index = 0; index < tokens.length; index++) {
+      const command = tokens[index];
+      if (command === "M") { x = Number(tokens[++index]); y = Number(tokens[++index]); }
+      else if (command === "H") x = Number(tokens[++index]);
+      else if (command === "V") y = Number(tokens[++index]);
+      else continue;
+      include(x, y);
+    }
+  }
+  for (const label of state.labels) {
+    const width = label.kind === "interface" || label.kind === "link-detail" ? textWidth(label.text, 10.5, true) : textWidth(label.text, 11);
+    include(label.anchor === "start" ? label.x + width : label.anchor === "middle" ? label.x + width / 2 : label.x, label.y + 4);
+  }
+  for (const tap of state.taps) include(tap.chip.x + tap.chip.width, tap.chip.y + 18);
+  for (const zone of zones) include(zone.x + zone.width, zone.y + zone.height);
+  for (const site of sites) include(site.x + site.width, site.y + site.height);
+  for (const item of state.equipment) {
+    const label = Math.max(textWidth(item.equipment.name, 13), textWidth(item.equipment.subtitle, 11));
+    include(item.x + (item.labelSide === "above" ? Math.max(GLYPH / 2, label / 2) : GLYPH / 2), item.y + GLYPH / 2);
+  }
+  for (const item of state.internets) include(item.x + 34 + Math.max(textWidth(item.internet.name, 13), item.internet.inferred ? textWidth("inferred from public addresses", 11) : 0), item.y + CLOUD_HEIGHT / 2);
+  return { right, bottom };
 }
 
 /** Several trees in one component (rare) stack left to right. */

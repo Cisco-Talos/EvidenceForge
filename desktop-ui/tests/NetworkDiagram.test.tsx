@@ -6,7 +6,7 @@ import type { CatalogItem, PackTopology, StudioApi, StudioEvent, TopologyGraph }
 import { NetworkDiagram } from "../src/NetworkDiagram";
 import * as capture from "../src/captureNetworkView";
 import { PackEnvironmentView } from "../src/PackEnvironmentView";
-import { buildDiagramModel, GUTTER_GAP, hostCategory, interfaceSuffix, layoutNetworkDiagram, type DiagramScene } from "../src/networkDiagramLayout";
+import { buildDiagramModel, GUTTER_GAP, hostCategory, interfaceSuffix, layoutNetworkDiagram, textWidth, type DiagramScene } from "../src/networkDiagramLayout";
 
 type Host = TopologyGraph["hosts"][number];
 type Device = TopologyGraph["devices"][number];
@@ -165,17 +165,15 @@ test("the Layers menu explains each layer and always keeps firewalls", async () 
   expect(within(menu).getByRole("img", { name: /^About Firewall policy scopes: / })).toBeVisible();
   await user.click(within(menu).getByRole("checkbox", { name: "Sensors" }));
   await user.click(within(menu).getByRole("checkbox", { name: "Hosts" }));
-  expect(screen.getByRole("button", { name: "Firewall FW-01" })).toBeVisible();
+  expect(screen.getByRole("button", { name: /^Firewall FW-01/ })).toBeVisible();
 });
 
-test("Show on map expands a summarized subnet and selects the host there", async () => {
+test("choosing a host from a summarized subnet expands it and selects the host there", async () => {
   const { container } = render(<NetworkDiagram graph={graph} />);
   const user = userEvent.setup();
   expect(container.querySelector(".diagram-host-card[aria-label='WS-5 Windows']")).toBeNull();
   await user.click(screen.getByRole("button", { name: /Segment office/ }));
-  const details = screen.getByRole("complementary");
-  await user.click(within(details).getByRole("button", { name: "WS-5 Windows" }));
-  await user.click(within(details).getByRole("button", { name: "Show on map" }));
+  await user.click(within(screen.getByRole("complementary")).getByRole("button", { name: "WS-5 Windows" }));
   const card = container.querySelector(".diagram-host-card[aria-label='WS-5 Windows']");
   expect(card).not.toBeNull();
   expect(card).toHaveAttribute("aria-pressed", "true");
@@ -183,7 +181,7 @@ test("Show on map expands a summarized subnet and selects the host there", async
   expect(screen.getByRole("complementary")).toHaveTextContent("In office");
 });
 
-test("Show on map expands a collapsed site before revealing its host", async () => {
+test("choosing a device in a collapsed site expands the site before revealing it", async () => {
   const sites = ["hq", "a", "b", "c", "d", "e"];
   const routed: TopologyGraph = {
     segments: [...sites.map((name, index) => segment(`${name}-lan`, `10.${index}.1.0/24`)),
@@ -245,7 +243,7 @@ test("pan, zoom, fit, and selection work together without moving the map for det
   const map = screen.getByRole("group", { name: /Network map/ });
   const transform = () => map.querySelector("g")!.getAttribute("transform");
   const initial = transform();
-  await user.click(screen.getByRole("button", { name: "Firewall FW-01" }));
+  await user.click(screen.getByRole("button", { name: /^Firewall FW-01/ }));
   expect(transform()).toBe(initial);
   const details = screen.getByRole("complementary", { name: "Network diagram details" });
   expect(details).toHaveTextContent("Policy scope inside");
@@ -270,8 +268,8 @@ test("pan, zoom, fit, and selection work together without moving the map for det
   expect(screen.queryByRole("complementary")).toBeNull();
 });
 
-test("keyboard selection opens bounded host pages and individual host facts", async () => {
-  render(<NetworkDiagram graph={graph} />);
+test("keyboard selection opens a filterable host list, and choosing a host shows it on the map", async () => {
+  const { container } = render(<NetworkDiagram graph={graph} />);
   const user = userEvent.setup();
   const office = screen.getByRole("button", { name: /Segment office/ });
   fireEvent.focus(office);
@@ -279,18 +277,34 @@ test("keyboard selection opens bounded host pages and individual host facts", as
   fireEvent.keyDown(office, { key: "Enter" });
   const details = screen.getByRole("complementary", { name: "Network diagram details" });
   expect(within(details).getByRole("button", { name: "CORE" })).toBeVisible();
+  expect(within(details).getAllByRole("button", { name: /^WS-\d+ Windows$/ })).toHaveLength(32);
+  await user.type(within(details).getByRole("searchbox", { name: "Filter hosts" }), "alex");
+  expect(within(details).getAllByRole("button", { name: /^WS-\d+ Windows$/ }).map((button) => button.getAttribute("aria-label"))).toEqual(["WS-1 Windows"]);
+  expect(within(details).getByText("1 of 32")).toBeVisible();
   await user.click(within(details).getByRole("button", { name: "WS-1 Windows" }));
-  expect(within(details).getByText("Windows 11")).toBeVisible();
-  expect(within(details).getByText("10.0.0.1")).toBeVisible();
-  expect(within(details).getByText("alex")).toBeVisible();
-  expect(within(details).getByText("workstation, developer")).toBeVisible();
-  expect(within(details).getByText("1–12 of 32")).toBeVisible();
-  await user.click(within(details).getByRole("button", { name: "Next hosts" }));
-  expect(within(details).getByRole("button", { name: "WS-13 Windows" })).toBeVisible();
+  const host = screen.getByRole("complementary");
+  expect(within(host).getByRole("heading", { name: "WS-1" })).toBeVisible();
+  expect(within(host).getByText("10.0.0.1")).toBeVisible();
+  expect(within(host).getByText("workstation, developer")).toBeVisible();
+  expect(container.querySelector(".diagram-host-card[aria-label='WS-1 Windows']")).toHaveAttribute("aria-pressed", "true");
   await user.click(screen.getByRole("button", { name: "Unassigned hosts" }));
-  expect(within(details).getByRole("button", { name: "standalone macOS" })).toBeVisible();
+  expect(within(screen.getByRole("complementary")).getByRole("button", { name: "standalone macOS" })).toBeVisible();
   await toggleLayer(user, "Hosts");
   expect(screen.queryByRole("button", { name: "Unassigned hosts" })).toBeNull();
+});
+
+test("long host lists in the details render only the rows in view", async () => {
+  const big: TopologyGraph = { segments: [segment("campus", "10.0.0.0/16")], devices: [], findings: [],
+    hosts: Array.from({ length: 300 }, (_, index) => host(`PC-${index + 1}`, `10.0.${Math.floor(index / 250)}.${(index % 250) + 1}`, ["campus"])) };
+  render(<NetworkDiagram graph={big} />);
+  await userEvent.setup().click(screen.getByRole("button", { name: /Segment campus/ }));
+  const details = screen.getByRole("complementary");
+  const rows = within(details).getAllByRole("button", { name: /^PC-\d+ Windows$/ });
+  expect(rows.length).toBeLessThan(60);
+  expect(within(details).getByText("300")).toBeVisible();
+  const scroller = details.querySelector(".diagram-host-scroll")!;
+  fireEvent.scroll(scroller, { target: { scrollTop: 44 * 200 } });
+  expect(within(details).getByRole("button", { name: "PC-201 Windows" })).toBeInTheDocument();
 });
 
 test("large subnets summarize by role and expand to host cards on request", async () => {
@@ -652,5 +666,366 @@ test.each([
     expect(lit).toContain(device + ":trunk");
     expect(lit).toContain(drop);
     expect(connectedWires(scene, lit)).toHaveLength(1);
+  }
+});
+
+
+test("search finds hosts, addresses, subnets and sensors, and reveals the choice", async () => {
+  const servers: TopologyGraph = {
+    segments: [segment("campus", "10.0.0.0/8"), segment("servers", "10.2.0.0/16", { parent_id: "segment:campus" })],
+    hosts: [...Array.from({ length: 9 }, (_, index) => host(`SRV-${index}`, `10.2.0.${index + 10}`, ["campus", "servers"], { type: "server", primary_segment_id: "segment:servers" })),
+      host("WEB", "10.9.0.5", ["campus"], { public_address: "203.0.113.10", public_address_source: "static_nat" })],
+    devices: [sensor("ZEEK-SRV", ["servers"])], findings: [],
+  };
+  const { container } = render(<NetworkDiagram graph={servers} />);
+  const user = userEvent.setup();
+  await toggleLayer(user, "Hosts");
+  const box = screen.getByRole("combobox", { name: "Find in diagram" });
+  await user.type(box, "10.2.0.200");
+  const options = () => screen.getAllByRole("option").map((option) => option.textContent);
+  expect(options()[0]).toMatch(/^servers.*Subnet containing 10\.2\.0\.200 · 10\.2\.0\.0\/16/);
+  await user.clear(box);
+  await user.type(box, "203.0");
+  expect(options()[0]).toMatch(/^WEB.*public 203\.0\.113\.10/);
+  await user.clear(box);
+  await user.type(box, "srv-");
+  expect(options().slice(0, 2)).toEqual([expect.stringMatching(/^SRV-0/), expect.stringMatching(/^SRV-1/)]);
+  await user.keyboard("{ArrowDown}{Enter}");
+  // The hidden hosts layer turns back on, and the subnet opens at host detail to show the host.
+  const card = container.querySelector(".diagram-host-card[aria-label='SRV-1 Windows']");
+  expect(card).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("listbox")).toBeNull();
+  await user.clear(box);
+  await user.type(box, "zeek{Enter}");
+  expect(within(screen.getByRole("complementary")).getByRole("heading", { name: "ZEEK-SRV" })).toBeVisible();
+});
+
+test("the slash key focuses search unless the user is typing elsewhere", async () => {
+  render(<><input aria-label="Other field" /><NetworkDiagram graph={graph} /></>);
+  const user = userEvent.setup();
+  await user.keyboard("/");
+  expect(screen.getByRole("combobox", { name: "Find in diagram" })).toHaveFocus();
+  await user.click(screen.getByRole("textbox", { name: "Other field" }));
+  await user.keyboard("/");
+  expect(screen.getByRole("textbox", { name: "Other field" })).toHaveValue("/");
+});
+
+test("focusing a subnet zooms to its hosts, with a breadcrumb and minimap to return", async () => {
+  const { container } = render(<NetworkDiagram graph={graph} />);
+  const user = userEvent.setup();
+  const map = screen.getByRole("group", { name: /Network map/ });
+  const transform = () => map.querySelector("g")!.getAttribute("transform");
+  const overview = transform();
+  fireEvent.doubleClick(screen.getByRole("button", { name: /Segment office/ }));
+  expect(screen.getByRole("navigation", { name: "Diagram location" })).toHaveTextContent("Overview›office32 hosts");
+  expect(container.querySelectorAll(".diagram-host-card:not([data-compact])")).toHaveLength(32);
+  expect(transform()).not.toBe(overview);
+  expect(screen.getByRole("img", { name: /Overview map/ })).toBeInTheDocument();
+  fireEvent.keyDown(map, { key: "Escape" });
+  expect(screen.queryByRole("complementary")).toBeNull();
+  fireEvent.keyDown(map, { key: "Escape" });
+  expect(screen.queryByRole("navigation", { name: "Diagram location" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: /Segment office/ }));
+  await user.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Focus subnet" }));
+  await user.click(within(screen.getByRole("navigation", { name: "Diagram location" })).getByRole("button", { name: "Overview" }));
+  expect(screen.queryByRole("navigation", { name: "Diagram location" })).toBeNull();
+});
+
+test("findings are marked on the items they concern and open them from the list", async () => {
+  const flagged: TopologyGraph = {
+    ...graph,
+    findings: [
+      { entity_id: "device:FW-01", message: "FW-01 refers to a segment absent from this environment." },
+      { entity_id: "segment:office", message: "office refers to host GHOST, which is absent from this environment." },
+      { entity_id: "segment:duplicate", message: "Multiple segment entries use duplicate." },
+    ],
+  };
+  const { container } = render(<NetworkDiagram graph={flagged} />);
+  const user = userEvent.setup();
+  expect(screen.getByRole("button", { name: "Segment office, 10.0.0.0/24, 1 finding" })).toHaveAttribute("data-finding", "true");
+  expect(screen.getByRole("button", { name: "Firewall FW-01, 1 finding" })).toBeVisible();
+  expect(container.querySelectorAll(".diagram-finding-badge")).toHaveLength(2);
+  const list = screen.getByText("3 diagram findings").closest("details")!;
+  expect(within(list).queryByRole("button", { name: /duplicate/ })).toBeNull();
+  await user.click(within(list).getByRole("button", { name: /GHOST/ }));
+  expect(within(screen.getByRole("complementary")).getByText(/GHOST/)).toBeVisible();
+});
+
+
+test("search and filter fields opt out of system autocorrect and suggestions", async () => {
+  const small: TopologyGraph = { segments: [segment("lab", "10.9.0.0/24")], devices: [], findings: [],
+    hosts: [host("LAB-1", "10.9.0.1", ["lab"]), host("LAB-2", "10.9.0.2", ["lab"])] };
+  render(<NetworkDiagram graph={small} />);
+  for (const field of [screen.getByRole("combobox", { name: "Find in diagram" })]) {
+    expect(field).toHaveAttribute("autocorrect", "off");
+    expect(field).toHaveAttribute("autocapitalize", "off");
+    expect(field).toHaveAttribute("spellcheck", "false");
+  }
+  await userEvent.setup().click(screen.getByRole("button", { name: /Segment lab/ }));
+  const filter = within(screen.getByRole("complementary")).getByRole("searchbox", { name: "Filter hosts" });
+  expect(filter).toHaveAttribute("autocorrect", "off");
+});
+
+test("a site in the breadcrumb is selectable and focuses the whole site", async () => {
+  const sites = ["hq", "a", "b", "c", "d", "e"];
+  const routed: TopologyGraph = {
+    segments: [...sites.map((name, index) => segment(`${name}-lan`, `10.${index}.1.0/24`)),
+      ...sites.slice(1).map((name, index) => segment(`${name}-wan`, `10.100.${index}.0/30`))],
+    devices: [], findings: [],
+    hosts: sites.map((name, index) => host(`${name.toUpperCase()}-WS`, `10.${index}.1.10`, [`${name}-lan`])),
+    routing: {
+      devices: Object.fromEntries(sites.map((name) => [name, { kind: "router" as const }])),
+      links: {
+        ...Object.fromEntries(sites.map((name, index) => [`${name}-lan`, { segment: `${name}-lan`, interfaces: { [name]: { name: "lan", ip: `10.${index}.1.1` } } }])),
+        ...Object.fromEntries(sites.slice(1).map((name, index) => [`${name}-wan`, { kind: "wan" as const, segment: `${name}-wan`,
+          interfaces: { hq: { name: `to-${name}`, ip: `10.100.${index}.1` }, [name]: { name: "wan", ip: `10.100.${index}.2` } } }])),
+      },
+    },
+  };
+  const { container } = render(<NetworkDiagram graph={routed} />);
+  const user = userEvent.setup();
+  const map = screen.getByRole("group", { name: /Network map/ });
+  const transform = () => map.querySelector("g")!.getAttribute("transform");
+  fireEvent.doubleClick(screen.getByRole("button", { name: /Segment hq-lan/ }));
+  const crumbs = () => screen.getByRole("navigation", { name: "Diagram location" });
+  expect(crumbs()).toHaveTextContent("Overview›Site hq›hq-lan1 hosts");
+  const zoneView = transform();
+  await user.click(within(crumbs()).getByRole("button", { name: "Site hq" }));
+  expect(within(crumbs()).getByText("Site hq")).toHaveAttribute("aria-current", "location");
+  expect(within(crumbs()).queryByText("hq-lan")).toBeNull();
+  expect(transform()).not.toBe(zoneView);
+  // Focusing a site that starts collapsed expands it first.
+  expect(container.querySelectorAll(".diagram-site-card")).toHaveLength(5);
+  fireEvent.doubleClick(screen.getByRole("button", { name: /Segment hq-lan/ }));
+  await user.click(screen.getByRole("button", { name: "Overview" }));
+  fireEvent.doubleClick(screen.getByRole("button", { name: "Collapse site hq" }));
+  expect(within(crumbs()).getByText("Site hq")).toBeVisible();
+  fireEvent.keyDown(map, { key: "Escape" });
+  expect(screen.queryByRole("navigation", { name: "Diagram location" })).toBeNull();
+});
+
+test("dragging on the overview map moves the view continuously", () => {
+  render(<NetworkDiagram graph={graph} />);
+  const map = screen.getByRole("group", { name: /Network map/ });
+  fireEvent.doubleClick(screen.getByRole("button", { name: /Segment office/ }));
+  const overview = screen.getByRole("img", { name: /Overview map, select or drag/ });
+  vi.spyOn(overview, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 180, 100));
+  const transform = () => map.querySelector("g")!.getAttribute("transform");
+  fireEvent.pointerDown(overview, { pointerId: 7, clientX: 10, clientY: 10 });
+  const first = transform();
+  fireEvent.pointerMove(overview, { pointerId: 7, clientX: 60, clientY: 40 });
+  const second = transform();
+  expect(second).not.toBe(first);
+  fireEvent.pointerUp(overview, { pointerId: 7 });
+  fireEvent.pointerMove(overview, { pointerId: 7, clientX: 120, clientY: 80 });
+  expect(transform()).toBe(second);
+});
+
+/** A two-site network: HQ has an Internet edge, a core and a VPN router; the plant has its own pair. */
+function twoSites(): TopologyGraph {
+  return {
+    segments: [segment("hq-lan", "10.1.1.0/24"), segment("hq-transit", "10.1.254.0/30"), segment("hq-vpn", "10.1.253.0/30"),
+      segment("site-wan", "10.60.0.0/30"), segment("plant-vpn", "10.2.254.0/30"), segment("plant-lan", "10.2.1.0/24")],
+    hosts: [host("HQ-WS", "10.1.1.10", ["hq-lan"]), host("PLANT-WS", "10.2.1.10", ["plant-lan"])],
+    devices: [firewall("HQ-FW", {}, { name: "edge" }), sensor("TAP-EDGE", [], { placement: "tap" }), sensor("TAP-VPN", [], { placement: "tap" })],
+    findings: [],
+    routing: {
+      devices: { edge: { kind: "firewall", firewall: "edge" }, core: { kind: "router" }, hqvpn: { kind: "router" }, plantvpn: { kind: "router" }, plant: { kind: "router" } },
+      links: {
+        upstream: { internet: true, interfaces: { edge: { name: "outside", ip: "192.0.2.1" } } },
+        "hq-transit": { segment: "hq-transit", interfaces: { edge: { name: "inside", ip: "10.1.254.1" }, core: { name: "edge", ip: "10.1.254.2" } } },
+        "hq-vpn": { segment: "hq-vpn", interfaces: { core: { name: "vpn", ip: "10.1.253.1" }, hqvpn: { name: "lan", ip: "10.1.253.2" } } },
+        "site-wan": { kind: "wan", segment: "site-wan", interfaces: { hqvpn: { name: "wan", ip: "10.60.0.1" }, plantvpn: { name: "wan", ip: "10.60.0.2" } } },
+        "plant-vpn": { segment: "plant-vpn", interfaces: { plantvpn: { name: "lan", ip: "10.2.254.2" }, plant: { name: "vpn", ip: "10.2.254.1" } } },
+        "hq-lan": { segment: "hq-lan", interfaces: { core: { name: "lan", ip: "10.1.1.1" } } },
+        "plant-lan": { segment: "plant-lan", interfaces: { plant: { name: "lan", ip: "10.2.1.1" } } },
+      },
+    },
+    link_taps: { "device:TAP-EDGE": { link: "hq-transit", scope: "all" }, "device:TAP-VPN": { link: "hq-vpn", scope: "all" } },
+  };
+}
+
+test("a collapsed site shows only its card and its links to other sites", () => {
+  const graph = twoSites();
+  const open = layoutNetworkDiagram(graph, LAYERS, { viewport: WIDE });
+  const hq = open.sites[0];
+  expect(hq.label).toBe("HQ-FW");
+  const scene = layoutNetworkDiagram(graph, LAYERS, { viewport: WIDE, siteChoices: { [hq.id]: false } });
+  const card = scene.sites.find(({ id }) => id === hq.id)!;
+  expect(card.collapsed).toBe(true);
+  const hqDevices = ["device:HQ-FW", "router:core", "router:hqvpn"];
+  // Only links that leave the site remain: the WAN and the Internet uplink, both ending at the card.
+  const uplink = scene.model.internets.get("internet:upstream")!.attachments[0].key;
+  expect(scene.wires.filter(({ entities }) => entities.some((id) => hqDevices.includes(id))).map(({ key }) => key).sort())
+    .toEqual(["link:site-wan", uplink].sort());
+  expect(scene.internets.map(({ internet }) => internet.id)).toEqual(["internet:upstream"]);
+  expect(scene.wires.find(({ key }) => key === uplink)!.path).toMatch(new RegExp(` ${card.y + card.height / 2}$`));
+  expect(scene.taps).toHaveLength(0);
+  const inside = (x: number, y: number) => x >= card.x && x <= card.x + card.width && y >= card.y && y <= card.y + card.height;
+  expect(scene.labels.filter(({ x, y }) => inside(x, y))).toEqual([]);
+  expect(scene.equipment.map(({ equipment }) => equipment.id).sort()).toEqual(["router:plant", "router:plantvpn"]);
+});
+
+test.each([
+  ["segment-based office", () => graph],
+  ["two routed sites", twoSites],
+  ["two routed sites, one collapsed", () => twoSites()],
+])("the scene contains everything drawn for %s, so Fit shows it all", (name, make) => {
+  const topology = make();
+  let options = { viewport: WIDE } as Parameters<typeof layoutNetworkDiagram>[2];
+  if (name.includes("collapsed")) {
+    const first = layoutNetworkDiagram(topology, LAYERS, options);
+    options = { ...options, siteChoices: { [first.sites[0].id]: false } };
+  }
+  const scene = layoutNetworkDiagram(topology, LAYERS, options);
+  const points = scene.wires.flatMap(({ path }) => {
+    const numbers = path.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
+    const tokens = path.trim().split(/\s+/);
+    const result: [number, number][] = [];
+    let x = 0; let y = 0; let index = 0;
+    for (let token = 0; token < tokens.length; token++) {
+      if (tokens[token] === "M") { x = numbers[index++]; y = numbers[index++]; token += 2; }
+      else if (tokens[token] === "H") { x = numbers[index++]; token += 1; }
+      else if (tokens[token] === "V") { y = numbers[index++]; token += 1; }
+      else continue;
+      result.push([x, y]);
+    }
+    return result;
+  });
+  for (const [x, y] of [...points, ...scene.labels.map(({ x, y }) => [x, y] as [number, number]),
+    ...scene.taps.map(({ chip }) => [chip.x + chip.width, chip.y + 18] as [number, number])]) {
+    expect(x).toBeGreaterThanOrEqual(0);
+    expect(y).toBeGreaterThanOrEqual(0);
+    expect(x).toBeLessThanOrEqual(scene.width);
+    expect(y).toBeLessThanOrEqual(scene.height);
+  }
+});
+
+
+test.each([[false], [true]])("Internet boundaries sit outside every site (collapsed: %s)", (collapse) => {
+  const topology = twoSites();
+  const open = layoutNetworkDiagram(topology, LAYERS, { viewport: WIDE });
+  const scene = collapse ? layoutNetworkDiagram(topology, LAYERS, { viewport: WIDE, siteChoices: { [open.sites[0].id]: false } }) : open;
+  expect(scene.internets).toHaveLength(1);
+  const [cloud] = scene.internets;
+  for (const site of scene.sites) {
+    const inside = cloud.x >= site.x && cloud.x <= site.x + site.width && cloud.y >= site.y && cloud.y <= site.y + site.height;
+    expect(inside).toBe(false);
+    expect(cloud.y + 23).toBeLessThan(site.y);
+  }
+});
+
+test("an inferred Internet boundary fans out to every firewall that translates addresses", () => {
+  const nat = (real: string, mapped: string) => ({ nat_rules: [{ type: "static" as const, src: [], real_ip: real, mapped_ip: mapped }] });
+  const twoEdges: TopologyGraph = {
+    segments: [segment("east", "10.1.0.0/24"), segment("west", "10.2.0.0/24")],
+    hosts: [host("E1", "10.1.0.5", ["east"], { public_address: "203.0.113.5", public_address_source: "static_nat" }),
+      host("W1", "10.2.0.5", ["west"], { public_address: "203.0.113.6", public_address_source: "static_nat" })],
+    devices: [firewall("FW-EAST", { east: "inside" }, nat("10.1.0.5", "203.0.113.5")), firewall("FW-WEST", { west: "inside" }, nat("10.2.0.5", "203.0.113.6"))],
+    findings: [],
+  };
+  const scene = layoutNetworkDiagram(twoEdges, LAYERS, { viewport: WIDE });
+  expect(scene.internets.map(({ internet }) => internet.id)).toEqual(["internet:inferred"]);
+  const uplinks = scene.wires.filter(({ entities }) => entities.includes("internet:inferred"));
+  expect(uplinks.map(({ entities }) => entities[0]).sort()).toEqual(["device:FW-EAST", "device:FW-WEST"]);
+  const [cloud] = scene.internets;
+  const glyphs = scene.equipment.map(({ x }) => x);
+  expect(cloud.x).toBeGreaterThan(Math.min(...glyphs));
+  expect(cloud.x).toBeLessThan(Math.max(...glyphs));
+});
+
+test("separate Internet boundaries never overlap", () => {
+  const topology = twoSites();
+  const dual: TopologyGraph = { ...topology, routing: { ...topology.routing!, links: { ...topology.routing!.links,
+    upstream6: { internet: true, interfaces: { edge: { name: "outside6", ip: "2001:db8::1" } } } } } };
+  const scene = layoutNetworkDiagram(dual, LAYERS, { viewport: WIDE });
+  expect(scene.internets.map(({ internet }) => internet.name).sort()).toEqual(["Internet (IPv4)", "Internet (IPv6)"]);
+  const [first, second] = [...scene.internets].sort((a, b) => a.x - b.x);
+  expect(second.x - first.x).toBeGreaterThanOrEqual(200);
+  expect(first.y).toBe(second.y);
+});
+
+/** The corner points of an orthogonal path made of M, H and V commands. */
+function pathPoints(path: string): [number, number][] {
+  const tokens = path.trim().split(/\s+/);
+  const points: [number, number][] = [];
+  let x = 0; let y = 0;
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index] === "M") { x = Number(tokens[++index]); y = Number(tokens[++index]); }
+    else if (tokens[index] === "H") x = Number(tokens[++index]);
+    else if (tokens[index] === "V") y = Number(tokens[++index]);
+    else continue;
+    points.push([x, y]);
+  }
+  return points;
+}
+
+function collapseAll(topology: TopologyGraph, viewport: { width: number; height: number }) {
+  const open = layoutNetworkDiagram(topology, LAYERS, { viewport });
+  return layoutNetworkDiagram(topology, LAYERS, { viewport, siteChoices: Object.fromEntries(open.sites.map(({ id }) => [id, false])) });
+}
+
+test("two collapsed sites sit side by side when they fit, joined edge to edge", () => {
+  const scene = collapseAll(twoSites(), WIDE);
+  const [first, second] = scene.sites;
+  expect(scene.sites.every(({ collapsed }) => collapsed)).toBe(true);
+  expect(first.y).toBe(second.y);
+  const wan = scene.wires.find(({ key }) => key === "link:site-wan")!;
+  const ys = pathPoints(wan.path).map(([, y]) => y);
+  expect(Math.max(...ys)).toBeLessThanOrEqual(Math.max(first.y + first.height, second.y + second.height));
+  const label = scene.labels.find(({ key }) => key === "link:site-wan:name")!;
+  for (const card of scene.sites) expect(label.x >= card.x && label.x <= card.x + card.width && label.y >= card.y && label.y <= card.y + card.height).toBe(false);
+});
+
+test("stacked sites connect through the gap between them, never from below", () => {
+  const scene = collapseAll(twoSites(), { width: 420, height: 900 });
+  const [upper, lower] = [...scene.sites].sort((a, b) => a.y - b.y);
+  expect(lower.y).toBeGreaterThan(upper.y + upper.height);
+  const wan = scene.wires.find(({ key }) => key === "link:site-wan")!;
+  const ys = pathPoints(wan.path).map(([, y]) => y);
+  expect(Math.max(...ys)).toBeLessThanOrEqual(lower.y + lower.height / 2);
+  expect(Math.min(...ys)).toBeGreaterThanOrEqual(upper.y);
+});
+
+test("sites that each reach the Internet share the top row under their own clouds", () => {
+  const topology = twoSites();
+  const both: TopologyGraph = { ...topology, devices: [...topology.devices, firewall("PLANT-FW", {}, { name: "plantfw" })],
+    routing: { ...topology.routing!,
+      devices: { ...topology.routing!.devices, plantfw: { kind: "firewall", firewall: "plantfw" } },
+      links: { ...topology.routing!.links,
+        "plant-uplink": { internet: true, interfaces: { plantfw: { name: "outside", ip: "198.51.100.1" } } },
+        "plant-edge": { segment: "plant-vpn", interfaces: { plantvpn: { name: "lan", ip: "10.2.254.2" }, plant: { name: "vpn", ip: "10.2.254.1" }, plantfw: { name: "inside", ip: "10.2.254.3" } } } } },
+  };
+  const scene = layoutNetworkDiagram(both, LAYERS, { viewport: WIDE });
+  expect(scene.sites).toHaveLength(2);
+  expect(scene.sites[0].y).toBe(scene.sites[1].y);
+  expect(scene.internets).toHaveLength(2);
+  for (const cloud of scene.internets) expect(cloud.y).toBeLessThan(Math.min(...scene.sites.map(({ y }) => y)));
+});
+
+test.each([
+  ["two expanded sites", () => layoutNetworkDiagram(twoSites(), LAYERS, { viewport: WIDE })],
+  ["two collapsed sites", () => collapseAll(twoSites(), WIDE)],
+  ["one site collapsed", () => {
+    const open = layoutNetworkDiagram(twoSites(), LAYERS, { viewport: WIDE });
+    return layoutNetworkDiagram(twoSites(), LAYERS, { viewport: WIDE, siteChoices: { [open.sites[0].id]: false } });
+  }],
+])("link labels keep clear of boxes, with padding, for %s", (_name, make) => {
+  const scene = make();
+  const pad = 6;
+  const box = (label: DiagramScene["labels"][number]) => {
+    const width = textWidth(label.text, label.kind === "link" ? 11 : 10.5, label.kind !== "link");
+    const left = label.anchor === "start" ? label.x : label.anchor === "middle" ? label.x - width / 2 : label.x - width;
+    return { left: left - pad, right: left + width + pad, top: label.y - 11, bottom: label.y + 3 };
+  };
+  const overlaps = (a: ReturnType<typeof box>, b: { x: number; y: number; width: number; height: number }) =>
+    a.left < b.x + b.width && a.right > b.x && a.top < b.y + b.height && a.bottom > b.y;
+  const zones = scene.zones.flatMap(function flatten(zone): typeof scene.zones { return [zone, ...zone.children.flatMap(flatten)]; });
+  const devices = scene.equipment.map(({ x, y }) => ({ x: x - 24, y: y - 24, width: 48, height: 48 }));
+  const crossSite = new Set([...scene.model.transits.values()].filter(({ kind }) => kind !== "network").map(({ id }) => id));
+  for (const label of scene.labels.filter(({ kind }) => kind === "link" || kind === "link-detail")) {
+    const area = box(label);
+    for (const target of [...zones, ...devices, ...scene.sites.filter(({ collapsed }) => collapsed)]) expect(overlaps(area, target)).toBe(false);
+    if (crossSite.has(label.key.split(":").slice(0, 2).join(":"))) for (const site of scene.sites) expect(overlaps(area, site)).toBe(false);
   }
 });

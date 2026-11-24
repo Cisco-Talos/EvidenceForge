@@ -554,6 +554,11 @@ appears once, in its most specific subnet.
 When authored routing joins sites with WAN or VPN links, each site gets its own outlined area.
 Sites are named after the common prefix of their subnet names, or their first device. With more
 than four sites, only the Internet-facing site starts expanded; select a site card to expand it.
+Select a site's label to collapse it. A collapsed site shows a summary card and only its links to
+other sites; its internal links and sensors return when it is expanded. Internet boundaries sit
+above every site, outside them, so they stay visible when a site is collapsed; each declared
+Internet link gets its own cloud. Links are long enough for their labels, which stay clear of
+the sites and subnets they connect.
 Ordinary links use solid gray lines, WAN links blue dash-dot lines and VPN links violet long
 dashes. Point-to-point transit subnets are drawn as labeled links with the interface name and
 address at each end. An interface named after its subnet shows only its address, such as `.1`.
@@ -580,9 +585,24 @@ subnets show their first 48 hosts on the map and list the rest in the details.
 
 Select any subnet, device, sensor, host, link or Internet boundary for details. The details panel
 opens over the map without moving it. It shows addresses, gateways, interfaces, sensors with their
-log formats, contained subnets and hosts; use **Previous** and **Next** to page through larger
-host lists. **Show on map** expands the host's subnet, and its site if collapsed, then selects
-the host on the map. **Layers** shows or hides sensors and hosts, and can add the **Firewall
+log formats, contained subnets and hosts. Filter a subnet's host list by name, address, operating
+system, role or user. Select a host there to show it on the map: its subnet expands, and so does
+its site if collapsed.
+
+Use **Find host, IP, subnet or sensor** above the map, or press `/`, to search hostnames, IP and
+public addresses, subnet names and ranges, sensors and devices. A complete IP address also finds
+the most specific subnet that contains it, even when no host uses that address. Use the arrow keys
+and Enter to choose a match. Choosing it turns on a hidden layer when needed and reveals the item.
+
+Double-click a subnet, or select **Focus subnet** in its details, to zoom in on its hosts.
+A breadcrumb shows where you are and leads back to the overview; Escape also returns. Select the
+site in the breadcrumb, or double-click a site's label on the map, to fit the whole site; a
+collapsed site expands first. While you are zoomed in, a small overview map shows the visible
+area; select a point on it, or drag across it, to move the view.
+
+A warning mark on a subnet, device, sensor or host means the environment has a finding about it.
+Select the item to read the finding in its details. The findings list below the map links to each
+item it can show. **Layers** shows or hides sensors and hosts, and can add the **Firewall
 policy scopes** overlay, which outlines subnets that share a firewall policy interface. Hover over
 the info icon beside each layer for a description. Firewalls and routers are always shown.
 Drag the canvas or use the arrow keys to pan. With focus in the diagram, scroll the mouse wheel

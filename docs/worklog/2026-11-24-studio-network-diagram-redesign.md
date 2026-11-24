@@ -49,8 +49,8 @@ Design and prioritized recommendations: [network diagram review](../design/netwo
   - `npm run build` and `npm run types:check` pass.
   - Studio, routing and migration pytest: 131 pass.
   - Ruff check and format are clean.
-- Renders across Talos, iteration-test, Metrolink, medium-dataset, routed-two-site and the
-  warmup fixture are in `docs/design/network-diagram-review/images/milestone-a-*.jpg`.
+- Renders were checked on Talos, iteration-test, Metrolink, medium-dataset, routed-two-site and the
+  warmup fixture. Review images were not kept in the repository.
 - Known follow-ups for review: the floating key can cover the lower canvas in shorter windows
   (it is collapsible). Multiple zoneless leaf children only place the first beside the parent.
 
@@ -69,3 +69,50 @@ Design and prioritized recommendations: [network diagram review](../design/netwo
   `GUTTER_GAP` (26 px) clear of the cards. A connectivity test parses the rendered wires and fails
   on either earlier behavior.
 - Committed as milestone A. Frontend: 48 files, 471 tests pass.
+
+### Milestone B (implemented, awaiting review, uncommitted)
+
+- `networkSearch.ts`: matches hostnames, IP and public-address prefixes, subnet names and CIDRs,
+  sensors and devices. A complete IPv4 or IPv6 address also finds its most specific containing
+  subnet, using BigInt prefix math. Unit tests: `tests/networkSearch.test.ts`.
+- Search box: `/` shortcut (ignored while typing and in hidden tabs), arrow keys and Enter.
+  Choosing a result runs a staged reveal: hidden layer → collapsed site → subnet host detail →
+  center. Sensors and links reveal through something they connect to.
+- Drill-in: double-click or **Focus subnet** fits the subnet at host detail, with a
+  breadcrumb (Escape or **Overview** to return). A minimap appears when focused or zoomed in.
+- The details host list is filterable, and lists over 60 rows render only the rows in view.
+  Choosing a row reveals the host; this replaces the 12-per-page pager.
+- Findings mark their subnet, device, sensor or host. Accessible names gain ", N findings". The
+  list below the map links to findings it can show.
+
+### Milestone B review changes (2026-11-24)
+
+- Review images were removed from the milestone A commit (amended to `4b11a673`) and from disk.
+- The "Mfg ×" popup came from macOS text suggestions in WebKit. Search and filter fields now set
+  `autocomplete`, `autocorrect`, `autocapitalize` off and `spellcheck` false.
+- The site crumb is selectable, and double-clicking a site label also focuses the site. Sites have
+  `site:<id>` bounds in the scene. A collapsed site expands before the fit.
+- The host filter appears for any subnet with more than one host. Rows are two lines (name, then
+  address and OS).
+- The details header has the title and close button on one row, with compact actions below.
+- The minimap view box can be dragged.
+- No repository or workspace environment yields diagram findings: resolution and pack validation
+  reject those conditions first (checked with a dangling `segment.systems` reference). Badges are a
+  safety net, covered by tests.
+- Collapsed sites: devices inside are tracked as hidden. Links internal to the site, its Internet
+  boundary, interface labels and TAP chips are skipped; cross-site links end at the card, which is
+  drawn above the links. Cards size to their summary and carry no frame padding.
+- Scene size comes from every drawn element (wire points, labels, chips, cards, devices, clouds,
+  sites), so Fit shows everything; covered by an extent test. `.diagram-viewport` gets
+  `transform: translateZ(0)` against WebKit repaint trails while panning (to confirm in the app).
+- Internet boundaries are drawn in a band above every site, outside the device trees, centered over
+  the devices they serve, and spread `CLOUD_SPACING` apart. Uplinks end at a collapsed site's card.
+  Internet-facing components share the top row. An inferred boundary fans out to every NAT firewall.
+- Sites wrap only when one row would exceed the canvas width. Stacked sites link through the gap
+  between them.
+- Labeled links have a minimum length: label width plus `LABEL_PAD` on each side.
+  - Gaps between neighbouring sites widen to fit their links' labels, with the jog near the right site.
+  - Side links fit their name, end labels and chips.
+  - Blocks reserve width for gutter link labels.
+- An invariant test checks that link labels never overlap subnets, devices or collapsed cards, and
+  that cross-site labels never overlap sites.

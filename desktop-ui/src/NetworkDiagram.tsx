@@ -4,13 +4,14 @@ import {
   Mail, Maximize, Minimize, Monitor, Network, Server, X, ZoomIn, ZoomOut,
 } from "lucide-react";
 import { Tooltip } from "radix-ui";
+import { searchDiagram, type SearchResult } from "./networkSearch";
 import type { NetworkChatContext, TopologyGraph } from "./api";
 import { captureNetworkView } from "./captureNetworkView";
 import { Modal } from "./Modal";
 import {
-  categoryLabel, hostCategory, layoutNetworkDiagram, MIN_READABLE_SCALE, shortOs,
+  buildDiagramModel, categoryLabel, hostCategory, layoutNetworkDiagram, MIN_READABLE_SCALE, shortOs, siteDeviceLine,
   type DiagramDevice, type DiagramEntity, type DiagramHost, type DiagramLayers, type DiagramLinkKind, type DiagramScene,
-  type Detail, type Equipment, type HostCategory, type PlacedChip, type PlacedHost, type PlacedZone, type Zone,
+  type Bounds, type Detail, type Equipment, type HostCategory, type PlacedChip, type PlacedHost, type PlacedZone, type Zone,
 } from "./networkDiagramLayout";
 
 const OS_LABELS: Record<string, string> = { windows: "Windows", linux: "Linux", macos: "macOS" };
@@ -26,7 +27,12 @@ const LAYER_HELP = {
 const LINK_LABELS: Record<DiagramLinkKind, string> = { network: "Network link", wan: "WAN link", vpn: "VPN link" };
 const SCOPE_COLORS = ["--accent", "--info", "--ok", "--syntax-keyword", "--warn", "--diagram-scope-rose", "--diagram-scope-olive", "--err"];
 const SCOPE_DASHES = ["3 4", "8 3", "7 2 1 2", "1 3"];
-const PAGE_SIZE = 12;
+/** Names and addresses are not prose: keep system autocorrect and suggestions out of these fields. */
+const PLAIN_INPUT = { autoComplete: "off", autoCorrect: "off", autoCapitalize: "off", spellCheck: false } as const;
+const HOST_ROW = 44;
+const HOST_TABLE_HEIGHT = 360;
+/** Above this many rows, the details host list renders only the rows in view. */
+const HOST_WINDOW_THRESHOLD = 60;
 const INITIAL_SIZE = { width: 720, height: 320 };
 const CATEGORY_ICONS: Record<HostCategory, typeof Monitor> = {
   domain_controller: KeyRound, database: Database, web_server: Globe, mail_server: Mail, file_server: Folder,
@@ -105,6 +111,14 @@ function activateByKey(event: KeyboardEvent<SVGGElement>, action: () => void) {
   action();
 }
 
+function FindingBadge({ x, y, messages }: { x: number; y: number; messages: string[] }) {
+  return <g className="diagram-finding-badge" transform={`translate(${x} ${y})`} aria-hidden="true">
+    <path d="M 0 -8 L 8 7 L -8 7 Z" />
+    <text y={5} textAnchor="middle">!</text>
+    <title>{messages.join("\n")}</title>
+  </g>;
+}
+
 function RouterIcon({ x, y, size }: { x: number; y: number; size: number }) {
   return <svg width={size} height={size} x={x} y={y} viewBox="0 0 24 24" fill="none"
     stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -134,34 +148,34 @@ function HostFacts({ host }: { host: DiagramHost }) {
   </dl>;
 }
 
-function HostGroup({ hosts, onSelect }: { hosts: DiagramHost[]; onSelect: (id: string) => void }) {
-  const [page, setPage] = useState(0);
-  const [expandedHost, setExpandedHost] = useState<string | null>(null);
-  const start = page * PAGE_SIZE;
-  const end = Math.min(hosts.length, start + PAGE_SIZE);
-  function showPage(next: number) {
-    setPage(next);
-    setExpandedHost(null);
-  }
+/** Every host in a subnet, filterable. Long lists render only the rows in view. */
+function HostTable({ hosts, onSelect }: { hosts: DiagramHost[]; onSelect: (id: string) => void }) {
+  const [filter, setFilter] = useState("");
+  const [scrollTop, setScrollTop] = useState(0);
+  const query = filter.trim().toLowerCase();
+  const shown = query ? hosts.filter((host) => [host.hostname, host.ip, host.os, host.type ?? "", ...(host.roles ?? []), ...(host.primary_users ?? [])]
+    .some((value) => value.toLowerCase().includes(query))) : hosts;
+  const windowed = shown.length > HOST_WINDOW_THRESHOLD;
+  const first = windowed ? Math.max(0, Math.floor(scrollTop / HOST_ROW) - 6) : 0;
+  const last = windowed ? Math.min(shown.length, first + Math.ceil(HOST_TABLE_HEIGHT / HOST_ROW) + 12) : shown.length;
   return <div className="diagram-hosts">
-    <h5>Hosts <span>{hosts.length}</span></h5>
-    {hosts.length > PAGE_SIZE && <div className="diagram-pagination">
-      <button type="button" className="button-quiet" disabled={page === 0} onClick={() => showPage(page - 1)}>Previous hosts</button>
-      <span role="status">{start + 1}–{end} of {hosts.length}</span>
-      <button type="button" className="button-quiet" disabled={end === hosts.length} onClick={() => showPage(page + 1)}>Next hosts</button>
-    </div>}
-    <ul>{hosts.slice(start, end).map((host) => {
-      const expanded = expandedHost === host.id;
-      return <li key={host.id}>
-        <button type="button" className="diagram-host" aria-expanded={expanded}
-          aria-label={hostLabel(host)} title={`${host.ip} · ${host.os}`}
-          onClick={() => setExpandedHost(expanded ? null : host.id)}>
-          <CategoryIcon host={host} size={16} /><strong>{host.hostname}</strong><span>{host.public_address ? "Public · " : ""}{shortOs(host.os)}</span>
-        </button>
-        {expanded && <><HostFacts host={host} />
-          <button type="button" className="button-quiet diagram-host-focus" onClick={() => onSelect(host.id)}>Show on map</button></>}
-      </li>;
-    })}</ul>
+    <h5>Hosts <span>{shown.length === hosts.length ? hosts.length : `${shown.length} of ${hosts.length}`}</span></h5>
+    {hosts.length > 1 && <input type="search" className="diagram-host-filter" {...PLAIN_INPUT} placeholder={`Filter ${hosts.length} hosts`} title="Filter by name, address, operating system, role or user"
+      aria-label="Filter hosts" value={filter} onChange={(event) => { setFilter(event.target.value); setScrollTop(0); }} />}
+    <div className="diagram-host-scroll" style={windowed ? { maxHeight: HOST_TABLE_HEIGHT } : undefined}
+      onScroll={windowed ? (event) => setScrollTop(event.currentTarget.scrollTop) : undefined}>
+      <ul style={windowed ? { paddingTop: first * HOST_ROW, paddingBottom: (shown.length - last) * HOST_ROW } : undefined}>
+        {shown.slice(first, last).map((host) => <li key={host.id}>
+          <button type="button" className="diagram-host" aria-label={hostLabel(host)} title={`${host.hostname} · ${host.ip} · ${host.os}`}
+            onClick={() => onSelect(host.id)}>
+            <CategoryIcon host={host} size={16} />
+            <span className="diagram-host-text"><strong>{host.hostname}</strong>
+              <small><code>{host.ip}</code> · {host.public_address ? `public ${host.public_address} · ` : ""}{shortOs(host.os)}</small></span>
+          </button>
+        </li>)}
+      </ul>
+      {!shown.length && <p className="muted">No hosts match.</p>}
+    </div>
   </div>;
 }
 
@@ -178,9 +192,9 @@ function EvidenceList({ device }: { device: DiagramDevice }) {
   </span>)}</>;
 }
 
-function DiagramInspector({ entity, scene, graph, onSelect, onClose, askAction }: {
+function DiagramInspector({ entity, scene, graph, onSelect, onFocus, onClose, askAction }: {
   entity: DiagramEntity; scene: DiagramScene; graph: TopologyGraph;
-  onSelect: (id: string) => void; onClose: () => void; askAction?: ReactNode;
+  onSelect: (id: string) => void; onFocus: (id: string) => void; onClose: () => void; askAction?: ReactNode;
 }) {
   const findings = graph.findings.filter((finding) => finding.entity_id === entity.id
     || (entity.kind === "equipment" && entity.equipment.device?.id === finding.entity_id));
@@ -193,6 +207,7 @@ function DiagramInspector({ entity, scene, graph, onSelect, onClose, askAction }
     const { zone } = entity;
     const gateway = model.gateways.get(zone.id);
     body = <>
+
       {!zone.unassigned ? <dl className="diagram-facts">
         <dt>Address range</dt><dd><code>{zone.cidr}</code></dd>
         {zone.segment && <><dt>Web clients</dt><dd>{EXPOSURE_LABELS[zone.segment.exposure]}</dd></>}
@@ -219,7 +234,7 @@ function DiagramInspector({ entity, scene, graph, onSelect, onClose, askAction }
       </ul></>}
       {zone.link && <><h5>Interfaces</h5><ul className="diagram-associations">{Object.entries(zone.link.link.interfaces).map(([device, iface]) =>
         <li key={device}><strong>{device}</strong><span>{iface.name}</span><code>{iface.ip}</code></li>)}</ul></>}
-      {zone.hosts.length > 0 && <HostGroup key={zone.id} hosts={zone.hosts} onSelect={onSelect} />}
+      {zone.hosts.length > 0 && <HostTable key={zone.id} hosts={zone.hosts} onSelect={onSelect} />}
     </>;
   } else if (entity.kind === "host") {
     const zone = [...model.zones.values()].find(({ hosts }) => hosts.includes(entity.host));
@@ -313,17 +328,137 @@ function DiagramInspector({ entity, scene, graph, onSelect, onClose, askAction }
       </ul></>}
     </>;
   }
+  const focusable = entity.kind === "zone" && entity.zone.hosts.length > 0;
   return <aside className="diagram-inspector" aria-label="Network diagram details">
     <header className="diagram-details-heading">
       <h4>{entityLabel(entity)}</h4>
-      {askAction}
       <button type="button" className="icon-button" aria-label="Close details" onClick={onClose}><X size={16} aria-hidden="true" /></button>
     </header>
+    {(askAction || focusable) && <div className="diagram-detail-actions">
+      {focusable && <button type="button" className="button-quiet" onClick={() => onFocus(entity.id)}>Focus subnet</button>}
+      {askAction}
+    </div>}
     {body}
     {findings.length > 0 && <ul className="diagram-findings">
       {findings.map((finding) => <li key={finding.message}>{finding.message}</li>)}
     </ul>}
   </aside>;
+}
+
+const RESULT_KINDS: Record<SearchResult["kind"], string> = {
+  host: "Host", zone: "Subnet", sensor: "Sensor", equipment: "Device", containing: "Contains address",
+};
+
+/** Find a host, address, subnet, sensor or device. Press / to focus it from anywhere in Studio. */
+function DiagramSearch({ search, onChoose }: { search: (query: string) => SearchResult[]; onChoose: (result: SearchResult) => void }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [index, setIndex] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const list = useId();
+  const results = useMemo(() => search(query), [search, query]);
+  useEffect(() => {
+    const shortcut = (event: globalThis.KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      // Studio keeps inactive tabs mounted but hidden; only a visible diagram takes the shortcut.
+      if (!input.current || input.current.closest("[hidden], [inert], [aria-hidden='true']")) return;
+      event.preventDefault();
+      input.current.focus();
+      input.current.select();
+    };
+    document.addEventListener("keydown", shortcut);
+    return () => document.removeEventListener("keydown", shortcut);
+  }, []);
+  const choose = (result: SearchResult | undefined) => {
+    if (!result) return;
+    onChoose(result);
+    setOpen(false);
+  };
+  return <div className="diagram-search" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false); }}>
+    <input ref={input} type="search" role="combobox" aria-label="Find in diagram" {...PLAIN_INPUT} aria-expanded={open && results.length > 0}
+      aria-controls={list} aria-activedescendant={open && results[index] ? `${list}-${index}` : undefined}
+      placeholder="Find host, IP, subnet or sensor" value={query}
+      onChange={(event) => { setQuery(event.target.value); setIndex(0); setOpen(true); }}
+      onFocus={() => setOpen(true)}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); setIndex((value) => Math.min(results.length - 1, value + 1)); }
+        else if (event.key === "ArrowUp") { event.preventDefault(); setIndex((value) => Math.max(0, value - 1)); }
+        else if (event.key === "Enter") { event.preventDefault(); choose(results[index]); }
+        else if (event.key === "Escape") { event.stopPropagation(); if (open && query) setOpen(false); else { setQuery(""); input.current?.blur(); } }
+      }} />
+    <kbd aria-hidden="true">/</kbd>
+    {open && query.trim() && <ul id={list} role="listbox" aria-label="Diagram matches" className="diagram-search-results">
+      {results.map((result, position) => <li key={result.kind + result.id} id={`${list}-${position}`} role="option" aria-selected={position === index}
+        onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setIndex(position)} onClick={() => choose(result)}>
+        <strong>{result.label}</strong><span>{result.detail}</span><small>{RESULT_KINDS[result.kind]}</small>
+      </li>)}
+      {!results.length && <li className="diagram-search-empty" role="presentation">No matches</li>}
+    </ul>}
+  </div>;
+}
+
+function Minimap({ scene, view, size, onCenter }: {
+  scene: DiagramScene; view: { x: number; y: number; scale: number }; size: { width: number; height: number };
+  onCenter: (x: number, y: number) => void;
+}) {
+  const width = 180;
+  const height = Math.max(60, Math.min(140, width * scene.height / scene.width));
+  const scale = Math.min(width / scene.width, height / scene.height);
+  const visible = { x: -view.x / view.scale, y: -view.y / view.scale, width: size.width / view.scale, height: size.height / view.scale };
+  const zones = scene.zones.flatMap(function flatten(zone): PlacedZone[] { return [zone, ...zone.children.flatMap(flatten)]; });
+  const dragging = useRef<number | null>(null);
+  const move = (event: PointerEvent<SVGSVGElement>) => {
+    const box = event.currentTarget.getBoundingClientRect();
+    onCenter((event.clientX - box.left) / scale, (event.clientY - box.top) / scale);
+  };
+  const stop = (event: PointerEvent<SVGSVGElement>) => {
+    if (dragging.current !== event.pointerId) return;
+    dragging.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  };
+  return <div className="diagram-minimap" aria-label="Overview map">
+    <svg width={scene.width * scale} height={scene.height * scale} role="img" aria-label="Overview map, select or drag to move the view"
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        dragging.current = event.pointerId;
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        move(event);
+      }}
+      onPointerMove={(event) => { if (dragging.current === event.pointerId) move(event); }}
+      onPointerUp={stop} onPointerCancel={stop}>
+      <g transform={`scale(${scale})`}>
+        {scene.sites.map((site) => <rect key={site.id} className="diagram-minimap-site" x={site.x} y={site.y} width={site.width} height={site.height} />)}
+        {zones.map((zone) => <rect key={zone.zone.id} className="diagram-minimap-zone" x={zone.x} y={zone.y} width={zone.width} height={zone.height} />)}
+        {scene.equipment.map(({ equipment, x, y }) => <circle key={equipment.id} className="diagram-minimap-device" cx={x} cy={y} r={14} />)}
+        <rect className="diagram-minimap-view" x={visible.x} y={visible.y} width={visible.width} height={visible.height} />
+      </g>
+    </svg>
+  </div>;
+}
+
+function Breadcrumb({ zoneId, siteId, scene, onOverview, onZone, onSite }: {
+  zoneId: string | null; siteId: string | null; scene: DiagramScene;
+  onOverview: () => void; onZone: (id: string) => void; onSite: (id: string) => void;
+}) {
+  const chain: Zone[] = [];
+  for (let zone = zoneId ? scene.model.zones.get(zoneId) : undefined; zone; zone = zone.parentId ? scene.model.zones.get(zone.parentId) : undefined) chain.unshift(zone);
+  const box = zoneId ? scene.bounds.get(zoneId) : undefined;
+  const site = siteId ? scene.sites.find((entry) => entry.id === siteId)
+    : box && scene.sites.find((entry) => box.x >= entry.x && box.x <= entry.x + entry.width && box.y >= entry.y && box.y <= entry.y + entry.height);
+  const current = chain[chain.length - 1];
+  return <nav className="diagram-breadcrumb" aria-label="Diagram location">
+    <button type="button" onClick={onOverview}>Overview</button>
+    {site && <span className="diagram-crumb"><span aria-hidden="true">›</span>
+      {current ? <button type="button" onClick={() => onSite(site.id)}>Site {site.label}</button> : <strong aria-current="location">Site {site.label}</strong>}
+    </span>}
+    {chain.map((zone, index) => <span key={zone.id} className="diagram-crumb">
+      <span aria-hidden="true">›</span>
+      {index === chain.length - 1 ? <strong aria-current="location">{zone.name}</strong> : <button type="button" onClick={() => onZone(zone.id)}>{zone.name}</button>}
+    </span>)}
+    <small>{current ? `${current.hosts.length} hosts` : site?.summary ? `${site.summary.zones} subnets` : ""} · Esc to go back</small>
+  </nav>;
 }
 
 function LayersMenu({ layers, available, showScopes, scopeCount, onLayer, onScopes }: {
@@ -432,7 +567,9 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
   const [dragging, setDragging] = useState(false);
   const [showScopes, setShowScopes] = useState(false);
   const [layers, setLayers] = useState<DiagramLayers>({ sensors: true, hosts: true });
-  const [pendingReveal, setPendingReveal] = useState<string | null>(null);
+  const [pendingReveal, setPendingReveal] = useState<{ id: string; tries: number; fit?: boolean } | null>(null);
+  const [focusZone, setFocusZone] = useState<string | null>(null);
+  const [focusSite, setFocusSite] = useState<string | null>(null);
   const [size, setSize] = useState(INITIAL_SIZE);
   const [camera, setCamera] = useState<Camera | "fit" | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -460,6 +597,17 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
   const active = preview?.id ?? pinned?.id;
   const covered = new Set(active ? scene.coverage.get(active) ?? [] : []);
   const { scopes, scopesBySegment } = useMemo(() => indexFirewallScopes(graph), [graph]);
+  // Search and reveal use every entity, including those in hidden layers.
+  const fullModel = useMemo(() => buildDiagramModel(graph, { sensors: true, hosts: true }), [graph]);
+  const findings = useMemo(() => {
+    const byEntity = new Map<string, string[]>();
+    for (const { entity_id, message } of graph.findings) byEntity.set(entity_id, [...(byEntity.get(entity_id) ?? []), message]);
+    return byEntity;
+  }, [graph.findings]);
+  const findingLabel = (id: string) => {
+    const count = findings.get(id)?.length ?? 0;
+    return count ? `, ${count} ${count === 1 ? "finding" : "findings"}` : "";
+  };
   const layerAvailability: DiagramLayers = {
     sensors: graph.devices.some((device) => device.kind !== "firewall"),
     hosts: graph.hosts.length > 0,
@@ -547,7 +695,8 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
 
   function panByKeyboard(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape" && !expanded) {
-      setSelected(null);
+      if (selected) setSelected(null);
+      else if (focusZone || focusSite) showOverview();
       return;
     }
     if (event.currentTarget !== event.target) return;
@@ -562,13 +711,35 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     const frame = canvas.current?.getBoundingClientRect();
     const key = canvas.current?.querySelector(".diagram-key")?.getBoundingClientRect();
     const panel = canvas.current?.parentElement?.querySelector(".diagram-inspector")?.getBoundingClientRect();
+    const crumb = canvas.current?.querySelector(".diagram-breadcrumb")?.getBoundingClientRect();
     const bottom = frame && key?.height ? key.top - frame.top - 8 : size.height - 4;
     const right = frame && panel?.width ? panel.left - frame.left - 8 : size.width - 4;
-    return { left: 4, top: 4, right: right > size.width / 3 ? right : size.width - 4, bottom: bottom > size.height / 3 ? bottom : size.height - 4 };
+    const top = frame && crumb?.height ? crumb.bottom - frame.top + 8 : 4;
+    return { left: 4, top: top < size.height / 3 ? top : 4, right: right > size.width / 3 ? right : size.width - 4, bottom: bottom > size.height / 3 ? bottom : size.height - 4 };
+  }
+
+  // Sensors and links have no box of their own; reveal something they connect to.
+  function revealBox(id: string): Bounds | undefined {
+    const own = scene.bounds.get(id);
+    if (own) return own;
+    for (const target of scene.coverage.get(id) ?? []) {
+      const box = scene.bounds.get(target);
+      if (box) return box;
+    }
+    const transit = scene.model.transits.get(id);
+    return transit?.ends.map(({ equipmentId }) => scene.bounds.get(equipmentId)).find(Boolean);
+  }
+
+  function fitTo(box: Bounds) {
+    const area = clearArea();
+    const pad = 28;
+    const value = Math.min(2.2, (area.right - area.left - pad * 2) / box.width, (area.bottom - area.top - pad * 2) / box.height);
+    setCamera({ scale: value, x: (area.left + area.right) / 2 - (box.x + box.width / 2) * value,
+      y: (area.top + area.bottom) / 2 - (box.y + box.height / 2) * value });
   }
 
   function reveal(id: string) {
-    const box = scene.bounds.get(id);
+    const box = revealBox(id);
     if (!box) return;
     const area = clearArea();
     const left = box.x * view.scale + view.x;
@@ -580,29 +751,66 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
       y: (area.top + area.bottom) / 2 - (box.y + box.height / 2) * view.scale });
   }
 
-  // A host can be hidden in a summarized subnet or a collapsed site. Show it first, then reveal it.
-  function selectFromDetails(id: string) {
-    const entity = scene.entities.get(id);
-    if (!entity) return;
+  const search = useCallback((query: string) => searchDiagram(graph, fullModel, query), [graph, fullModel]);
+  const hostZone = (id: string) => [...fullModel.zones.values()].find(({ hosts }) => hosts.some((member) => member.id === id));
+
+  /**
+   * Select an item and bring it into view. It may first need a hidden layer, a collapsed site or
+   * a summarized subnet to be shown; each step changes the scene, so reveal continues afterward.
+   */
+  function selectFromDetails(id: string, options: { fit?: boolean } = {}) {
+    const isHost = id.startsWith("host:") && !!hostZone(id);
+    const isSensor = fullModel.sensors.some((device) => device.id === id);
+    if (!scene.entities.has(id) && !isHost && !isSensor) return;
     setHovered(null);
     setFocused(null);
     setSelected(id);
     canvas.current?.focus({ preventScroll: true });
-    if (scene.bounds.has(id)) { reveal(id); return; }
-    const site = scene.collapsedSite.get(id);
-    if (site) setSiteChoices((current) => ({ ...current, [site]: true }));
-    if (entity.kind === "host") {
-      const zone = [...scene.model.zones.values()].find(({ hosts }) => hosts.some((member) => member.id === id));
-      if (zone) setZoneDetail((current) => ({ ...current, [zone.id]: "hosts" }));
-    }
-    setPendingReveal(id);
+    if (isHost && !layers.hosts) setLayers((current) => ({ ...current, hosts: true }));
+    if (isSensor && !layers.sensors) setLayers((current) => ({ ...current, sensors: true }));
+    setPendingReveal({ id, tries: 0, fit: options.fit });
   }
   useEffect(() => {
     if (!pendingReveal) return;
-    if (scene.bounds.has(pendingReveal)) reveal(pendingReveal);
-    setPendingReveal(null);
-    // Reveal only once the expanded subnet or site is part of the scene.
+    const { id, tries, fit: fitBox } = pendingReveal;
+    const box = scene.bounds.get(id);
+    if (box || (tries > 0 && revealBox(id))) {
+      if (fitBox && box) fitTo(box); else reveal(id);
+      setPendingReveal(null);
+      return;
+    }
+    if (tries > 3) { setPendingReveal(null); return; }
+    const site = scene.collapsedSite.get(id) ?? scene.collapsedSite.get(hostZone(id)?.id ?? "");
+    if (site) setSiteChoices((current) => ({ ...current, [site]: true }));
+    const zone = id.startsWith("host:") ? hostZone(id) : undefined;
+    if (zone) setZoneDetail((current) => ({ ...current, [zone.id]: "hosts" }));
+    setPendingReveal({ id, tries: tries + 1, fit: fitBox });
+    // Each pass runs after the scene reflects the previous step.
   }, [scene, pendingReveal]);
+
+  /** Zoom into one subnet at host detail; the breadcrumb leads back out. */
+  function focusOn(id: string) {
+    if (!fullModel.zones.has(id)) return;
+    setZoneDetail((current) => ({ ...current, [id]: "hosts" }));
+    setFocusZone(id);
+    setFocusSite(null);
+    selectFromDetails(id, { fit: true });
+  }
+
+  /** Zoom to one site, expanding it first when it is collapsed. */
+  function focusOnSite(id: string) {
+    setFocusZone(null);
+    setFocusSite(id);
+    setSelected(null);
+    if (scene.sites.find((site) => site.id === id)?.collapsed) setSiteChoices((current) => ({ ...current, [id]: true }));
+    setPendingReveal({ id: "site:" + id, tries: 0, fit: true });
+  }
+
+  function showOverview() {
+    setFocusZone(null);
+    setFocusSite(null);
+    setCamera("fit");
+  }
 
   function toggleSelection(id: string) {
     setSelected((current) => current === id ? null : id);
@@ -649,7 +857,8 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     const width = placed.width;
     return <g key={placed.key} className="diagram-node diagram-chip" transform={`translate(${x + placed.x} ${y + placed.y})`}
       data-family={family} data-placement={placed.device.placement} data-related={active === placed.device.id}
-      {...interactive(placed.device.id, sensorLabel(placed.device))}>
+      data-finding={findings.has(placed.device.id) || undefined}
+      {...interactive(placed.device.id, sensorLabel(placed.device) + findingLabel(placed.device.id))}>
       <rect className="diagram-chip-box" width={width} height={18} rx={9} />
       {placed.device.placement === "tap" ? <circle className="diagram-chip-mark" cx={10} cy={9} r={3.4} />
         : <path className="diagram-chip-mark" d="M 10 5 l 4 4 -4 4 -4 -4 z" />}
@@ -661,7 +870,8 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
   const hostNode = (zone: PlacedZone, card: PlacedHost, compact: boolean) => {
     const { host } = card;
     return <g key={zone.zone.id + host.id} className="diagram-node diagram-host-card" transform={`translate(${zone.x + card.x} ${zone.y + card.y})`}
-      data-compact={compact || undefined} data-public={!!host.public_address || undefined} {...interactive(host.id, hostLabel(host))}>
+      data-compact={compact || undefined} data-public={!!host.public_address || undefined} data-finding={findings.has(host.id) || undefined}
+      {...interactive(host.id, hostLabel(host) + findingLabel(host.id))}>
       <rect className="diagram-host-box" width={card.width} height={card.height} rx={compact ? 6 : 8} />
       {compact ? <>
         <CategoryIcon category={card.category} size={13} x={6} y={3.5} />
@@ -684,12 +894,14 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     const nodes: ReactNode[] = [
       <g key={model.id} className="diagram-node diagram-zone" transform={`translate(${zone.x} ${zone.y})`}
         data-unassigned={model.unassigned || undefined} data-covered={covered.has(model.id) || undefined}
-        {...interactive(model.id, zoneLabel(model))}>
+        data-finding={findings.has(model.id) || undefined} onDoubleClick={() => focusOn(model.id)}
+        {...interactive(model.id, zoneLabel(model) + findingLabel(model.id))}>
         {segmentScopes?.map((scope, index) => <rect key={scope.id} className="diagram-scope-highlight" x={-4 - index * 4} y={-4 - index * 4}
           width={zone.width + 8 + index * 8} height={zone.height + 8 + index * 8} rx={12 + index * 2} style={{ color: scope.color }} strokeDasharray={scope.dash}>
           <title>{scope.label}</title></rect>)}
         <rect className="diagram-zone-box" width={zone.width} height={zone.height} />
         <text x={12} y={20} className="diagram-zone-name" aria-hidden="true">{model.name}</text>
+        {findings.has(model.id) && <FindingBadge x={zone.width - 14} y={14} messages={findings.get(model.id)!} />}
         {model.cidr && <text x={12} y={35} className="diagram-zone-cidr" aria-hidden="true">{model.cidr}</text>}
         {zone.summary.length > 0 && <g aria-hidden="true" transform={`translate(12 ${zone.chips.length ? 70 : 46})`}>
           {(() => {
@@ -757,6 +969,7 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     <h3 id={title} className="sr-only">Network diagram</h3>
     <div className="diagram-toolbar">
       <div className="diagram-controls">
+        {hasNodes && <DiagramSearch search={search} onChoose={({ id }) => selectFromDetails(id)} />}
         <LayersMenu layers={layers} available={layerAvailability} showScopes={showScopes} scopeCount={scopes.length}
           onLayer={(key) => { setLayers({ ...layers, [key]: !layers[key] }); setHovered(null); setFocused(null); setCamera(null); }}
           onScopes={() => setShowScopes(!showScopes)} />
@@ -777,34 +990,37 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     {askError && <p role="alert">{askError}</p>}
     {graph.segments.length === 0 && <p className="muted">No network segments are declared.</p>}
     {hasNodes ? <div className="diagram-body">
-      <div ref={trackCanvas} className="diagram-canvas" role="group" tabIndex={0}
+      <div ref={trackCanvas} className="diagram-canvas" role="group" tabIndex={0} data-focused={focusZone || focusSite ? true : undefined}
         aria-label="Network map, use arrow keys to pan and the wheel to zoom when focused" onKeyDown={panByKeyboard}>
         <svg ref={viewport} className="diagram-viewport" data-dragging={dragging}
           onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag}
           onPointerCancel={stopDrag} onLostPointerCapture={stopDrag}>
           <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
-            {scene.sites.map((site) => {
-              const toggle = () => setSiteChoices((current) => ({ ...current, [site.id]: site.collapsed }));
-              return site.collapsed
-                ? <g key={site.id} className="diagram-node diagram-site-card" role="button" tabIndex={0} aria-label={`Expand site ${site.label}`}
-                  transform={`translate(${site.x} ${site.y})`} onClick={toggle} onKeyDown={(event) => activateByKey(event, toggle)}>
-                  <rect className="diagram-site-box" width={site.width} height={site.height} />
-                  <text x={16} y={26} className="diagram-site-title">{site.label}</text>
-                  <text x={16} y={48} className="diagram-zone-os">{site.summary!.zones} subnets · {site.summary!.hosts} hosts</text>
-                  <text x={16} y={66} className="diagram-zone-os">{site.summary!.devices.slice(0, 3).join(", ")}{site.summary!.devices.length > 3 ? ` +${site.summary!.devices.length - 3}` : ""}</text>
-                  <text x={16} y={88} className="diagram-site-expand">Expand site ▾</text>
+            {scene.sites.filter(({ collapsed }) => !collapsed).map((site) => {
+              const collapse = () => setSiteChoices((current) => ({ ...current, [site.id]: false }));
+              return <g key={site.id} className="diagram-site" transform={`translate(${site.x} ${site.y})`}>
+                <rect className="diagram-site-frame" width={site.width} height={site.height} />
+                <g className="diagram-node diagram-site-label" role="button" tabIndex={0} aria-label={`Collapse site ${site.label}`}
+                  onClick={collapse} onDoubleClick={() => focusOnSite(site.id)} onKeyDown={(event) => activateByKey(event, collapse)}>
+                  <text x={16} y={18}>{`SITE · ${site.label}`.toUpperCase()}</text>
                 </g>
-                : <g key={site.id} className="diagram-site" transform={`translate(${site.x} ${site.y})`}>
-                  <rect className="diagram-site-frame" width={site.width} height={site.height} />
-                  <g className="diagram-node diagram-site-label" role="button" tabIndex={0} aria-label={`Collapse site ${site.label}`}
-                    onClick={toggle} onKeyDown={(event) => activateByKey(event, toggle)}>
-                    <text x={16} y={18}>{`SITE · ${site.label}`.toUpperCase()}</text>
-                  </g>
-                </g>;
+              </g>;
             })}
             <g aria-hidden="true" className="diagram-edges">{scene.wires.map((wire) =>
               <path key={wire.key} d={wire.path} data-style={wire.style} data-link-kind={wire.linkKind} data-highlighted={highlighted(wire.entities)} />)}
             </g>
+            {/* Collapsed site cards sit above the links, which then end at the card's edge. */}
+            {scene.sites.filter(({ collapsed }) => collapsed).map((site) => {
+              const toggle = () => setSiteChoices((current) => ({ ...current, [site.id]: true }));
+              return <g key={site.id} className="diagram-node diagram-site-card" role="button" tabIndex={0} aria-label={`Expand site ${site.label}`}
+                transform={`translate(${site.x} ${site.y})`} onClick={toggle} onKeyDown={(event) => activateByKey(event, toggle)}>
+                <rect className="diagram-site-box" width={site.width} height={site.height} />
+                <text x={16} y={26} className="diagram-site-title">{site.label}</text>
+                <text x={16} y={48} className="diagram-zone-os">{site.summary!.zones} subnets · {site.summary!.hosts} hosts</text>
+                <text x={16} y={66} className="diagram-zone-os">{siteDeviceLine(site.summary!.devices)}</text>
+                <text x={16} y={88} className="diagram-site-expand">Expand site ▾</text>
+              </g>;
+            })}
             {scene.zones.flatMap(zoneNodes)}
             {scene.internets.map(({ internet, x, y }) => <g key={internet.id} className="diagram-node diagram-internet" transform={`translate(${x} ${y})`}
               data-inferred={internet.inferred || undefined} {...interactive(internet.id, internet.inferred ? `${internet.name} (inferred)` : internet.name)}>
@@ -814,8 +1030,10 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
               {internet.inferred && <text x={34} y={12} className="diagram-device-subtitle" aria-hidden="true">inferred from public addresses</text>}
             </g>)}
             {scene.equipment.map(({ equipment, x, y, labelSide }) => <g key={equipment.id} className="diagram-node diagram-device" transform={`translate(${x} ${y})`}
-              data-kind={equipment.kind} {...interactive(equipment.id, equipmentLabel(equipment))}>
+              data-kind={equipment.kind} data-finding={findings.has(equipment.id) || undefined}
+              {...interactive(equipment.id, equipmentLabel(equipment) + findingLabel(equipment.id))}>
               <rect className="diagram-device-box" x={-24} y={-24} width={48} height={48} rx={11} />
+              {findings.has(equipment.id) && <FindingBadge x={22} y={-22} messages={findings.get(equipment.id)!} />}
               <EquipmentIcon kind={equipment.kind} x={-15} y={-15} size={30} />
               <text x={labelSide === "above" ? 0 : -34} y={labelSide === "above" ? -46 : -2} textAnchor={labelSide === "above" ? "middle" : "end"}
                 className="diagram-device-name" aria-hidden="true">{equipment.name}</text>
@@ -848,17 +1066,24 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
         <div className="diagram-zoom" role="group" aria-label="Diagram view">
           <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoom(1.25)}><ZoomIn size={16} aria-hidden="true" /></button>
           <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoom(0.8)}><ZoomOut size={16} aria-hidden="true" /></button>
-          <button type="button" aria-label="Fit to view" title="Fit to view" onClick={() => setCamera("fit")}><Maximize size={16} aria-hidden="true" /></button>
+          <button type="button" aria-label="Fit to view" title="Fit to view" onClick={showOverview}><Maximize size={16} aria-hidden="true" /></button>
         </div>
+        {(focusZone || focusSite) && <Breadcrumb zoneId={focusZone} siteId={focusSite} scene={scene}
+          onOverview={showOverview} onZone={focusOn} onSite={focusOnSite} />}
+        {(focusZone || focusSite || view.scale > scale * 1.75) && <Minimap scene={scene} view={view} size={size}
+          onCenter={(x, y) => setCamera({ ...view, x: size.width / 2 - x * view.scale, y: size.height / 2 - y * view.scale })} />}
       </div>
       {pinned && <DiagramInspector entity={pinned} scene={scene} graph={graph}
         askAction={onAsk && revision && <button type="button" className="button-quiet" disabled={asking}
           onClick={() => void askAbout(pinned)}>Ask about this</button>}
-        onSelect={selectFromDetails} onClose={() => { setSelected(null); canvas.current?.focus(); }} />}
+        onSelect={(id) => selectFromDetails(id)} onFocus={focusOn} onClose={() => { setSelected(null); canvas.current?.focus(); }} />}
     </div> : (graph.segments.length > 0 || graph.devices.length > 0 || graph.hosts.length > 0) && <p className="muted">No diagram items in the selected layers.</p>}
     {graph.findings.length > 0 && <details className="diagram-findings">
       <summary>{graph.findings.length} diagram {graph.findings.length === 1 ? "finding" : "findings"}</summary>
-      <ul>{graph.findings.map(({ entity_id, message }) => <li key={JSON.stringify([entity_id, message])}>{message}</li>)}</ul>
+      <ul>{graph.findings.map(({ entity_id, message }) => <li key={JSON.stringify([entity_id, message])}>
+        {scene.entities.has(entity_id) || fullModel.zones.has(entity_id)
+          ? <button type="button" onClick={() => selectFromDetails(entity_id)}>{message}</button> : message}
+      </li>)}</ul>
     </details>}
   </section>;
   return expanded ? <Modal title="Expanded network diagram" hideTitle size="full" className="network-diagram-dialog"
