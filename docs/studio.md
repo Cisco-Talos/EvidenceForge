@@ -544,34 +544,51 @@ Validation warns when a firewall uses legacy segment-based visibility. Use autho
 routing for new firewall models so log coverage follows traffic the device handles
 across its interfaces. Existing scenarios can still generate with legacy visibility.
 
-The **Visualize** tab labels subnet rails with their names and CIDR blocks. Ordinary
-network links use solid gray lines. WAN links use blue dash-dot lines and VPN links use
-violet long dashes. The map and key label both link types. Short gray dashes show device
-membership in a shared subnet in scenarios that use the original network model.
-An authored Internet boundary appears as a cloud above its edge device. Separate IPv4
-and IPv6 boundaries carry address-family labels.
-**Firewall scopes** highlights subnets that
-share a firewall policy interface. The key matches each named scope to its color and outline.
-Subnets that belong to multiple scopes show a band for each one. The overlay starts enabled
-for the original model and can be shown alongside authored routing. Routed subnets are grouped
-next to the device that connects them. Select a subnet name to see its gateway, hosts,
-link type, attached interfaces, and sensors together. Select the Internet cloud to see
-its uplink details.
+The **Visualize** tab draws the environment as a network diagram that fits the window. Each
+subnet is a card with its name, CIDR block, sensors and hosts. Devices are laid out from the
+Internet boundary inward: an edge firewall above the core router, with subnets below the device
+that serves them. A device with no subnets of its own, such as a VPN concentrator, sits beside
+its parent. A subnet inside a larger declared range is drawn inside that range, and each host
+appears once, in its most specific subnet.
 
-The sensor key identifies TAP circles with solid stems and SPAN diamonds with dashed stems.
-When a rail runs out of space, click its **+N** badge to see the remaining sensors. A TAP on
-an ordinary network link can capture all traffic on that link or only traffic to and from
-the Internet. For WAN circuits and VPN tunnels, place sensors on the termination-side network.
-Small host groups expand inline when space permits. Click a branch's host count to expand it,
-and use **Previous** and **Next** to browse larger subnets 12 hosts at a time. The subnet details
-also list its hosts and device associations. Select a host to see its IP address, operating
-system, primary users, and roles. Use **Sensors**, **Firewalls**, and
-**Hosts** to toggle layers.
-Dense diagrams use fewer subnet columns in a narrow window and keep manual host expansion
-choices as the window resizes. Drag the canvas or use the arrow keys to pan. With focus in
-the diagram, scroll the mouse wheel to zoom around the pointer. **Fit to view** fits all
-visible layers. **Expand diagram** fills the Studio window and focuses the canvas for
-wheel zoom. Press Escape to return to the tab.
+When authored routing joins sites with WAN or VPN links, each site gets its own outlined area.
+Sites are named after the common prefix of their subnet names, or their first device. With more
+than four sites, only the Internet-facing site starts expanded; select a site card to expand it.
+Ordinary links use solid gray lines, WAN links blue dash-dot lines and VPN links violet long
+dashes. Point-to-point transit subnets are drawn as labeled links with the interface name and
+address at each end. An interface named after its subnet shows only its address, such as `.1`.
+
+Scenarios that use the segment-based network model have no declared links. The diagram then
+infers them and says so above the map. A dashed line joins a firewall to each subnet in its
+policy interface map, and a dotted line to each subnet it only monitors. An Internet cloud labeled
+*inferred* appears above the firewall when NAT, `public_cidrs` or a public host address implies
+one. Subnets that no modeled device connects are grouped under **Not attached to a modeled
+device**.
+
+Sensors are chips named by their tool: green **Zeek** chips write network logs and violet
+**Snort** chips raise IDS alerts. Hover over a chip to see exactly which Zeek logs that sensor
+writes, such as only `conn` and `weird`. A circle marks a TAP and a diamond a SPAN. Chips show the sensor name when it fits, and **+N** opens the subnet's full
+sensor list. Hover over or select a sensor to highlight every subnet and link it observes. A TAP
+on an ordinary link can capture all traffic or only Internet traffic. For WAN circuits and VPN
+tunnels, place sensors on the termination-side network.
+
+Host icons follow each host's roles, or its declared type when no roles are set. A host with a
+public address (a static NAT address or a routable IP) is marked individually; when its subnet is
+summarized, that host is listed by name. Small environments open with every host card visible.
+Larger ones open with subnet summaries; select **Show N hosts** in a card to expand it. Very large
+subnets show their first 48 hosts on the map and list the rest in the details.
+
+Select any subnet, device, sensor, host, link or Internet boundary for details. The details panel
+opens over the map without moving it. It shows addresses, gateways, interfaces, sensors with their
+log formats, contained subnets and hosts; use **Previous** and **Next** to page through larger
+host lists. **Show on map** expands the host's subnet, and its site if collapsed, then selects
+the host on the map. **Layers** shows or hides sensors and hosts, and can add the **Firewall
+policy scopes** overlay, which outlines subnets that share a firewall policy interface. Hover over
+the info icon beside each layer for a description. Firewalls and routers are always shown.
+Drag the canvas or use the arrow keys to pan. With focus in the diagram, scroll the mouse wheel
+to zoom around the pointer. The zoom controls in the corner include **Fit to view**. The expand
+button fills the Studio window and focuses the canvas for wheel zoom. Press Escape to close the
+details or return to the tab.
 
 Use **Ask about this diagram** to open an Author draft with the full topology for the displayed
 revision, including authored routing and the firewall scope setting. **Ask about this** in the

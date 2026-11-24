@@ -3374,6 +3374,8 @@ export interface components {
             /** Generation Id */
             generation_id: string;
         };
+        /** @enum {string} */
+        EvidenceDepth: "protocol" | "connection" | "alert" | "firewall" | "other";
         /**
          * ExamplesInstallRequest
          * @description Bind a Settings action to the workspace the user was viewing.
@@ -4697,6 +4699,8 @@ export interface components {
             link_taps?: {
                 [key: string]: components["schemas"]["LinkTap"];
             };
+            /** Public Cidrs */
+            public_cidrs?: string[];
         };
         /**
          * RoutingDevice
@@ -5135,6 +5139,19 @@ export interface components {
             location: string;
         };
         /**
+         * SensorEvidence
+         * @description Logs one sensor writes for one source family, and how much traffic detail they carry.
+         */
+        SensorEvidence: {
+            /** Family */
+            family: string;
+            /** Label */
+            label: string;
+            depth: components["schemas"]["EvidenceDepth"];
+            /** Formats */
+            formats: string[];
+        };
+        /**
          * SkillInstallRequest
          * @description Selected installer targets from Authoring & tools Settings.
          */
@@ -5432,6 +5449,14 @@ export interface components {
             default_interface: string | null;
             /** Associations */
             associations: components["schemas"]["TopologyAssociation"][];
+            /** Evidence */
+            evidence?: components["schemas"]["SensorEvidence"][];
+            /** Nat Rules */
+            nat_rules?: components["schemas"]["TopologyNatRule"][];
+            /** Policy */
+            policy?: components["schemas"]["TopologyPolicyRule"][];
+            /** Default Action */
+            default_action?: ("permit" | "deny") | null;
         };
         /**
          * TopologyFinding
@@ -5464,6 +5489,61 @@ export interface components {
             primary_users?: string[];
             /** Roles */
             roles?: string[];
+            /**
+             * Type
+             * @description Declared system type, used when roles are absent.
+             * @default
+             */
+            type: string;
+            /**
+             * Primary Segment Id
+             * @description The most specific containing segment (longest prefix).
+             */
+            primary_segment_id?: string | null;
+            /**
+             * Public Address
+             * @description A static NAT address or globally routable host address.
+             */
+            public_address?: string | null;
+            /** Public Address Source */
+            public_address_source?: ("static_nat" | "public_ip") | null;
+        };
+        /**
+         * TopologyNatRule
+         * @description One firewall address translation.
+         */
+        TopologyNatRule: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "dynamic_pat" | "static";
+            /** Src */
+            src?: string[];
+            /** Mapped Ip */
+            mapped_ip: string;
+            /**
+             * Real Ip
+             * @default
+             */
+            real_ip: string;
+        };
+        /**
+         * TopologyPolicyRule
+         * @description One ordered firewall rule.
+         */
+        TopologyPolicyRule: {
+            /** Src */
+            src: string;
+            /** Dst */
+            dst: string;
+            /** Ports */
+            ports?: string[];
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "permit" | "deny";
         };
         /**
          * TopologySegment
@@ -5483,6 +5563,11 @@ export interface components {
             exposure: "internal" | "external" | "both";
             /** Description */
             description: string;
+            /**
+             * Parent Id
+             * @description The smallest other segment whose range contains this one.
+             */
+            parent_id?: string | null;
         };
         /**
          * TurnRequest

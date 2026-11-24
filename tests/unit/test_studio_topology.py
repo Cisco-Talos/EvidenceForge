@@ -134,6 +134,107 @@ def test_host_details_preserve_declared_primary_users_and_roles() -> None:
     assert hosts["FREE"].primary_users == hosts["FREE"].roles == []
 
 
+def test_projection_reports_host_placement_public_addresses_and_firewall_rules() -> None:
+    environment = {
+        "systems": [
+            {"hostname": "WEB", "ip": "10.1.0.10", "type": "server", "os": "Linux"},
+            {"hostname": "MAIL", "ip": "10.2.0.25", "type": "server", "os": "Linux"},
+            {"hostname": "WS", "ip": "10.2.0.40", "type": "workstation", "os": "Windows 11"},
+            {"hostname": "CLOUD", "ip": "45.83.221.5", "type": "server", "os": "Linux"},
+            {"hostname": "VIP-RANGE", "ip": "45.83.220.9", "type": "server", "os": "Linux"},
+        ],
+        "network": {
+            "public_cidrs": ["45.83.220.0/28"],
+            "segments": [
+                {"name": "campus", "cidr": "10.0.0.0/8", "exposure": "internal"},
+                {"name": "dmz", "cidr": "10.1.0.0/16", "exposure": "both"},
+                {"name": "servers", "cidr": "10.2.0.0/16", "exposure": "internal"},
+                {"name": "edge", "cidr": "45.83.220.0/24", "exposure": "external"},
+            ],
+            "sensors": [
+                {
+                    "name": "fw",
+                    "type": "firewall",
+                    "monitoring_segments": ["dmz", "servers"],
+                    "interfaces": {"dmz": "dmz", "servers": "inside"},
+                    "log_formats": ["cisco_asa"],
+                    "default_action": "permit",
+                    "policy": [
+                        {"src": "external", "dst": "dmz", "ports": [443], "action": "permit"}
+                    ],
+                    "nat_rules": [
+                        {"type": "dynamic_pat", "src": ["servers"], "mapped_ip": "45.83.220.1"},
+                        {"type": "static", "real_ip": "10.1.0.10", "mapped_ip": "45.83.220.10"},
+                        {"type": "static", "real_ip": "10.2.0.25", "mapped_ip": "45.83.220.11"},
+                    ],
+                },
+                {"name": "full", "type": "network", "monitoring_segments": ["dmz"]},
+                {
+                    "name": "conn",
+                    "type": "network",
+                    "monitoring_segments": ["servers"],
+                    "log_formats": ["zeek_conn", "zeek_weird"],
+                },
+                {
+                    "name": "mixed",
+                    "type": "ids",
+                    "monitoring_segments": ["dmz"],
+                    "log_formats": ["snort_alert", "custom_feed"],
+                },
+            ],
+        },
+    }
+    graph = project_topology(environment)
+    hosts = {host.hostname: host for host in graph.hosts}
+
+    # A host in nested ranges belongs to the most specific one, and ranges nest.
+    assert hosts["WEB"].segment_ids == ["segment:campus", "segment:dmz"]
+    assert hosts["WEB"].primary_segment_id == "segment:dmz"
+    assert {segment.name: segment.parent_id for segment in graph.segments} == {
+        "campus": None,
+        "dmz": "segment:campus",
+        "edge": None,
+        "servers": "segment:campus",
+    }
+    assert hosts["WS"].type == "workstation"
+    # Public addresses follow generation's rule and are per host; dynamic PAT marks nothing.
+    assert {
+        name: (host.public_address, host.public_address_source) for name, host in hosts.items()
+    } == {
+        "WEB": ("45.83.220.10", "static_nat"),
+        "MAIL": ("45.83.220.11", "static_nat"),
+        "WS": (None, None),
+        "CLOUD": ("45.83.221.5", "public_ip"),
+        "VIP-RANGE": ("45.83.220.9", "public_ip"),
+    }
+    assert graph.public_cidrs == ["45.83.220.0/28"]
+
+    devices = {device.name: device for device in graph.devices}
+    assert [(item.label, item.depth) for item in devices["fw"].evidence] == [
+        ("Cisco ASA", "firewall")
+    ]
+    assert [(item.label, item.depth) for item in devices["full"].evidence] == [("Zeek", "protocol")]
+    assert "zeek_dns" in devices["full"].evidence[0].formats
+    assert [(item.label, item.depth, item.formats) for item in devices["conn"].evidence] == [
+        ("Zeek", "connection", ["zeek_conn", "zeek_weird"])
+    ]
+    assert [(item.family, item.depth) for item in devices["mixed"].evidence] == [
+        ("custom_feed", "other"),
+        ("ids", "alert"),
+    ]
+    assert [(rule.type, rule.real_ip, rule.mapped_ip) for rule in devices["fw"].nat_rules] == [
+        ("dynamic_pat", "", "45.83.220.1"),
+        ("static", "10.1.0.10", "45.83.220.10"),
+        ("static", "10.2.0.25", "45.83.220.11"),
+    ]
+    assert [(rule.dst, rule.ports, rule.action) for rule in devices["fw"].policy] == [
+        ("dmz", ["443"], "permit")
+    ]
+    assert devices["fw"].default_action == "permit"
+    assert devices["full"].nat_rules == devices["full"].policy == []
+    assert devices["full"].default_action is None
+
+
 def test_pack_diagrams_are_read_only_and_bound_to_exact_catalog_items(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

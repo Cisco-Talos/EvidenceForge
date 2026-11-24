@@ -1,86 +1,111 @@
 import type { TopologyGraph } from "./api";
 
-export interface DiagramLayers { sensors: boolean; firewalls: boolean; hosts: boolean }
+/*
+ * The network diagram is computed in two deterministic stages. `buildDiagramModel` turns the
+ * projected topology into equipment, zones, links and Internet boundaries without inventing
+ * relationships the scenario does not state. `layoutNetworkDiagram` places that model, choosing
+ * the zone grid width and the level of detail that best fit the viewport.
+ */
+
+/** Optional detail. Firewalls and other forwarding devices are always drawn: they shape the network. */
+export interface DiagramLayers { sensors: boolean; hosts: boolean }
 export type DiagramSegment = TopologyGraph["segments"][number];
 export type DiagramDevice = TopologyGraph["devices"][number];
+export type DiagramHost = TopologyGraph["hosts"][number];
 export type Routing = NonNullable<TopologyGraph["routing"]>;
-type RoutedDevice = Routing["devices"][string];
+export type RoutedDevice = Routing["devices"][string];
 export type DiagramLink = Routing["links"][string];
 export type DiagramLinkKind = NonNullable<DiagramLink["kind"]>;
-export type DiagramLinkEntry = { id: string; name: string; link: DiagramLink };
-export type DiagramHost = TopologyGraph["hosts"][number];
-export type DiagramAssociation = DiagramDevice["associations"][number] & { device: DiagramDevice };
-
-export type DiagramEntity =
-  | { kind: "segment"; id: string; segment: DiagramSegment }
-  | { kind: "device"; id: string; device: DiagramDevice; host?: DiagramHost }
-  | { kind: "host"; id: string; host: DiagramHost }
-  | { kind: "router"; id: string; name: string; device: RoutedDevice; host?: DiagramHost }
-  | { kind: "unassigned"; id: string };
-
-type EquipmentKind = "firewall" | "router" | "switch" | "network";
-type Equipment = Extract<DiagramEntity, { kind: "device" | "host" | "router" }> & { equipment: EquipmentKind };
-export type DiagramNode = DiagramEntity & {
-  key: string; x: number; y: number; width: number; height: number; equipment?: EquipmentKind;
-};
-type Wire = {
-  key: string; path: string; kind: "interface" | "membership" | "subnet" | "host"; entities: string[];
-  linkKind?: DiagramLinkKind;
-};
-type Attachment = { equipment: Equipment; name: string | null };
-type Subnet = Extract<DiagramEntity, { kind: "segment" | "unassigned" }> & { attachments: Attachment[] };
-type Group = { subnets: Subnet[]; attachment?: Attachment };
-type Station = { equipment: Equipment; transit?: Subnet };
-type InterfaceLabel = { key: string; text: string; x: number; y: number; width: number; anchor: "start" | "end" };
-export type SensorEntry = { device: DiagramDevice; mark: string };
-export type Branch = {
-  node: DiagramNode; hosts: DiagramHost[]; expanded: boolean; hostPage: number; railY: number; railX: number;
-  railEnd: number; hostToggleY: number; sensors: SensorEntry[]; sensorStart: number; sensorEnd: number;
-  vertical: boolean; side?: "left" | "right";
-};
+export type EquipmentKind = "firewall" | "router" | "switch" | "network";
+export type AttachmentStyle = "interface" | "inferred" | "observes" | "membership";
+export type Detail = "overview" | "hosts";
+export type HostCategory = "domain_controller" | "database" | "web_server" | "mail_server" | "file_server"
+  | "app_server" | "log_server" | "server" | "workstation" | "other";
 
 export const UNASSIGNED_HOSTS = "unassigned";
-export const INLINE_HOST_LIMIT = 12;
 export const MIN_READABLE_SCALE = 0.55;
-const HOSTS_PER_ROW = 4;
-const MARGIN = 44;
-const BRANCH_WIDTH = 290;
-const BRANCH_GAP = 36;
-const SPINE_GAP = 128;
-const DEVICE_WIDTH = 182;
-const DEVICE_HEIGHT = 72;
-const INTERNET_WIDTH = 152;
-const INTERNET_HEIGHT = 64;
-const GROUP_ROW = 134;
-const HOST_HEIGHT = 42;
-const HOST_ROW_HEIGHT = 58;
-const HORIZONTAL_LABEL_OFFSET = 80;
+/** Open at host detail only when every host card remains comfortably readable. */
+export const HOST_DETAIL_SCALE = 0.8;
+/** Larger subnets show this many host cards and list the rest in the details panel. */
+export const ZONE_HOST_LIMIT = 48;
+/** Above this many sites, sites other than the Internet-facing one start collapsed. */
+export const EXPANDED_SITE_LIMIT = 4;
 
-export function indexDiagramHosts(hosts: DiagramHost[]): Map<string, DiagramHost[]> {
-  const groups = new Map<string, DiagramHost[]>();
-  for (const host of hosts) {
-    for (const id of host.segment_ids.length ? host.segment_ids : [UNASSIGNED_HOSTS]) {
-      const members = groups.get(id);
-      if (members) members.push(host);
-      else groups.set(id, [host]);
-    }
-  }
-  return groups;
+export type SensorPlacement = { device: DiagramDevice; via: "segment" | "tap"; scope?: "all" | "internet" };
+
+export type Equipment = {
+  id: string; name: string; kind: EquipmentKind; subtitle: string;
+  device?: DiagramDevice; routed?: { name: string; device: RoutedDevice }; host?: DiagramHost;
+};
+
+export type Attachment = {
+  key: string; equipmentId: string; targetId: string; interfaceName: string | null; ip?: string;
+  style: AttachmentStyle; linkKind: DiagramLinkKind; linkName?: string;
+};
+
+export type Zone = {
+  id: string; name: string; cidr: string; segment?: DiagramSegment; unassigned: boolean;
+  hosts: DiagramHost[]; children: Zone[]; parentId?: string;
+  sensors: SensorPlacement[]; attachments: Attachment[]; link?: { name: string; link: DiagramLink };
+};
+
+export type Transit = {
+  id: string; name: string; link: DiagramLink; segment?: DiagramSegment; kind: DiagramLinkKind;
+  ends: { equipmentId: string; interfaceName: string; ip: string }[]; sensors: SensorPlacement[];
+};
+
+export type Internet = {
+  id: string; name: string; inferred: boolean; linkName?: string; link?: DiagramLink;
+  attachments: Attachment[]; sensors: SensorPlacement[];
+};
+
+export type DiagramModel = {
+  equipment: Map<string, Equipment>;
+  zones: Map<string, Zone>;
+  transits: Map<string, Transit>;
+  internets: Map<string, Internet>;
+  attachments: Attachment[];
+  sensors: DiagramDevice[];
+  routed: boolean;
+  inferredLinks: boolean;
+  /** Declared gateway device ID for each zone, from authored routing. */
+  gateways: Map<string, string>;
+};
+
+export type DiagramEntity =
+  | { kind: "zone"; id: string; zone: Zone }
+  | { kind: "equipment"; id: string; equipment: Equipment }
+  | { kind: "sensor"; id: string; device: DiagramDevice; host?: DiagramHost }
+  | { kind: "host"; id: string; host: DiagramHost }
+  | { kind: "internet"; id: string; internet: Internet }
+  | { kind: "transit"; id: string; transit: Transit };
+
+const ROLE_CATEGORIES: [string, HostCategory][] = [
+  ["domain_controller", "domain_controller"], ["database", "database"], ["db_server", "database"],
+  ["web_server", "web_server"], ["mail_server", "mail_server"], ["file_server", "file_server"],
+  ["smb_server", "file_server"], ["app_server", "app_server"], ["log_server", "log_server"],
+  ["workstation", "workstation"],
+];
+export const CATEGORY_ORDER: HostCategory[] = ["domain_controller", "database", "web_server", "mail_server",
+  "file_server", "app_server", "log_server", "server", "workstation", "other"];
+
+/** Roles describe function; the always-declared system type is the fallback. */
+export function hostCategory(host: DiagramHost): HostCategory {
+  const roles = new Set((host.roles ?? []).map((role) => role.toLowerCase().replace(/[ -]+/g, "_")));
+  for (const [role, category] of ROLE_CATEGORIES) if (roles.has(role)) return category;
+  if (host.type === "domain_controller") return "domain_controller";
+  if (host.type === "server") return "server";
+  if (host.type === "workstation") return "workstation";
+  return "other";
 }
 
-export function chooseInitialBranches(groups: Map<string, DiagramHost[]>, size: { width: number; height: number }): Set<string> {
-  const slots = Math.max(1, Math.floor(size.width / 260)) * Math.max(1, Math.floor((size.height - 88) / 153));
-  const congestion = Math.max(1, Math.ceil(groups.size / slots));
-  let remaining = Math.max(2, Math.floor(Math.min(20, slots * HOSTS_PER_ROW) / congestion));
-  const expanded = new Set<string>();
-  const candidates = [...groups].filter(([, hosts]) => hosts.length > 0).sort(([left, a], [right, b]) =>
-    Number(left === UNASSIGNED_HOSTS) - Number(right === UNASSIGNED_HOSTS) || a.length - b.length || left.localeCompare(right, "en"));
-  for (const [id, hosts] of candidates) {
-    if (hosts.length > INLINE_HOST_LIMIT || hosts.length > remaining) continue;
-    expanded.add(id);
-    remaining -= hosts.length;
-  }
-  return expanded;
+function networkEquipmentKind(host: DiagramHost): EquipmentKind | null {
+  const roles = new Set((host.roles ?? []).map((role) => role.toLowerCase().replace(/[ -]+/g, "_")));
+  if (["router", "core_router", "edge_router", "network_router"].some((role) => roles.has(role))) return "router";
+  if (["switch", "core_switch", "network_switch"].some((role) => roles.has(role))) return "switch";
+  // These platforms identify network appliances, which can serve several network roles.
+  if (/^(?:Cisco (?:IOS|NX-OS|ASA)|Arista EOS|Juniper Junos|MikroTik RouterOS)\b/i.test(host.os)) return "network";
+  return null;
 }
 
 function groupBy<T, Key>(items: T[], keyFor: (item: T) => Key): Map<Key, T[]> {
@@ -94,585 +119,973 @@ function groupBy<T, Key>(items: T[], keyFor: (item: T) => Key): Map<Key, T[]> {
   return groups;
 }
 
-function hostEquipment(host: DiagramHost): EquipmentKind | null {
-  const roles = new Set((host.roles ?? []).map((role) => role.toLowerCase().replace(/[ -]+/g, "_")));
-  if (["router", "core_router", "edge_router", "network_router"].some((role) => roles.has(role))) return "router";
-  if (["switch", "core_switch", "network_switch"].some((role) => roles.has(role))) return "switch";
-  // These platforms identify network appliances. They can run several different network roles.
-  if (/^(?:Cisco (?:IOS|NX-OS|ASA)|Arista EOS|Juniper Junos|MikroTik RouterOS)\b/i.test(host.os)) return "network";
-  return null;
+function ipOrder(value: string): string {
+  const v4 = value.split("/")[0].split(".");
+  if (v4.length === 4 && v4.every((part) => /^\d+$/.test(part))) return v4.map((part) => part.padStart(3, "0")).join(".");
+  return "~" + value;
 }
 
-function equipmentFor(graph: TopologyGraph, layers: DiagramLayers) {
-  const equipment: Equipment[] = [];
-  const claimedHosts = new Set<string>();
-  const firewallNames = new Map<string, number>();
+/** The part of an interface address that varies within its subnet, such as `.1`. */
+export function interfaceSuffix(ip: string | undefined, cidr: string | undefined): string {
+  if (!ip) return "";
+  const parts = ip.split(".");
+  if (parts.length === 4 && cidr) {
+    const prefix = Number(cidr.split("/")[1]);
+    if (prefix >= 24) return "." + parts[3];
+    if (prefix >= 16) return "." + parts.slice(2).join(".");
+  }
+  return ip;
+}
+
+function evidenceLabel(device: DiagramDevice): string {
+  return (device.evidence ?? []).map(({ label }) => label).join(" + ") || device.log_formats.join(", ");
+}
+
+export function buildDiagramModel(graph: TopologyGraph, layers: DiagramLayers): DiagramModel {
+  const routing = graph.routing ?? undefined;
+  const equipment = new Map<string, Equipment>();
+  const claimed = new Set<string>();
   const hostsByName = groupBy(graph.hosts, ({ hostname }) => hostname.toLowerCase());
   const firewalls = graph.devices.filter(({ kind }) => kind === "firewall");
-  for (const { hostname } of firewalls) {
-    const name = hostname.toLowerCase();
-    firewallNames.set(name, (firewallNames.get(name) ?? 0) + 1);
+  const firewallNames = groupBy(firewalls, ({ hostname }) => hostname.toLowerCase());
+  const uniqueHost = (name: string | null | undefined) => {
+    const matches = name ? hostsByName.get(name.toLowerCase()) : undefined;
+    return matches?.length === 1 ? matches[0] : undefined;
+  };
+
+  const routedFirewall = new Map<string, string>();
+  for (const [name, device] of Object.entries(routing?.devices ?? {})) {
+    const sensor = device.kind === "firewall" && device.firewall ? firewalls.find((entry) => entry.name === device.firewall) : undefined;
+    const host = uniqueHost(device.system);
+    if (host) claimed.add(host.id);
+    if (sensor) routedFirewall.set(sensor.id, name);
+    const id = sensor?.id ?? "router:" + name;
+    const kindLabel = { firewall: "Firewall", router: "Router", switch: "Switch" }[device.kind ?? "router"];
+    equipment.set(id, {
+      id, name: sensor?.hostname ?? device.system ?? name, kind: device.kind ?? "router", device: sensor, routed: { name, device }, host,
+      subtitle: [kindLabel, sensor ? evidenceLabel(sensor) : host?.os].filter(Boolean).join(" · "),
+    });
   }
   for (const device of firewalls) {
-    const name = device.hostname.toLowerCase();
-    const matches = hostsByName.get(name);
-    const host = matches?.length === 1 && firewallNames.get(name) === 1 ? matches[0] : undefined;
-    if (host) claimedHosts.add(host.id);
-    if (layers.firewalls) equipment.push({ kind: "device", id: device.id, device, host: layers.hosts ? host : undefined, equipment: "firewall" });
+    if (routedFirewall.has(device.id)) continue;
+    const host = firewallNames.get(device.hostname.toLowerCase())?.length === 1 ? uniqueHost(device.hostname) : undefined;
+    if (host) claimed.add(host.id);
+    equipment.set(device.id, { id: device.id, name: device.hostname, kind: "firewall", device, host,
+      subtitle: ["Firewall", evidenceLabel(device)].join(" · ") });
   }
-  for (const [name, device] of Object.entries(graph.routing?.devices ?? {})) {
-    const host = device.system ? hostsByName.get(device.system.toLowerCase())?.[0] : undefined;
-    if (host) claimedHosts.add(host.id);
-    if (device.kind !== "firewall") equipment.push({
-      kind: "router", id: "router:" + name, name, device, host: layers.hosts ? host : undefined,
-      equipment: device.kind,
-    });
-  }
-  if (layers.hosts) {
+  if (!routing) {
     for (const host of graph.hosts) {
-      const kind = hostEquipment(host);
-      if (kind && !graph.routing && !claimedHosts.has(host.id) && host.segment_ids.length) {
-        equipment.push({ kind: "host", id: host.id, host, equipment: kind });
-        claimedHosts.add(host.id);
+      const kind = networkEquipmentKind(host);
+      if (!kind || claimed.has(host.id) || !host.segment_ids.length) continue;
+      claimed.add(host.id);
+      equipment.set(host.id, { id: host.id, name: host.hostname, kind, host,
+        subtitle: [kind === "network" ? "Network appliance" : kind === "router" ? "Router" : "Switch", host.os].join(" · ") });
+    }
+  }
+
+  // Zones: every segment that holds endpoints or is not a pure device-to-device transit link.
+  const endpoints = layers.hosts ? graph.hosts.filter((host) => !claimed.has(host.id)) : [];
+  const primary = (host: DiagramHost) => host.primary_segment_id ?? host.segment_ids[0];
+  const hostsByZone = groupBy(endpoints, (host) => primary(host) ?? UNASSIGNED_HOSTS);
+  const segmentsByName = new Map(graph.segments.map((segment) => [segment.name, segment]));
+  const linkForSegment = new Map<string, { name: string; link: DiagramLink }>();
+  for (const [name, link] of Object.entries(routing?.links ?? {})) {
+    const segment = link.segment ? segmentsByName.get(link.segment) : undefined;
+    if (segment && !link.internet) linkForSegment.set(segment.id, { name, link });
+  }
+  const transitSegments = new Set<string>();
+  for (const [id, { link }] of linkForSegment) {
+    if (Object.keys(link.interfaces).length >= 2 && !(hostsByZone.get(id)?.length)) transitSegments.add(id);
+  }
+  const zones = new Map<string, Zone>();
+  for (const segment of [...graph.segments].sort((a, b) => ipOrder(a.cidr).localeCompare(ipOrder(b.cidr)) || a.name.localeCompare(b.name, "en"))) {
+    if (transitSegments.has(segment.id)) continue;
+    zones.set(segment.id, {
+      id: segment.id, name: segment.name, cidr: segment.cidr, segment, unassigned: false,
+      hosts: [...(hostsByZone.get(segment.id) ?? [])].sort((a, b) => ipOrder(a.ip).localeCompare(ipOrder(b.ip))),
+      children: [], sensors: [], attachments: [], link: linkForSegment.get(segment.id),
+    });
+  }
+  for (const zone of zones.values()) {
+    const parent = zone.segment?.parent_id ? zones.get(zone.segment.parent_id) : undefined;
+    if (parent) { zone.parentId = parent.id; parent.children.push(zone); }
+  }
+  const unassigned = hostsByZone.get(UNASSIGNED_HOSTS) ?? [];
+  if (unassigned.length) {
+    zones.set(UNASSIGNED_HOSTS, { id: UNASSIGNED_HOSTS, name: "Unassigned hosts", cidr: "", unassigned: true,
+      hosts: unassigned, children: [], sensors: [], attachments: [] });
+  }
+  const rootZone = (id: string) => {
+    let zone = zones.get(id);
+    while (zone?.parentId) zone = zones.get(zone.parentId);
+    return zone;
+  };
+
+  const attachments: Attachment[] = [];
+  const transits = new Map<string, Transit>();
+  const internets = new Map<string, Internet>();
+  const equipmentForRouted = (name: string) => {
+    const device = routing?.devices[name];
+    const sensor = device?.firewall ? firewalls.find((entry) => entry.name === device.firewall) : undefined;
+    const id = sensor?.id ?? "router:" + name;
+    return equipment.has(id) ? id : undefined;
+  };
+  const attach = (attachment: Omit<Attachment, "key">): Attachment => {
+    const key = JSON.stringify([attachment.equipmentId, attachment.targetId, attachment.interfaceName]);
+    const existing = attachments.find((entry) => entry.key === key);
+    if (existing) return existing;
+    const created = { ...attachment, key };
+    attachments.push(created);
+    return created;
+  };
+
+  if (routing) {
+    const boundaries = Object.entries(routing.links).filter(([, link]) => link.internet);
+    for (const [name, link] of Object.entries(routing.links)) {
+      const kind = link.kind ?? "network";
+      const ends = Object.entries(link.interfaces).flatMap(([device, iface]) => {
+        const equipmentId = equipmentForRouted(device);
+        return equipmentId ? [{ equipmentId, interfaceName: iface.name, ip: iface.ip }] : [];
+      });
+      const segment = link.segment ? segmentsByName.get(link.segment) : undefined;
+      if (link.internet) {
+        const family = Object.values(link.interfaces)[0]?.ip.includes(":") ? "IPv6" : "IPv4";
+        const id = "internet:" + name;
+        const internet: Internet = { id, name: boundaries.length > 1 ? `Internet (${family})` : "Internet", inferred: false,
+          linkName: name, link, attachments: [], sensors: [] };
+        internets.set(id, internet);
+        for (const end of ends) {
+          internet.attachments.push(attach({ equipmentId: end.equipmentId, targetId: id, interfaceName: end.interfaceName, ip: end.ip,
+            style: "interface", linkKind: kind, linkName: name }));
+        }
+      } else if (segment && zones.has(segment.id)) {
+        for (const end of ends) {
+          attach({ equipmentId: end.equipmentId, targetId: rootZone(segment.id)!.id, interfaceName: end.interfaceName,
+            ip: end.ip, style: "interface", linkKind: kind, linkName: name });
+        }
+      } else if (ends.length >= 2) {
+        transits.set("link:" + name, { id: "link:" + name, name, link, segment, kind, ends, sensors: [] });
       }
     }
-  }
-  return { equipment, claimedHosts };
-}
-
-export function indexInlineHosts(graph: TopologyGraph, allHosts: Map<string, DiagramHost[]>) {
-  const { claimedHosts } = equipmentFor(graph, { hosts: true, firewalls: true, sensors: true });
-  return new Map([...allHosts].flatMap(([id, hosts]) => {
-    const inline = hosts.filter((host) => !claimedHosts.has(host.id));
-    return inline.length ? [[id, inline] as const] : [];
-  }));
-}
-
-function indexAssociations(devices: DiagramDevice[]): Map<string, DiagramAssociation[]> {
-  const entries = devices.flatMap((device) => device.associations.map((association) => ({ ...association, device })));
-  return groupBy(entries, ({ segment_id }) => segment_id);
-}
-
-function buildSubnets(graph: TopologyGraph, equipment: Equipment[], unassigned: boolean) {
-  const attachments = new Map<string, Attachment[]>();
-  const segments = [...graph.segments];
-  const linksBySegment = new Map<string, DiagramLinkEntry>();
-  const links = Object.entries(graph.routing?.links ?? {});
-  const multipleBoundaries = links.filter(([, link]) => link.internet).length > 1;
-  for (const [name, link] of links) {
-    const segment = graph.segments.find(({ name }) => name === link.segment);
-    const id = segment?.id ?? "internet:" + name;
-    if (link.internet) {
-      const version = Object.values(link.interfaces)[0]?.ip.includes(":") ? "IPv6" : "IPv4";
-      segments.push({ id, name: multipleBoundaries ? `Internet (${version})` : "Internet",
-        cidr: "", description: "", exposure: "external" });
-    }
-    if (!segment && !link.internet) continue;
-    linksBySegment.set(id, { id: "link:" + name, name, link });
-    for (const [deviceId, iface] of Object.entries(link.interfaces)) {
-      const device = graph.routing!.devices[deviceId];
-      const item = equipment.find((entry) => (entry.kind === "device" && entry.device.name === device?.firewall)
-        || (entry.kind === "router" && entry.name === deviceId));
-      if (!item) continue;
-      const entries = attachments.get(id) ?? [];
-      entries.push({ equipment: item, name: iface.name });
-      attachments.set(id, entries);
-    }
-  }
-  if (!graph.routing) {
-    for (const item of equipment) {
+  } else {
+    for (const item of equipment.values()) {
+      if (item.device) {
+        for (const association of item.device.associations) {
+          const target = rootZone(association.segment_id);
+          if (!target) continue;
+          if (association.interface_name !== null) {
+            attach({ equipmentId: item.id, targetId: target.id, interfaceName: association.interface_name, style: "inferred", linkKind: "network" });
+          } else if (association.monitored) {
+            attach({ equipmentId: item.id, targetId: target.id, interfaceName: null, style: "observes", linkKind: "network" });
+          }
+        }
+      }
       for (const id of item.host?.segment_ids ?? []) {
-        const entries = attachments.get(id) ?? [];
-        entries.push({ equipment: item, name: null });
-        attachments.set(id, entries);
+        const target = rootZone(id);
+        if (target && !attachments.some((entry) => entry.equipmentId === item.id && entry.targetId === target.id)) {
+          attach({ equipmentId: item.id, targetId: target.id, interfaceName: null, style: "membership", linkKind: "network" });
+        }
+      }
+    }
+    // Public addresses imply an Internet boundary. Attach it only where a firewall is modeled.
+    const legacyFirewalls = [...equipment.values()].filter(({ kind, device }) => kind === "firewall" && device);
+    const publicHosts = graph.hosts.some(({ public_address }) => public_address);
+    if (legacyFirewalls.length && (publicHosts || (graph.public_cidrs ?? []).length)) {
+      const natting = legacyFirewalls.filter(({ device }) => device!.nat_rules?.length);
+      const internet: Internet = { id: "internet:inferred", name: "Internet", inferred: true, attachments: [], sensors: [] };
+      internets.set(internet.id, internet);
+      for (const item of natting.length ? natting : legacyFirewalls) {
+        internet.attachments.push(attach({ equipmentId: item.id, targetId: internet.id, interfaceName: item.device!.default_interface ?? null,
+          style: "inferred", linkKind: "network" }));
       }
     }
   }
-  const subnets: Subnet[] = segments.map((segment) => ({
-    kind: "segment", id: segment.id, segment, attachments: attachments.get(segment.id) ?? [],
-  }));
-  if (unassigned) subnets.push({ kind: "unassigned", id: UNASSIGNED_HOSTS, attachments: [] });
-  return { subnets, linksBySegment };
-}
+  for (const attachment of attachments) zones.get(attachment.targetId)?.attachments.push(attachment);
 
-/** Follow a pair of modeled attachments through a shared subnet. Other links remain branches. */
-function spineStations(equipment: Equipment[], subnets: Subnet[]): Station[][] {
-  const shared = groupBy(
-    subnets.filter(({ attachments }) => attachments.length === 2)
-      .flatMap((subnet) => subnet.attachments.map(({ equipment }) => ({ id: equipment.id, subnet }))),
-    ({ id }) => id,
-  );
-  const remaining = new Set(equipment.map(({ id }) => id));
-  const spines: Station[][] = [];
-  for (const root of equipment) {
-    if (!remaining.has(root.id)) continue;
-    const stations: Station[] = [{ equipment: root }];
-    remaining.delete(root.id);
-    let current = root;
-    while (true) {
-      const onward = shared.get(current.id)?.find(({ subnet }) => subnet.attachments.some(({ equipment }) => remaining.has(equipment.id)));
-      const next = onward?.subnet.attachments.find(({ equipment }) => equipment.id !== current.id);
-      if (!onward || !next) break;
-      stations.push({ equipment: next.equipment, transit: onward.subnet });
-      current = next.equipment;
-      remaining.delete(current.id);
+  const sensors = layers.sensors ? graph.devices.filter(({ kind }) => kind !== "firewall") : [];
+  for (const device of sensors) {
+    for (const association of device.associations) {
+      const zone = zones.get(association.segment_id);
+      if (zone && association.monitored) zone.sensors.push({ device, via: "segment" });
     }
-    spines.push(stations);
+    const tap = graph.link_taps?.[device.id];
+    if (!tap) continue;
+    const link = routing?.links[tap.link];
+    const segment = link?.segment ? segmentsByName.get(link.segment) : undefined;
+    const placement: SensorPlacement = { device, via: "tap", scope: tap.scope };
+    if (link?.internet) internets.get("internet:" + tap.link)?.sensors.push(placement);
+    else if (segment && zones.has(segment.id)) zones.get(segment.id)!.sensors.push(placement);
+    else transits.get("link:" + tap.link)?.sensors.push(placement);
   }
-  return spines;
+  const gateways = new Map<string, string>();
+  for (const [segmentName, device] of Object.entries(routing?.gateways ?? {})) {
+    const segment = segmentsByName.get(segmentName);
+    const equipmentId = equipmentForRouted(device);
+    if (segment && equipmentId) gateways.set(segment.id, equipmentId);
+  }
+  return { equipment, zones, transits, internets, attachments, sensors, routed: !!routing, gateways,
+    inferredLinks: attachments.some(({ style }) => style === "inferred" || style === "observes") };
 }
 
-function ownerGroups(subnets: Subnet[], stations: Station[][]) {
-  const order = new Map(stations.flat().map(({ equipment }, index) => [equipment.id, index]));
-  const transit = new Set(stations.flatMap((spine) => spine.flatMap(({ transit }) => transit ? [transit.id] : [])));
-  const groups = new Map<string, Group>();
-  for (const subnet of subnets) {
-    if (transit.has(subnet.id)) continue;
-    const attachment = [...subnet.attachments].sort((a, b) => order.get(a.equipment.id)! - order.get(b.equipment.id)!)[0];
-    // A shared subnet has its own rail and a separate connection to each device.
-    const distinct = subnet.attachments.length > 1 || attachment?.name === null;
-    const key = distinct ? subnet.id : JSON.stringify([attachment?.equipment.id, attachment?.name]);
-    const group = groups.get(key);
-    if (group) group.subnets.push(subnet);
-    else groups.set(key, { subnets: [subnet], attachment });
-  }
-  return groupBy([...groups.values()], ({ attachment }) => attachment?.equipment.id);
+// ---------------------------------------------------------------- layout ----
+
+export type PlacedChip = { key: string; device: DiagramDevice; via: SensorPlacement["via"]; scope?: string; x: number; y: number; width: number; label: string };
+export type PlacedHost = { host: DiagramHost; category: HostCategory; x: number; y: number; width: number; height: number };
+export type PlacedZone = {
+  zone: Zone; x: number; y: number; width: number; height: number; detail: Detail;
+  chips: PlacedChip[]; overflow: DiagramDevice[]; chipY: number;
+  names: PlacedHost[]; summary: { category: HostCategory; count: number }[]; osSummary: string;
+  publicHosts: DiagramHost[]; morePublic: number;
+  hostCards: PlacedHost[]; groupLabels: { text: string; x: number; y: number }[]; hiddenHosts: number;
+  toggleY: number; children: PlacedZone[];
+};
+export type PlacedEquipment = { equipment: Equipment; x: number; y: number; labelSide: "left" | "above" };
+export type PlacedInternet = { internet: Internet; x: number; y: number };
+export type PlacedSite = { id: string; label: string; x: number; y: number; width: number; height: number; collapsed: boolean;
+  summary?: { zones: number; hosts: number; devices: string[] } };
+export type Wire = { key: string; path: string; style: AttachmentStyle | "host"; linkKind: DiagramLinkKind; entities: string[] };
+export type DiagramLabel = { key: string; x: number; y: number; text: string; anchor: "start" | "middle" | "end"; kind: "interface" | "link" | "link-detail" | "group" };
+export type PlacedTap = { key: string; x: number; y: number; chip: PlacedChip; entities: string[] };
+export type Bounds = { x: number; y: number; width: number; height: number };
+
+export type DiagramScene = {
+  model: DiagramModel; width: number; height: number; detail: Detail;
+  zones: PlacedZone[]; equipment: PlacedEquipment[]; internets: PlacedInternet[]; sites: PlacedSite[];
+  wires: Wire[]; labels: DiagramLabel[]; taps: PlacedTap[];
+  entities: Map<string, DiagramEntity>; bounds: Map<string, Bounds>;
+  /** Every zone, link and Internet boundary each sensor observes. */
+  coverage: Map<string, string[]>;
+  /** The collapsed site holding each subnet, host or device that is not drawn. */
+  collapsedSite: Map<string, string>;
+};
+
+const MARGIN = 36;
+const GLYPH = 48;
+const ZONE_WIDTH = 252;
+const ZONE_GAP = 16;
+const ROW_GAP = 34;
+const BLOCK_GAP = 44;
+const SITE_GAP = 72;
+const SITE_PAD = 20;
+const SITE_LABEL = 22;
+const CLOUD_HEIGHT = 46;
+const UPLINK = 70;
+const HOST_CARD_WIDTH = 188;
+const HOST_CARD_HEIGHT = 48;
+const HOST_GAP = 8;
+const COLLAPSED_SITE = { width: 240, height: 104 };
+const SIDE_STEP = 240;
+/** Clear space between the row gutter and the subnet cards, so a lit gutter never reads as a card outline. */
+export const GUTTER_GAP = 26;
+
+/** Approximate text widths, so placement does not depend on font loading or a DOM. */
+export function textWidth(text: string, size = 11, mono = false): number {
+  return [...text].length * size * (mono ? 0.61 : 0.56);
 }
 
-function sensorLetter(ordinal: number): string {
-  let label = "";
-  for (let value = ordinal + 1; value > 0; value = Math.floor((value - 1) / 26)) {
-    label = String.fromCharCode(65 + (value - 1) % 26) + label;
-  }
-  return label;
+const CATEGORY_LABELS: Record<HostCategory, [string, string]> = {
+  domain_controller: ["domain controller", "domain controllers"], database: ["database", "databases"],
+  web_server: ["web server", "web servers"], mail_server: ["mail server", "mail servers"],
+  file_server: ["file server", "file servers"], app_server: ["app server", "app servers"],
+  log_server: ["log server", "log servers"], server: ["server", "servers"],
+  workstation: ["workstation", "workstations"], other: ["other host", "other hosts"],
+};
+export function categoryLabel(category: HostCategory, count: number): string {
+  return CATEGORY_LABELS[category][count === 1 ? 0 : 1];
+}
+const SHORT_OS: [RegExp, string][] = [[/^Windows Server.*/i, "Win Server"], [/^Windows (\d+).*/i, "Win $1"],
+  [/^(?:Linux )?(Ubuntu|Debian|CentOS|RHEL|Rocky|Fedora|Alma\w*|Kali|SUSE).*/i, "$1"], [/^macOS.*/i, "macOS"]];
+export function shortOs(os: string): string {
+  for (const [pattern, replacement] of SHORT_OS) if (pattern.test(os)) return os.replace(pattern, replacement);
+  return os.split(" ").slice(0, 2).join(" ");
 }
 
-function path(...commands: (string | number)[]): string {
-  return commands.join(" ");
+type ZoneOptions = { detail: (zone: Zone) => Detail; sensors: boolean };
+
+function chipLabel(placement: SensorPlacement, withName: boolean): string {
+  const evidence = evidenceLabel(placement.device);
+  return withName ? `${placement.device.hostname} · ${evidence}` : evidence;
+}
+export function chipWidth(label: string): number { return 24 + textWidth(label, 10.5); }
+
+/** Lay out one zone card relative to its own origin. */
+function measureZone(zone: Zone, options: ZoneOptions): PlacedZone {
+  const detail = zone.hosts.length ? options.detail(zone) : "overview";
+  const pad = 12;
+  const children = zone.children.map((child) => measureZone(child, options));
+  let width = ZONE_WIDTH;
+  let hostColumns = 0;
+  if (detail === "hosts") {
+    const shown = Math.min(zone.hosts.length, ZONE_HOST_LIMIT);
+    hostColumns = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(shown * 1.4))));
+    width = Math.max(width, pad * 2 + hostColumns * HOST_CARD_WIDTH + (hostColumns - 1) * HOST_GAP);
+  }
+  const childColumns = Math.min(2, children.length);
+  if (children.length) {
+    const rows = groupBy(children.map((child, index) => ({ child, index })), ({ index }) => Math.floor(index / childColumns));
+    const rowWidth = Math.max(...[...rows.values()].map((row) => row.reduce((sum, { child }) => sum + child.width, 0) + (row.length - 1) * ZONE_GAP));
+    width = Math.max(width, pad * 2 + rowWidth);
+  }
+
+  // Sensor chips show names when they all fit; otherwise the evidence label alone.
+  const chips: PlacedChip[] = [];
+  const overflow: DiagramDevice[] = [];
+  const chipY = 42;
+  if (options.sensors && zone.sensors.length) {
+    const room = width - pad * 2;
+    const named = zone.sensors.map((placement) => chipLabel(placement, true));
+    const useNames = named.reduce((sum, label) => sum + chipWidth(label) + 6, 0) <= room;
+    let x = pad;
+    zone.sensors.forEach((placement, index) => {
+      const label = useNames ? named[index] : chipLabel(placement, false);
+      const chip = chipWidth(label);
+      const remaining = zone.sensors.length - index - 1;
+      if (x + chip > pad + room - (remaining ? 40 : 0) && chips.length) { overflow.push(placement.device); return; }
+      chips.push({ key: zone.id + placement.device.id, device: placement.device, via: placement.via, scope: placement.scope, x, y: chipY, width: chip, label });
+      x += chip + 6;
+    });
+  }
+  let y = chips.length ? chipY + 28 : 46;
+
+  const names: PlacedHost[] = [];
+  const hostCards: PlacedHost[] = [];
+  const groupLabels: { text: string; x: number; y: number }[] = [];
+  let summary: { category: HostCategory; count: number }[] = [];
+  let osSummary = "";
+  let publicHosts: DiagramHost[] = [];
+  let morePublic = 0;
+  let hiddenHosts = 0;
+  if (detail === "hosts") {
+    const shown = zone.hosts.slice(0, ZONE_HOST_LIMIT);
+    hiddenHosts = zone.hosts.length - shown.length;
+    const groups = groupBy(shown, hostCategory);
+    for (const category of CATEGORY_ORDER) {
+      const members = groups.get(category);
+      if (!members) continue;
+      if (groups.size > 1) {
+        groupLabels.push({ text: `${categoryLabel(category, members.length).toUpperCase()}  ${members.length}`, x: pad, y: y + 9 });
+        y += 16;
+      }
+      members.forEach((host, index) => {
+        const column = index % hostColumns;
+        const row = Math.floor(index / hostColumns);
+        hostCards.push({ host, category, x: pad + column * (HOST_CARD_WIDTH + HOST_GAP), y: y + row * (HOST_CARD_HEIGHT + HOST_GAP),
+          width: HOST_CARD_WIDTH, height: HOST_CARD_HEIGHT });
+      });
+      y += Math.ceil(members.length / hostColumns) * (HOST_CARD_HEIGHT + HOST_GAP) + 6;
+    }
+    if (hiddenHosts) y += 16;
+  } else if (zone.hosts.length && zone.hosts.length <= 4) {
+    const twoColumns = (width - pad * 2 - 6) / 2;
+    const fits = zone.hosts.every(({ hostname }) => 30 + textWidth(hostname, 10.5) <= twoColumns);
+    const perRow = fits ? 2 : 1;
+    const column = fits ? twoColumns : width - pad * 2;
+    zone.hosts.forEach((host, index) => {
+      names.push({ host, category: hostCategory(host), x: pad + (index % perRow) * (column + 6), y: y + Math.floor(index / perRow) * 24, width: column, height: 20 });
+    });
+    y += Math.ceil(zone.hosts.length / perRow) * 24;
+  } else if (zone.hosts.length) {
+    const counts = groupBy(zone.hosts, hostCategory);
+    summary = CATEGORY_ORDER.flatMap((category) => counts.get(category) ? [{ category, count: counts.get(category)!.length }] : []);
+    const systems = [...groupBy(zone.hosts, (host) => shortOs(host.os))].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], "en"));
+    osSummary = systems.map(([name, members]) => `${members.length} ${name}`).join(" · ");
+    y += 40;
+    // Hosts with a public address are named, so they never hide inside a count.
+    const reachable = zone.hosts.filter(({ public_address }) => public_address);
+    publicHosts = reachable.slice(0, 3);
+    morePublic = reachable.length - publicHosts.length;
+    y += publicHosts.length * 24 + (morePublic ? 16 : 0);
+  } else if (!children.length) {
+    y += 20;
+  }
+  const toggleY = y + 4;
+  if (zone.hosts.length > 4 || detail === "hosts") y += 22;
+  let childY = y + (children.length ? 4 : 0);
+  if (children.length) {
+    for (let index = 0; index < children.length; index += childColumns) {
+      const row = children.slice(index, index + childColumns);
+      let x = pad;
+      for (const child of row) { child.x = x; child.y = childY; x += child.width + ZONE_GAP; }
+      childY += Math.max(...row.map(({ height }) => height)) + ZONE_GAP;
+    }
+    y = childY - ZONE_GAP + pad;
+  } else {
+    y += pad - 4;
+  }
+  return { zone, x: 0, y: 0, width, height: Math.max(y, 64), detail, chips, overflow, chipY, names, summary, osSummary,
+    publicHosts, morePublic, hostCards, groupLabels, hiddenHosts, toggleY, children };
 }
 
-/** Draw device-centered backbones, with subnet rails branching off actual interfaces and memberships. */
-export function layoutNetworkDiagram(
-  graph: TopologyGraph, layers: DiagramLayers, hostsBySegment: Map<string, DiagramHost[]>, expanded: ReadonlySet<string>,
-  hostPages: Readonly<Record<string, number>> = {}, viewportWidth = Infinity,
-) {
-  const associations = indexAssociations(graph.devices);
-  const { equipment, claimedHosts } = equipmentFor(graph, layers);
-  const endpointHosts = (id: string) => layers.hosts ? (hostsBySegment.get(id) ?? []).filter((host) => !claimedHosts.has(host.id)) : [];
-  const { subnets, linksBySegment } = buildSubnets(graph, equipment, endpointHosts(UNASSIGNED_HOSTS).length > 0);
-  const boundaries = subnets.filter(({ id }) => linksBySegment.get(id)?.link.internet);
-  const boundariesByDevice = groupBy(boundaries, ({ attachments }): string | undefined => attachments[0]?.equipment.id);
-  const ordinarySubnets = subnets.filter((subnet) => !boundaries.includes(subnet));
-  // Start at an Internet-facing device even when another firewall was declared first.
-  const roots = [...equipment].sort((a, b) => Number(boundariesByDevice.has(b.id)) - Number(boundariesByDevice.has(a.id)));
-  const spines = spineStations(roots, ordinarySubnets);
-  const groups = ownerGroups(ordinarySubnets, spines);
-  const sensors = layers.sensors ? graph.devices.filter(({ kind }) => kind !== "firewall")
-    .map((device, ordinal) => ({ device, mark: sensorLetter(ordinal) })) : [];
-  const sensorIndex = new Map(sensors.map((entry) => [entry.device.id, entry]));
-  for (const [segmentId, declared] of linksBySegment) {
-    const tapAssociations = graph.devices.filter(({ id }) => graph.link_taps?.[id]?.link === declared.name)
-      .map((device) => ({ device, segment_id: segmentId, monitored: true, interface_name: null }));
-    associations.set(segmentId, [...(associations.get(segmentId) ?? []), ...tapAssociations]);
+function offsetZone(zone: PlacedZone, dx: number, dy: number): PlacedZone {
+  return { ...zone, x: zone.x + dx, y: zone.y + dy, children: zone.children.map((child) => offsetZone(child, zone.x + dx, zone.y + dy)) };
+}
+
+type Tree = { equipment: Equipment; zones: Zone[]; children: Tree[]; via?: Transit | { zone: Zone }; depth: number };
+type Component = { id: string; trees: Tree[]; unattached: Zone[]; internetFacing: boolean; crossLinks: number; zoneCount: number; hostCount: number; label: string };
+
+function components(model: DiagramModel): Component[] {
+  const parent = new Map<string, string>([...model.equipment.keys()].map((id) => [id, id]));
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    parent.set(id, root);
+    return root;
+  };
+  const join = (a: string, b: string) => { const ra = find(a); const rb = find(b); if (ra !== rb) parent.set(rb < ra ? ra : rb, rb < ra ? rb : ra); };
+  for (const transit of model.transits.values()) {
+    if (transit.kind !== "network") continue;
+    for (const end of transit.ends.slice(1)) join(transit.ends[0].equipmentId, end.equipmentId);
   }
-  const nodes: DiagramNode[] = [];
-  const nodesById = new Map<string, DiagramNode>();
-  const branches: Branch[] = [];
-  const branchesById = new Map<string, Branch>();
-  const wires: Wire[] = [];
-  const labels: InterfaceLabel[] = [];
-  const allGroups = [...groups.values()].flat();
-  const largestStation = Math.max(0, ...spines.flat().map(({ equipment }) =>
-    (groups.get(equipment.id) ?? []).reduce((count, { subnets }) => count + subnets.length, 0)));
-  const denseRouting = !!graph.routing && largestStation > 2;
-  const gutter = denseRouting ? Math.max(SPINE_GAP / 2, 44 + Math.ceil(largestStation / 2) * 12) : SPINE_GAP / 2;
-  const branchWidth = graph.segments.reduce((width, segment) => Math.max(width, segment.cidr.length * 8 + 24), BRANCH_WIDTH);
-  const desiredColumns = Math.min(4, Math.max(denseRouting ? 4 : equipment.length ? 2 : 1, ...allGroups.map(({ subnets }) => subnets.length)));
-  const wideWidth = 2 * (MARGIN + 2 * branchWidth + BRANCH_GAP + gutter);
-  const columns = viewportWidth < wideWidth * MIN_READABLE_SCALE ? Math.min(2, desiredColumns) : desiredColumns;
-  const stride = branchWidth + BRANCH_GAP;
-  const sideWidth = stride * Math.ceil(columns / 2) - BRANCH_GAP;
-  const spineX = MARGIN + sideWidth + gutter;
-  const secondaryLinks = allGroups.flatMap(({ subnets, attachment: owner }) => subnets.flatMap((subnet) =>
-    subnet.attachments.filter(({ equipment }) => equipment.id !== owner?.equipment.id)
-      .map((attachment) => ({ subnet, attachment }))));
-  const linkCount = new Map<Equipment, number>();
-  for (const { attachments } of subnets) {
-    for (const { equipment } of attachments) linkCount.set(equipment, (linkCount.get(equipment) ?? 0) + 1);
+  for (const zone of model.zones.values()) {
+    const attached = [...new Set(zone.attachments.map(({ equipmentId }) => equipmentId))];
+    for (const id of attached.slice(1)) join(attached[0], id);
   }
-  const peripheralLinks = new Map<string, Attachment>();
-  const crossLinks = secondaryLinks.filter(({ subnet, attachment }) => {
-    const { equipment } = attachment;
-    if (equipment.kind !== "host" || linkCount.get(equipment) !== 1 || peripheralLinks.has(subnet.id)) return true;
-    peripheralLinks.set(subnet.id, attachment);
-    return false;
+  const groups = groupBy([...model.equipment.keys()].sort(), find);
+  const internetFacing = new Set(model.attachments.filter(({ targetId }) => model.internets.has(targetId)).map(({ equipmentId }) => equipmentId));
+  const attachedZones = new Set(model.attachments.map(({ targetId }) => targetId));
+  const result: Component[] = [];
+  for (const [id, members] of groups) {
+    const trees = buildTrees(model, new Set(members), internetFacing);
+    const zones = trees.flatMap(function collect(tree): Zone[] { return [...tree.zones, ...tree.children.flatMap(collect)]; });
+    const crossLinks = [...model.transits.values()].filter(({ kind, ends }) => kind !== "network" && ends.some(({ equipmentId }) => members.includes(equipmentId))).length;
+    result.push({ id, trees, unattached: [], crossLinks, internetFacing: members.some((member) => internetFacing.has(member)),
+      zoneCount: zones.length, hostCount: zones.reduce((sum, zone) => sum + countHosts(zone), 0), label: siteLabel(zones, trees) });
+  }
+  // The Internet-facing site leads, then the hub with the most links to other sites.
+  result.sort((a, b) => Number(b.internetFacing) - Number(a.internetFacing) || b.crossLinks - a.crossLinks
+    || b.zoneCount - a.zoneCount || a.id.localeCompare(b.id, "en"));
+  const loose = [...model.zones.values()].filter((zone) => !zone.parentId && !attachedZones.has(zone.id));
+  if (loose.length) {
+    result.push({ id: "unattached", trees: [], unattached: loose, internetFacing: false, crossLinks: 0, zoneCount: loose.length,
+      hostCount: loose.reduce((sum, zone) => sum + countHosts(zone), 0), label: "" });
+  }
+  return result;
+}
+
+function countHosts(zone: Zone): number {
+  return zone.hosts.length + zone.children.reduce((sum, child) => sum + countHosts(child), 0);
+}
+
+function siteLabel(zones: Zone[], trees: Tree[]): string {
+  const prefixes = groupBy(zones.map(({ name }) => name.split(/[-_]/)[0]).filter((prefix) => prefix.length > 1), (prefix) => prefix.toLowerCase());
+  const [best] = [...prefixes].sort((a, b) => b[1].length - a[1].length);
+  if (best && best[1].length >= 2 && best[1].length * 2 >= zones.length) return best[1][0].toUpperCase();
+  return trees[0]?.equipment.name ?? "";
+}
+
+/**
+ * Root each component at an Internet-facing device, else at the device that carries its WAN or VPN
+ * link to another site, else at its most connected device, and walk outward.
+ */
+function buildTrees(model: DiagramModel, members: Set<string>, internetFacing: Set<string>): Tree[] {
+  const interSite = new Set([...model.transits.values()].filter(({ kind }) => kind !== "network")
+    .flatMap(({ ends }) => ends.map(({ equipmentId }) => equipmentId)));
+  const degree = (id: string) => model.attachments.filter(({ equipmentId }) => equipmentId === id).length
+    + [...model.transits.values()].filter(({ ends }) => ends.some(({ equipmentId }) => equipmentId === id)).length;
+  const neighbors = new Map<string, { id: string; via: Tree["via"] }[]>();
+  const link = (a: string, b: string, via: Tree["via"]) => {
+    if (!members.has(a) || !members.has(b) || a === b) return;
+    neighbors.set(a, [...(neighbors.get(a) ?? []), { id: b, via }]);
+    neighbors.set(b, [...(neighbors.get(b) ?? []), { id: a, via }]);
+  };
+  for (const transit of model.transits.values()) {
+    if (transit.kind !== "network") continue;
+    for (const end of transit.ends.slice(1)) link(transit.ends[0].equipmentId, end.equipmentId, transit);
+  }
+  for (const zone of model.zones.values()) {
+    const attached = [...new Set(zone.attachments.map(({ equipmentId }) => equipmentId))].sort();
+    for (const id of attached.slice(1)) link(attached[0], id, { zone });
+  }
+  const ordered = [...members].sort((a, b) => Number(internetFacing.has(b)) - Number(internetFacing.has(a))
+    || Number(interSite.has(b)) - Number(interSite.has(a))
+    || Number(model.equipment.get(b)!.kind === "firewall") - Number(model.equipment.get(a)!.kind === "firewall") || degree(b) - degree(a) || model.equipment.get(a)!.name.localeCompare(model.equipment.get(b)!.name, "en"));
+  const depth = new Map<string, number>();
+  const trees: Tree[] = [];
+  const nodes = new Map<string, Tree>();
+  for (const root of ordered) {
+    if (depth.has(root)) continue;
+    const rootTree: Tree = { equipment: model.equipment.get(root)!, zones: [], children: [], depth: 0 };
+    trees.push(rootTree);
+    nodes.set(root, rootTree);
+    depth.set(root, 0);
+    const queue = [root];
+    while (queue.length) {
+      const current = queue.shift()!;
+      const options = (neighbors.get(current) ?? []).sort((a, b) => model.equipment.get(a.id)!.name.localeCompare(model.equipment.get(b.id)!.name, "en"));
+      for (const { id, via } of options) {
+        if (depth.has(id)) continue;
+        depth.set(id, depth.get(current)! + 1);
+        const tree: Tree = { equipment: model.equipment.get(id)!, zones: [], children: [], via, depth: depth.get(id)! };
+        nodes.get(current)!.children.push(tree);
+        nodes.set(id, tree);
+        queue.push(id);
+      }
+    }
+  }
+  // A zone belongs to its declared gateway, else to the attached device nearest the root.
+  for (const zone of model.zones.values()) {
+    if (zone.parentId) continue;
+    const attached = [...new Set(zone.attachments.map(({ equipmentId }) => equipmentId))].filter((id) => members.has(id));
+    if (!attached.length) continue;
+    const declared = model.gateways.get(zone.id);
+    const gateway = declared && attached.includes(declared) ? declared : undefined;
+    const owner = gateway ?? [...attached].sort((a, b) => depth.get(a)! - depth.get(b)! || a.localeCompare(b, "en"))[0];
+    nodes.get(owner)?.zones.push(zone);
+  }
+  return trees;
+}
+
+type Block = { width: number; height: number; place: (x: number, y: number) => void };
+
+type LayoutState = {
+  model: DiagramModel; options: ZoneOptions; columns: number;
+  zones: PlacedZone[]; equipment: PlacedEquipment[]; internets: PlacedInternet[]; wires: Wire[]; labels: DiagramLabel[]; taps: PlacedTap[];
+  glyphs: Map<string, { x: number; y: number }>;
+  /** Devices with a WAN or VPN link to another site. */
+  interSite: Set<string>;
+};
+
+function wireEntities(attachment: Attachment, zone?: Zone): string[] {
+  const ids = [attachment.equipmentId, attachment.targetId];
+  if (zone) ids.push(...zone.children.map(({ id }) => id));
+  if (attachment.linkName) ids.push("link:" + attachment.linkName);
+  return ids;
+}
+
+function interfaceText(attachment: Attachment, zone?: Zone): string {
+  if (attachment.interfaceName === null) return "";
+  const suffix = interfaceSuffix(attachment.ip, zone?.cidr);
+  // An interface named after its subnet only needs its address, when one is declared.
+  const name = zone && suffix && attachment.interfaceName === zone.name ? "" : attachment.interfaceName;
+  return [name, suffix].filter(Boolean).join(" ");
+}
+
+function treeBlock(state: LayoutState, tree: Tree, internets: Internet[]): Block {
+  const { equipment } = tree;
+  const zones = tree.zones.map((zone) => measureZone(zone, state.options));
+  const columns = Math.max(1, Math.min(state.columns, zones.length));
+  const rows: PlacedZone[][] = [];
+  for (let index = 0; index < zones.length; index += columns) rows.push(zones.slice(index, index + columns));
+  const gridWidth = rows.length ? Math.max(...rows.map((row) => row.reduce((sum, zone) => sum + zone.width, 0) + (row.length - 1) * ZONE_GAP)) : 0;
+  const gridHeight = rows.reduce((sum, row) => sum + Math.max(...row.map(({ height }) => height)) + ROW_GAP, 0);
+  const label = Math.max(textWidth(equipment.name, 13) + 4, textWidth(equipment.subtitle, 11));
+  const glyphArea = label + 12 + GLYPH;
+  // A leaf device with no subnets, such as a VPN concentrator, sits beside its parent on one straight link.
+  const side = tree.children.find((child) => !child.zones.length && !child.children.length);
+  const belowTrees = tree.children.filter((child) => child !== side);
+  const children = belowTrees.map((child) => treeBlock(state, child, []));
+  // A grid with several rows needs room on its left for the gutter that feeds the later rows.
+  const inset = rows.length > 1 ? GUTTER_GAP : 0;
+  const gridSpan = inset + gridWidth;
+  const centerOffset = Math.max(glyphArea - GLYPH / 2, inset + gridWidth / 2);
+  const sideLabel = side ? Math.max(textWidth(side.equipment.name, 13), textWidth(side.equipment.subtitle, 11)) / 2 : 0;
+  const sideExtent = side ? centerOffset + SIDE_STEP + Math.max(GLYPH / 2, sideLabel) + 8 : 0;
+  // A site root that receives a cross-site link keeps its left side clear for that link.
+  const labelAbove = tree.depth === 0 && !internets.length && state.interSite.has(equipment.id);
+  const sideTop = (side || labelAbove) && !internets.length ? 36 : 0;
+  const sideTransit = side?.via && "ends" in side.via ? side.via : undefined;
+  const sideChips = sideTransit?.sensors.length ? 28 : 0;
+  const childrenWidth = children.reduce((sum, child) => sum + child.width, 0) + Math.max(0, children.length - 1) * BLOCK_GAP;
+  const childrenHeight = children.length ? Math.max(...children.map(({ height }) => height)) : 0;
+  const ownTop = (internets.length ? CLOUD_HEIGHT + UPLINK : 0) + sideTop;
+  const upperWidth = Math.max(glyphArea, gridSpan, sideExtent) + (children.length ? 30 : 0);
+  const internetWidth = internets.length * 180;
+  const width = Math.max(upperWidth, childrenWidth, internetWidth);
+  const height = ownTop + GLYPH + sideChips + (rows.length ? 30 + gridHeight : 12) + (children.length ? 36 + childrenHeight : 0);
+  return {
+    width, height,
+    place(x, y) {
+      const gridLeft = x + inset;
+      const center = rows.length ? gridLeft + gridWidth / 2 : x + glyphArea - GLYPH / 2;
+      const gx = Math.max(x + glyphArea - GLYPH / 2, center);
+      const gy = y + ownTop + GLYPH / 2;
+      state.glyphs.set(equipment.id, { x: gx, y: gy });
+      state.equipment.push({ equipment, x: gx, y: gy, labelSide: labelAbove ? "above" : "left" });
+      if (side) {
+        const sx = gx + SIDE_STEP;
+        state.glyphs.set(side.equipment.id, { x: sx, y: gy });
+        state.equipment.push({ equipment: side.equipment, x: sx, y: gy, labelSide: "above" });
+        const via = side.via;
+        const transit = via && "ends" in via ? via : undefined;
+        state.wires.push({ key: equipment.id + ":" + side.equipment.id, style: transit ? "interface" : "membership", linkKind: transit?.kind ?? "network",
+          entities: [equipment.id, side.equipment.id, ...(transit ? [transit.id, ...transit.sensors.map(({ device }) => device.id)] : [])],
+          path: `M ${gx + GLYPH / 2} ${gy} H ${sx - GLYPH / 2}` });
+        if (transit) {
+          const cidr = transit.segment?.cidr;
+          const near = transit.ends.find(({ equipmentId }) => equipmentId === equipment.id);
+          const far = transit.ends.find(({ equipmentId }) => equipmentId === side.equipment.id);
+          const mid = (gx + sx) / 2;
+          if (near) state.labels.push({ key: transit.id + ":upper", x: gx + GLYPH / 2 + 6, y: gy - 6, kind: "interface", anchor: "start",
+            text: [near.interfaceName, interfaceSuffix(near.ip, cidr)].filter(Boolean).join(" ") });
+          if (far) state.labels.push({ key: transit.id + ":lower", x: sx - GLYPH / 2 - 6, y: gy - 6, kind: "interface", anchor: "end",
+            text: [far.interfaceName, interfaceSuffix(far.ip, cidr)].filter(Boolean).join(" ") });
+          state.labels.push({ key: transit.id + ":name", x: mid, y: gy - 20, text: transit.name, anchor: "middle", kind: "link" });
+          // Sensor chips sit under the link, centered on their TAP marks.
+          const room = SIDE_STEP - GLYPH - 12;
+          placeTaps(state, transit.id, transit.sensors, mid, gy, room);
+        }
+      }
+      // Declared Internet boundaries sit above the root device.
+      internets.forEach((internet, index) => {
+        const cx = gx + (index - (internets.length - 1) / 2) * 180;
+        state.internets.push({ internet, x: cx, y: y + CLOUD_HEIGHT / 2 });
+        for (const attachment of internet.attachments.filter(({ equipmentId }) => equipmentId === equipment.id)) {
+          const top = y + CLOUD_HEIGHT;
+          state.wires.push({ key: attachment.key, style: attachment.style, linkKind: attachment.linkKind,
+            entities: [equipment.id, internet.id, ...internet.sensors.map(({ device }) => device.id)],
+            path: cx === gx ? `M ${gx} ${top} V ${gy - GLYPH / 2}` : `M ${cx} ${top} V ${top + UPLINK / 2} H ${gx} V ${gy - GLYPH / 2}` });
+          const text = interfaceText(attachment) || (attachment.ip ?? "");
+          if (text) state.labels.push({ key: attachment.key + ":label", x: gx + 10, y: gy - GLYPH / 2 - 8, text, anchor: "start", kind: "interface" });
+          internet.sensors.forEach((placement, tapIndex) => {
+            const ty = top + 18 + tapIndex * 24;
+            const chip = chipLabel(placement, true);
+            state.taps.push({ key: internet.id + placement.device.id, x: cx, y: ty, entities: [internet.id, placement.device.id],
+              chip: { key: internet.id + placement.device.id + ":chip", device: placement.device, via: "tap", scope: placement.scope,
+                x: cx - 14 - chipWidth(chip), y: ty - 9, width: chipWidth(chip), label: chip } });
+          });
+        }
+      });
+      // Access links: a bus above each row of zones, joined along the grid's left gutter.
+      let rowTop = gy + GLYPH / 2 + 30 + sideChips;
+      const busX = gridLeft - GUTTER_GAP;
+      const trunkStyles = tree.zones.map((zone) => zone.attachments.find(({ equipmentId }) => equipmentId === equipment.id)?.style ?? "interface");
+      if (rows.length) state.wires.push({ key: equipment.id + ":trunk", linkKind: "network", entities: [equipment.id, ...tree.zones.map(({ id }) => id)],
+        style: trunkStyles.every((style) => style === trunkStyles[0]) ? trunkStyles[0] : "interface",
+        path: `M ${gx} ${gy + GLYPH / 2} V ${rowTop - 14}` });
+      rows.forEach((row, rowIndex) => {
+        let zx = gridLeft;
+        const busY = rowTop - 14;
+        const centers: number[] = [];
+        for (const zone of row) {
+          const placed = offsetZone(zone, zx, rowTop);
+          state.zones.push(placed);
+          const cx = zx + Math.min(zone.width / 2, 124);
+          centers.push(cx);
+          const attachment = zone.zone.attachments.find(({ equipmentId }) => equipmentId === equipment.id);
+          if (attachment) {
+            state.wires.push({ key: attachment.key, style: attachment.style, linkKind: attachment.linkKind,
+              entities: wireEntities(attachment, zone.zone), path: `M ${cx} ${busY} V ${rowTop}` });
+            const text = interfaceText(attachment, zone.zone);
+            if (text) state.labels.push({ key: attachment.key + ":label", x: cx + 6, y: rowTop - 4, text, anchor: "start", kind: "interface" });
+          }
+          zx += zone.width + ZONE_GAP;
+        }
+        // Each bus is split at its drops, so every piece lights up for exactly the subnets whose
+        // access path runs through it. The first bus is fed by the device trunk; later buses by the
+        // gutter, which also carries every row below it.
+        const styles = row.map(({ zone }) => zone.attachments.find(({ equipmentId }) => equipmentId === equipment.id)?.style ?? "interface");
+        const style = styles.every((entry) => entry === styles[0]) ? styles[0] : "interface";
+        const feed = rowIndex === 0 ? gx : busX;
+        const later = rows.slice(rowIndex + 1).flatMap((next) => next.map(({ zone }) => zone.id));
+        const spans = row.map(({ zone }, index) => ({ from: Math.min(feed, centers[index]), to: Math.max(feed, centers[index]), ids: [zone.id] }));
+        if (later.length && feed !== busX) spans.push({ from: Math.min(feed, busX), to: Math.max(feed, busX), ids: later });
+        const stops = [...new Set(spans.flatMap(({ from, to }) => [from, to]))].sort((a, b) => a - b);
+        stops.slice(1).forEach((to, index) => {
+          const from = stops[index];
+          const ids = spans.filter((span) => span.from <= from && span.to >= to).flatMap((span) => span.ids);
+          if (!ids.length) return;
+          state.wires.push({ key: `${equipment.id}:bus:${rowIndex}:${index}`, style, linkKind: "network", entities: [equipment.id, ...ids],
+            path: `M ${from} ${busY} H ${to}` });
+        });
+        if (rowIndex > 0) {
+          const downstream = rows.slice(rowIndex).flatMap((next) => next.map(({ zone }) => zone.id));
+          state.wires.push({ key: equipment.id + ":gutter:" + rowIndex, style, linkKind: "network", entities: [equipment.id, ...downstream],
+            path: `M ${busX} ${rowTop - 14 - ROW_GAP - Math.max(...rows[rowIndex - 1].map(({ height }) => height))} V ${busY}` });
+        }
+        rowTop += Math.max(...row.map(({ height }) => height)) + ROW_GAP;
+      });
+      // Child devices sit below the grid. Their links leave the device to the right, outside the grid.
+      if (children.length) {
+        const childTop = (rows.length ? rowTop - ROW_GAP + 36 : gy + GLYPH / 2 + 48);
+        const gutter = x + Math.max(glyphArea, gridSpan, sideExtent) + 18;
+        let cx = x;
+        belowTrees.forEach((child, index) => {
+          children[index].place(cx, childTop);
+          const target = state.glyphs.get(child.equipment.id)!;
+          const via = child.via;
+          const transit = via && "ends" in via ? via : undefined;
+          const entities = [equipment.id, child.equipment.id, ...(transit ? [transit.id, ...transit.sensors.map(({ device }) => device.id)] : via && "zone" in via ? [via.zone.id] : [])];
+          const exitY = gy + 10 + index * 6;
+          const path = `M ${gx + GLYPH / 2} ${exitY} H ${gutter + index * 8} V ${target.y - GLYPH / 2 - 18 - index * 4} H ${target.x} V ${target.y - GLYPH / 2}`;
+          state.wires.push({ key: equipment.id + ":" + child.equipment.id, style: transit ? "interface" : "membership", linkKind: transit?.kind ?? "network", entities, path });
+          if (transit) {
+            const upper = transit.ends.find(({ equipmentId }) => equipmentId === equipment.id);
+            const lower = transit.ends.find(({ equipmentId }) => equipmentId === child.equipment.id);
+            const cidr = transit.segment?.cidr;
+            if (upper) state.labels.push({ key: transit.id + ":upper", x: gx + GLYPH / 2 + 6, y: exitY - 5, kind: "interface", anchor: "start",
+              text: [upper.interfaceName, interfaceSuffix(upper.ip, cidr)].filter(Boolean).join(" ") });
+            if (lower) state.labels.push({ key: transit.id + ":lower", x: target.x + 8, y: target.y - GLYPH / 2 - 6, kind: "interface", anchor: "start",
+              text: [lower.interfaceName, interfaceSuffix(lower.ip, cidr)].filter(Boolean).join(" ") });
+            const midY = (exitY + target.y - GLYPH / 2 - 18) / 2;
+            state.labels.push({ key: transit.id + ":name", x: gutter + index * 8 + 8, y: midY - 6, text: transit.name, anchor: "start", kind: "link" });
+            if (cidr) state.labels.push({ key: transit.id + ":cidr", x: gutter + index * 8 + 8, y: midY + 7, text: cidr, anchor: "start", kind: "link-detail" });
+            transit.sensors.forEach((placement, tapIndex) => {
+              const ty = midY + 22 + tapIndex * 24;
+              const tx = gutter + index * 8;
+              const label = chipLabel(placement, true);
+              state.taps.push({ key: transit.id + placement.device.id, x: tx, y: ty, entities: [transit.id, placement.device.id],
+                chip: { key: transit.id + placement.device.id + ":chip", device: placement.device, via: "tap", scope: placement.scope,
+                  x: tx + 14, y: ty - 9, width: chipWidth(label), label } });
+            });
+          }
+          cx += children[index].width + BLOCK_GAP;
+        });
+      }
+    },
+  };
+}
+
+/** TAP marks along a horizontal link with their chips below, named only when the names fit. */
+function placeTaps(state: LayoutState, linkId: string, sensors: SensorPlacement[], center: number, y: number, room: number) {
+  if (!sensors.length) return;
+  const named = sensors.map((placement) => chipLabel(placement, true));
+  const useNames = named.reduce((sum, label) => sum + chipWidth(label) + 6, -6) <= room;
+  const labels = useNames ? named : sensors.map((placement) => chipLabel(placement, false));
+  const widths = labels.map(chipWidth);
+  let x = center - (widths.reduce((sum, width) => sum + width + 6, -6)) / 2;
+  sensors.forEach((placement, index) => {
+    const tapX = x + widths[index] / 2;
+    state.taps.push({ key: linkId + placement.device.id, x: tapX, y, entities: [linkId, placement.device.id],
+      chip: { key: linkId + placement.device.id + ":chip", device: placement.device, via: "tap", scope: placement.scope,
+        x, y: y + 12, width: widths[index], label: labels[index] } });
+    x += widths[index] + 6;
   });
-  const peripheral = new Set([...peripheralLinks.values()].map(({ equipment }) => equipment.id));
-  const outerX = spineX + gutter + sideWidth;
-  const width = columns === 1 ? branchWidth + 2 * MARGIN : outerX + MARGIN + crossLinks.length * 20;
+}
+
+function looseBlock(state: LayoutState, zones: Zone[]): Block {
+  const measured = zones.map((zone) => measureZone(zone, state.options));
+  const columns = Math.max(1, Math.min(state.columns, measured.length));
+  const rows: PlacedZone[][] = [];
+  for (let index = 0; index < measured.length; index += columns) rows.push(measured.slice(index, index + columns));
+  const width = Math.max(...rows.map((row) => row.reduce((sum, zone) => sum + zone.width, 0) + (row.length - 1) * ZONE_GAP));
+  const height = 24 + rows.reduce((sum, row) => sum + Math.max(...row.map(({ height }) => height)) + ZONE_GAP, 0);
+  return {
+    width, height,
+    place(x, y) {
+      if (state.equipment.length || state.zones.length) {
+        state.labels.push({ key: "unattached:label", x, y: y + 10, text: "NOT ATTACHED TO A MODELED DEVICE", anchor: "start", kind: "group" });
+      }
+      let top = y + 24;
+      for (const row of rows) {
+        let left = x;
+        for (const zone of row) { state.zones.push(offsetZone(zone, left, top)); left += zone.width + ZONE_GAP; }
+        top += Math.max(...row.map(({ height }) => height)) + ZONE_GAP;
+      }
+    },
+  };
+}
+
+export type LayoutOptions = {
+  viewport: { width: number; height: number };
+  /** Per-zone detail chosen by the user, overriding the automatic choice. */
+  zoneDetail?: Readonly<Record<string, Detail>>;
+  /** Sites the user expanded or collapsed, overriding the automatic choice. */
+  siteChoices?: Readonly<Record<string, boolean>>;
+};
+
+function layoutWith(model: DiagramModel, layers: DiagramLayers, columns: number, detail: Detail, options: LayoutOptions,
+  parts: Component[]): DiagramScene {
+  const zoneDetail = (zone: Zone) => options.zoneDetail?.[zone.id] ?? detail;
+  const state: LayoutState = { model, columns, options: { detail: zoneDetail, sensors: layers.sensors },
+    zones: [], equipment: [], internets: [], wires: [], labels: [], taps: [], glyphs: new Map(),
+    interSite: new Set([...model.transits.values()].filter(({ kind }) => kind !== "network").flatMap(({ ends }) => ends.map(({ equipmentId }) => equipmentId))) };
+  const sites: PlacedSite[] = [];
+  const collapsedSite = new Map<string, string>();
+  const showSites = model.routed && parts.filter(({ trees }) => trees.length).length > 1;
+  const collapsedByDefault = parts.filter(({ trees }) => trees.length).length > EXPANDED_SITE_LIMIT;
+  let x = MARGIN;
+  let tallest = 0;
+  const pending: { part: Component; block: Block; collapsed: boolean }[] = [];
+  parts.forEach((part, index) => {
+    const collapsed = showSites && part.trees.length > 0 && (options.siteChoices?.[part.id] ?? !(collapsedByDefault && index > 0)) === false;
+    const block: Block = collapsed ? { width: COLLAPSED_SITE.width, height: COLLAPSED_SITE.height, place: () => undefined }
+      : part.trees.length ? stackTrees(state, part.trees) : looseBlock(state, part.unattached);
+    pending.push({ part, block, collapsed });
+  });
+  // Sites and components share one row; with many, they wrap to keep the diagram near the viewport aspect.
+  const aspect = options.viewport.width / Math.max(1, options.viewport.height);
+  const totalArea = pending.reduce((sum, { block }) => sum + (block.width + SITE_GAP) * (block.height + SITE_GAP), 0);
+  const rowLimit = Math.max(...pending.map(({ block }) => block.width), Math.sqrt(totalArea * aspect));
   let y = MARGIN;
-
-  function addNode(node: DiagramNode) {
-    nodes.push(node);
-    if (!nodesById.has(node.id)) nodesById.set(node.id, node);
-    return node;
-  }
-
-  function wire(key: string, kind: Wire["kind"], entities: string[], line: string) {
-    let linkKind: DiagramLinkKind | undefined;
-    if (kind !== "host") {
-      for (const id of [...entities]) {
-        const link = linksBySegment.get(id);
-        if (link) {
-          entities.push(link.id);
-          linkKind = link.link.kind ?? "network";
+  let rowHeight = 0;
+  for (const { part, block, collapsed } of pending) {
+    const pad = showSites && part.trees.length ? SITE_PAD : 0;
+    const label = showSites && part.trees.length ? SITE_LABEL : 0;
+    const outerWidth = block.width + pad * 2;
+    if (x > MARGIN && x + outerWidth - MARGIN > rowLimit) { x = MARGIN; y += rowHeight + SITE_GAP; rowHeight = 0; }
+    block.place(x + pad, y + pad + label);
+    if (collapsed) {
+      // Links into a collapsed site end at its summary card.
+      for (const id of part.trees.flatMap(function ids(tree): string[] { return [tree.equipment.id, ...tree.children.flatMap(ids)]; })) {
+        state.glyphs.set(id, { x: x + outerWidth / 2, y: y + (block.height + pad * 2 + label) / 2 });
+        collapsedSite.set(id, part.id);
+      }
+      for (const zone of part.trees.flatMap(function zones(tree): Zone[] { return [...tree.zones, ...tree.children.flatMap(zones)]; })) {
+        for (const member of [zone, ...zone.children]) {
+          collapsedSite.set(member.id, part.id);
+          for (const host of member.hosts) collapsedSite.set(host.id, part.id);
         }
       }
     }
-    wires.push({ key, kind, entities, path: line, linkKind });
-  }
-
-  function attachmentWire(link: Attachment, ids: string[], key: string, line: string) {
-    wire(key, link.name === null ? "membership" : "interface", [link.equipment.id, ...ids], line);
-  }
-
-  function branchBox(subnet: Subnet, x: number, railY: number, vertical = false, side?: Branch["side"]) {
-    const link = linksBySegment.get(subnet.id);
-    const internet = link?.link.internet;
-    const hosts = endpointHosts(subnet.id);
-    const open = hosts.length > 0 && expanded.has(subnet.id);
-    const hostPage = Math.min(hostPages[subnet.id] ?? 0, Math.max(0, Math.ceil(hosts.length / INLINE_HOST_LIMIT) - 1));
-    const labelOnly = vertical && hosts.length === 0 && !internet;
-    const node = addNode({ ...subnet, key: subnet.id, x: labelOnly ? spineX - branchWidth / 2 - 115 : x,
-      y: railY - (internet ? INTERNET_HEIGHT : labelOnly ? 29 : side ? 49 : HORIZONTAL_LABEL_OFFSET),
-      width: internet ? INTERNET_WIDTH : branchWidth, height: internet ? INTERNET_HEIGHT : 39 });
-    const entries = associations.get(subnet.id) ?? [];
-    const markers = entries.flatMap(({ device, monitored }) => {
-      const entry = sensorIndex.get(device.id);
-      return entry && monitored ? [entry] : [];
-    });
-    const railEnd = x + branchWidth - 8;
-    const railX = internet ? x + INTERNET_WIDTH / 2 : vertical ? spineX : side === "left" ? railEnd : x + 8;
-    const monitoringFirewalls = layers.firewalls ? entries
-      .filter(({ monitored, device }) => monitored && device.kind === "firewall").map(({ device }) => device.id) : [];
-    const entities = [subnet.id, ...subnet.attachments.map(({ equipment }) => equipment.id),
-      ...markers.map(({ device }) => device.id), ...monitoringFirewalls];
-    if (side) {
-      wire(subnet.id + ":rail", "subnet", entities, path("M", railX, railY - 64, "V", railY + 44));
-    } else if (subnet.kind === "segment" && (!vertical || hosts.length)) {
-      wire(subnet.id + ":rail", "subnet", entities, path("M", x + 8, railY, "H", vertical ? railX : railEnd));
+    if (pad) {
+      const total = part.trees.flatMap(function devices(tree): string[] { return [tree.equipment.name, ...tree.children.flatMap(devices)]; });
+      sites.push({ id: part.id, label: part.label, x, y, width: outerWidth, height: block.height + pad * 2 + label, collapsed,
+        summary: collapsed ? { zones: part.zoneCount, hosts: part.hostCount, devices: total } : undefined });
     }
-    const center = x + branchWidth / 2;
-    const singleSideHost = side && hosts.length === 1;
-    const hostY = railY + (singleSideHost ? 14 : side ? 45 : 18);
-    const pageRows = open ? Math.ceil(Math.min(hosts.length, INLINE_HOST_LIMIT) / HOSTS_PER_ROW) : 1;
-    const paged = hosts.length > INLINE_HOST_LIMIT;
-    const hostToggleY = hostY + HOST_HEIGHT + (pageRows - 1) * HOST_ROW_HEIGHT + (paged ? 20 : 14);
-    const stackY = railY + 26;
-    const stackLink = side ? path("M", railX, stackY, "H", center + (side === "left" ? 14 : -14))
-      : path("M", center, railY, "v", 13);
-    if (open) {
-      const start = hostPage * INLINE_HOST_LIMIT;
-      const visible = hosts.slice(start, start + INLINE_HOST_LIMIT);
-      const multipleRows = pageRows > 1;
-      const gutterX = side === "right" ? railEnd : x + 8;
-      if (multipleRows && subnet.kind === "segment") {
-        const lastJunctionY = hostY + (Math.ceil(visible.length / HOSTS_PER_ROW) - 1) * HOST_ROW_HEIGHT - 8;
-        wire(subnet.id + ":fanout", "host", [subnet.id, ...visible.map(({ id }) => id)],
-          side ? path("M", railX, stackY, "H", gutterX, "V", lastJunctionY)
-            : path("M", gutterX, railY, "V", lastJunctionY));
-      }
-      for (let offset = 0; offset < visible.length; offset += HOSTS_PER_ROW) {
-        const row = visible.slice(offset, offset + HOSTS_PER_ROW);
-        const slot = Math.min(106, (branchWidth - (multipleRows ? 32 : 16)) / row.length);
-        const rowCenter = center + (multipleRows ? (side === "right" ? -8 : 8) : 0);
-        const halfSpan = (row.length - 1) * slot / 2;
-        const rowY = hostY + offset / HOSTS_PER_ROW * HOST_ROW_HEIGHT;
-        const junctionY = multipleRows ? rowY - 8 : side ? hostY - 6 : railY;
-        if (subnet.kind === "segment") {
-          const ids = [subnet.id, ...row.map(({ id }) => id)];
-          if (multipleRows) {
-            wire(subnet.id + ":hosts:" + offset, "host", ids,
-              path("M", gutterX, junctionY, "H", rowCenter + (side === "right" ? -halfSpan : halfSpan)));
-          } else if (side && !singleSideHost) {
-            wire(subnet.id + ":fanout", "host", ids,
-              path("M", railX, stackY, "H", center, "V", junctionY, "M", center - halfSpan, junctionY, "H", center + halfSpan));
-          }
-        }
-        row.forEach((host, index) => {
-          const hostCenter = rowCenter - halfSpan + index * slot;
-          const key = JSON.stringify([subnet.id, host.id]);
-          addNode({ kind: "host", host, id: host.id, key, x: hostCenter - slot / 2, y: rowY, width: slot, height: HOST_HEIGHT });
-          if (subnet.kind === "segment") {
-            wire(key, "host", [host.id, subnet.id], singleSideHost ? stackLink : path("M", hostCenter, junctionY, "V", rowY));
-          }
-        });
-      }
-    } else if (hosts.length && subnet.kind === "segment") {
-      wire(subnet.id + ":stack", "host", [subnet.id], stackLink);
+    x += outerWidth + (pad ? SITE_GAP : BLOCK_GAP);
+    rowHeight = Math.max(rowHeight, block.height + pad * 2 + label);
+    tallest = Math.max(tallest, y + rowHeight);
+  }
+  // An Internet boundary on a device below the root sits to that device's right.
+  for (const internet of model.internets.values()) {
+    if (state.internets.some((placed) => placed.internet === internet)) continue;
+    const owner = internet.attachments.map(({ equipmentId }) => state.glyphs.get(equipmentId)).find(Boolean);
+    if (owner) state.internets.push({ internet, x: owner.x + 150, y: owner.y - 40 });
+  }
+  // Links between sites, and any other link outside the device trees, run below everything.
+  let lane = 0;
+  const below = tallest + 24;
+  const drawn = new Set(state.wires.map(({ key }) => key));
+  const siteFor = (id: string) => sites.find((site) => {
+    const glyph = state.glyphs.get(id);
+    return glyph && glyph.x >= site.x && glyph.x <= site.x + site.width && glyph.y >= site.y && glyph.y <= site.y + site.height;
+  });
+  for (const transit of model.transits.values()) {
+    const [first, second] = transit.ends;
+    if (!first || !second || drawn.has(transit.id)) continue;
+    const a = state.glyphs.get(first.equipmentId);
+    const b = state.glyphs.get(second.equipmentId);
+    const treeLinked = state.wires.some(({ key }) => key === first.equipmentId + ":" + second.equipmentId || key === second.equipmentId + ":" + first.equipmentId);
+    if (!a || !b || treeLinked) continue;
+    const [left, right] = a.x <= b.x ? [a, b] : [b, a];
+    const [leftEnd, rightEnd] = a.x <= b.x ? [first, second] : [second, first];
+    const leftSite = siteFor(leftEnd.equipmentId);
+    const rightSite = siteFor(rightEnd.equipmentId);
+    const adjacent = leftSite && rightSite && leftSite !== rightSite && Math.abs(rightSite.x - (leftSite.x + leftSite.width) - SITE_GAP) < 2;
+    const entities = [first.equipmentId, second.equipmentId, transit.id, ...transit.sensors.map(({ device }) => device.id)];
+    let path: string;
+    let mid: { x: number; y: number };
+    if (adjacent) {
+      const gap = leftSite.x + leftSite.width + SITE_GAP / 2;
+      path = `M ${left.x + GLYPH / 2} ${left.y} H ${gap} V ${right.y} H ${right.x - GLYPH / 2}`;
+      // Label the longer horizontal run, which has room beside the devices.
+      const leftRun = gap - (left.x + GLYPH / 2);
+      const rightRun = right.x - GLYPH / 2 - gap;
+      mid = leftRun >= rightRun ? { x: (left.x + GLYPH / 2 + gap) / 2, y: left.y } : { x: (gap + right.x - GLYPH / 2) / 2, y: right.y };
+    } else {
+      const laneY = below + lane++ * 12;
+      path = `M ${left.x} ${left.y + GLYPH / 2} V ${laneY} H ${right.x} V ${right.y + GLYPH / 2}`;
+      mid = { x: (left.x + right.x) / 2, y: laneY };
     }
-    // Leave room at each endpoint and above the host branch for the sensor bodies and stems.
-    const sensorStart = side ? railY - 52 : railX + 15;
-    const sensorEnd = side ? railY + (hosts.length ? 11 : 31) : railEnd - 17;
-    const branch: Branch = { node, hosts, expanded: open, hostPage, railY, railX, railEnd, hostToggleY, sensors: markers,
-      sensorStart, sensorEnd, vertical, side };
-    branches.push(branch);
-    branchesById.set(subnet.id, branch);
-    return branch;
+    state.wires.push({ key: transit.id, style: "interface", linkKind: transit.kind, entities, path });
+    const cidr = transit.segment?.cidr;
+    state.labels.push({ key: transit.id + ":name", x: mid.x, y: mid.y - 8, text: transit.kind === "network" ? transit.name : `${transit.name} · ${transit.kind.toUpperCase()}`, anchor: "middle", kind: "link" });
+    if (cidr) state.labels.push({ key: transit.id + ":cidr", x: mid.x, y: mid.y + 16, text: cidr, anchor: "middle", kind: "link-detail" });
+    state.labels.push({ key: transit.id + ":left", x: left.x + GLYPH / 2 + 6, y: left.y + 16, kind: "interface", anchor: "start",
+      text: [leftEnd.interfaceName, interfaceSuffix(leftEnd.ip, cidr)].join(" ") });
+    state.labels.push({ key: transit.id + ":right", x: right.x - GLYPH / 2 - 6, y: right.y + 16, kind: "interface", anchor: "end",
+      text: [rightEnd.interfaceName, interfaceSuffix(rightEnd.ip, cidr)].join(" ") });
+    placeTaps(state, transit.id, transit.sensors, mid.x, mid.y, 160);
   }
-
-  function interfaceLabel(link: Attachment, key: string, x: number, baseline: number, includeDevice: boolean,
-    width = branchWidth, anchor: InterfaceLabel["anchor"] = "start") {
-    if (link.name === null) return;
-    const owner = link.equipment;
-    const hostname = owner.kind === "device" ? owner.device.hostname : owner.kind === "router" ? owner.name : owner.host.hostname;
-    labels.push({ key, text: includeDevice ? hostname + " · " + link.name : link.name, x, y: baseline, width, anchor });
-  }
-
-  function descent(branch: Branch) {
-    // Keep the host controls fixed across pages, including a shorter last page.
-    return branch.hosts.length ? branch.hostToggleY - branch.railY + 26 : 34;
-  }
-
-  function layInternet(subnets: Subnet[], top: number, sideOfTransit = false) {
-    if (!subnets.length) return top;
-    const center = columns === 1 ? width / 2 : spineX;
-    const cloudCenter = center + (sideOfTransit ? gutter + INTERNET_WIDTH / 2 : 0);
-    const cloudBottom = top + INTERNET_HEIGHT;
-    const branches = subnets.map((subnet, index) => {
-      const offset = (index - (subnets.length - 1) / 2) * (INTERNET_WIDTH + 20);
-      return branchBox(subnet, cloudCenter + offset - INTERNET_WIDTH / 2, cloudBottom, true);
-    });
-    const attached = subnets[0].attachments.length > 0;
-    const markers = Math.min(4, Math.max(...branches.map(({ sensors }) => sensors.length)));
-    const gap = attached ? 62 : markers ? 38 : 18;
-    const bottom = cloudBottom + gap + Math.max(0, markers - 1) * 26;
-    branches.forEach((branch, index) => {
-      const { railX, node } = branch;
-      const link = subnets[index].attachments[0];
-      branch.sensorStart = cloudBottom + 16;
-      branch.sensorEnd = bottom - (attached ? 36 : 12);
-      if (link) {
-        const port = center + Math.sign(railX - center) * 16;
-        const line = railX === center ? path("M", railX, cloudBottom, "V", bottom + 13)
-          : path("M", railX, cloudBottom, "V", bottom - 12, "H", port, "V", bottom + 17);
-        attachmentWire(link, [node.id], node.id + ":uplink", line);
-        interfaceLabel(link, node.id + ":interface", railX + 12, bottom - 17, false, branchWidth / 2);
-      } else if (branch.sensors.length) {
-        wire(node.id + ":uplink", "subnet", [node.id, ...branch.sensors.map(({ device }) => device.id)],
-          path("M", railX, cloudBottom, "V", bottom));
-      }
-    });
-    return bottom;
-  }
-
-  function layRows(group: Group, top: number, feedX: number) {
-    let rowTop = top;
-    let lastTop = top;
-    const sharedSubnet = group.subnets.length === 1 && group.subnets[0].attachments.length > 1;
-    for (let offset = 0; offset < group.subnets.length; offset += columns) {
-      lastTop = rowTop;
-      const row = group.subnets.slice(offset, offset + columns);
-      const leftCount = Math.floor(row.length / 2);
-      const left = spineX - gutter - leftCount * stride + BRANCH_GAP;
-      const instances = row.map((subnet, index) => {
-        const x = columns === 1 ? MARGIN : row.length === 1 && !group.attachment
-          ? spineX - branchWidth / 2 : index < leftCount
-          ? left + index * stride : spineX + gutter + (index - leftCount) * stride;
-        return branchBox(subnet, x, rowTop + HORIZONTAL_LABEL_OFFSET + 3);
-      });
-      const link = group.attachment;
-      if (link) {
-        const leftPort = instances[0].node.x + (leftCount ? branchWidth - 8 : 8);
-        const rightPort = instances[row.length - 1].node.x + 8;
-        const ids = group.subnets.map(({ id }) => id);
-        const trunk = leftCount ? leftPort : feedX;
-        attachmentWire(link, ids, JSON.stringify([link.equipment.id, group.subnets[0].id, offset]),
-          path("M", trunk, rowTop, "H", Math.max(rightPort, feedX)));
-        instances.forEach((branch, index) => {
-          const port = index < leftCount ? branch.railEnd : branch.railX;
-          attachmentWire(link, [branch.node.id], branch.node.id + ":drop", path("M", port, rowTop, "V", branch.railY));
-          const extra = peripheralLinks.get(branch.node.id);
-          if (extra) {
-            const center = branch.railX - 128;
-            addNode({ ...extra.equipment, key: extra.equipment.id, x: center - DEVICE_WIDTH / 2,
-              y: branch.railY - 32, width: DEVICE_WIDTH, height: DEVICE_HEIGHT });
-            attachmentWire(extra, [branch.node.id], branch.node.id + ":peripheral",
-              path("M", center + 22, branch.railY, "H", branch.railX));
-          }
-        });
-        if (offset + columns < group.subnets.length) {
-          attachmentWire(link, ids, group.subnets[0].id + ":spine:" + offset,
-            path("M", feedX, rowTop, "V", Math.max(rowTop + GROUP_ROW, ...instances.map((b) => b.railY + descent(b)))));
-        }
-      }
-      rowTop = Math.max(rowTop + GROUP_ROW, ...instances.map((b) => b.railY + descent(b)));
-      if (sharedSubnet) rowTop += 24;
+  // Secondary attachments, such as a subnet shared by two devices, enter the zone from its right edge.
+  for (const attachment of model.attachments) {
+    if (drawn.has(attachment.key) || state.wires.some(({ key }) => key === attachment.key)) continue;
+    const glyph = state.glyphs.get(attachment.equipmentId);
+    const zone = state.zones.find(({ zone }) => zone.id === attachment.targetId);
+    const internet = state.internets.find(({ internet }) => internet.id === attachment.targetId);
+    if (!glyph || (!zone && !internet)) continue;
+    let path: string;
+    if (zone) {
+      const laneX = Math.max(zone.x + zone.width, glyph.x + GLYPH / 2) + 14 + (lane++ % 6) * 8;
+      const entryY = zone.y + 20;
+      path = `M ${glyph.x + GLYPH / 2} ${glyph.y + 10} H ${laneX} V ${entryY} H ${zone.x + zone.width}`;
+      const text = interfaceText(attachment, zone.zone);
+      if (text) state.labels.push({ key: attachment.key + ":label", x: zone.x + zone.width + 6, y: entryY - 6, text, anchor: "start", kind: "interface" });
+    } else {
+      path = `M ${glyph.x + GLYPH / 2} ${glyph.y - 8} H ${internet!.x} V ${internet!.y + CLOUD_HEIGHT / 2}`;
     }
-    return { bottom: rowTop, lastTop };
+    state.wires.push({ key: attachment.key, style: attachment.style, linkKind: attachment.linkKind,
+      entities: wireEntities(attachment, zone?.zone), path });
   }
 
-  // A separate two-device network fits in one row when neither end has other branches.
-  function layDetachedPair(stations: Station[]) {
-    const transit = stations[1]?.transit;
-    if (y === MARGIN || stations.length !== 2 || !transit
-      || stations.some(({ equipment }) => groups.has(equipment.id) || boundariesByDevice.has(equipment.id))
-      || crossLinks.some(({ attachment }) => stations.some(({ equipment }) => equipment.id === attachment.equipment.id))) return false;
-    const branch = branchBox(transit, spineX - branchWidth / 2, y + HORIZONTAL_LABEL_OFFSET + 2);
-    stations.forEach(({ equipment }, index) => {
-      const center = spineX + (index === 0 ? -1 : 1) * (branchWidth / 2 + 95);
-      addNode({ ...equipment, key: equipment.id, x: center - DEVICE_WIDTH / 2, y: branch.railY - 32, width: DEVICE_WIDTH, height: DEVICE_HEIGHT });
-      const link = transit.attachments.find((attachment) => attachment.equipment.id === equipment.id)!;
-      attachmentWire(link, [transit.id], transit.id + ":" + equipment.id,
-        path("M", center + (index === 0 ? 22 : -22), branch.railY, "H", index === 0 ? branch.railX : branch.railEnd));
-      interfaceLabel(link, transit.id + ":" + equipment.id + ":interface",
-        index === 0 ? branch.railX - 52 : branch.railEnd + 8, branch.railY - 10, false);
-    });
-    y = branch.railY + Math.max(descent(branch), 54) + 26;
-    return true;
+  const zonesFlat = state.zones.flatMap(function flatten(zone): PlacedZone[] { return [zone, ...zone.children.flatMap(flatten)]; });
+  const entities = new Map<string, DiagramEntity>();
+  const bounds = new Map<string, Bounds>();
+  for (const placed of zonesFlat) {
+    entities.set(placed.zone.id, { kind: "zone", id: placed.zone.id, zone: placed.zone });
+    bounds.set(placed.zone.id, placed);
+    for (const card of [...placed.hostCards, ...placed.names]) bounds.set(card.host.id, { x: placed.x + card.x, y: placed.y + card.y, width: card.width, height: card.height });
   }
+  for (const zone of model.zones.values()) {
+    if (!entities.has(zone.id)) entities.set(zone.id, { kind: "zone", id: zone.id, zone });
+    for (const host of zone.hosts) entities.set(host.id, { kind: "host", id: host.id, host });
+  }
+  for (const placed of state.equipment) {
+    entities.set(placed.equipment.id, { kind: "equipment", id: placed.equipment.id, equipment: placed.equipment });
+    bounds.set(placed.equipment.id, { x: placed.x - GLYPH / 2, y: placed.y - GLYPH / 2, width: GLYPH, height: GLYPH });
+  }
+  for (const item of model.equipment.values()) if (!entities.has(item.id)) entities.set(item.id, { kind: "equipment", id: item.id, equipment: item });
+  for (const placed of state.internets) {
+    entities.set(placed.internet.id, { kind: "internet", id: placed.internet.id, internet: placed.internet });
+    bounds.set(placed.internet.id, { x: placed.x - 30, y: placed.y - CLOUD_HEIGHT / 2, width: 60, height: CLOUD_HEIGHT });
+  }
+  for (const transit of model.transits.values()) entities.set(transit.id, { kind: "transit", id: transit.id, transit });
+  const hostByName = new Map<string, DiagramHost>();
+  for (const zone of model.zones.values()) for (const host of zone.hosts) hostByName.set(host.hostname.toLowerCase(), host);
+  const coverage = new Map<string, string[]>();
+  for (const device of model.sensors) {
+    entities.set(device.id, { kind: "sensor", id: device.id, device, host: hostByName.get(device.hostname.toLowerCase()) });
+    coverage.set(device.id, [
+      ...[...model.zones.values()].filter(({ sensors }) => sensors.some((placement) => placement.device.id === device.id)).map(({ id }) => id),
+      ...[...model.transits.values()].filter(({ sensors }) => sensors.some((placement) => placement.device.id === device.id)).map(({ id }) => id),
+      ...[...model.internets.values()].filter(({ sensors }) => sensors.some((placement) => placement.device.id === device.id)).map(({ id }) => id),
+    ]);
+  }
+  const right = Math.max(MARGIN, ...zonesFlat.map((zone) => zone.x + zone.width), ...sites.map((site) => site.x + site.width),
+    ...state.equipment.map((item) => item.x + GLYPH), ...state.internets.map((item) => item.x + 160),
+    ...state.taps.map((tap) => tap.chip.x + tap.chip.width), ...state.labels.map((label) => label.x + (label.anchor === "start" ? textWidth(label.text) : 0)));
+  const bottom = Math.max(tallest, below + (lane ? lane * 12 + 30 : 0), ...state.taps.map((tap) => tap.chip.y + 20));
+  return { model, width: right + MARGIN, height: bottom + MARGIN, detail, zones: state.zones, equipment: state.equipment,
+    internets: state.internets, sites, wires: state.wires, labels: state.labels, taps: state.taps, entities, bounds, coverage, collapsedSite };
+}
 
-  // Finish a router's access links inside its own section of the backbone.
-  function layRoutedBranches(groups: Group[], deviceY: number) {
-    const columnsPerSide = Math.floor(columns / 2);
-    const branchesPerRow = columnsPerSide * 2;
-    const leaves = groups.flatMap(({ attachment, subnets }) => subnets.map((subnet) => ({ subnet, attachment: attachment! })));
-    const lanes = groupBy(leaves.map((leaf, index) => ({
-      ...leaf, side: index % 2 ? 1 : -1, column: Math.floor(index / 2) % columnsPerSide, row: Math.floor(index / branchesPerRow),
-    })), ({ side }) => side);
-    const slots = [...lanes.values()].flatMap((side) => side
-      .sort((a, b) => a.row - b.row || b.column - a.column)
-      .map((leaf, index) => ({ ...leaf, lane: side.length - index, position: index / Math.max(1, side.length - 1) })));
-    let top = deviceY + DEVICE_HEIGHT + 4;
-    for (let row = 0; row < Math.ceil(leaves.length / branchesPerRow); row++) {
-      let bottom = top;
-      for (const { subnet, attachment, side, column, lane, position } of slots.filter((slot) => slot.row === row)) {
-        const x = spineX + side * (gutter + column * stride) - (side < 0 ? branchWidth : 0);
-        const branch = branchBox(subnet, x, top + HORIZONTAL_LABEL_OFFSET + 33);
-        const exitX = spineX + side * (36 + lane * 12);
-        const runY = top + (column === 1 ? 0 : 18);
-        const port = side < 0 ? branch.railEnd : branch.railX;
-        attachmentWire(attachment, [subnet.id], subnet.id + ":access", path(
-          "M", spineX + side * 21, deviceY + 16 + position * 35, "H", exitX, "V", runY, "H", port, "V", branch.railY,
-        ));
-        interfaceLabel(attachment, subnet.id + ":interface", port + side * 8, runY - 4, false,
-          branchWidth / 2, side < 0 ? "end" : "start");
-        bottom = Math.max(bottom, branch.railY + descent(branch));
-      }
-      top = bottom + 12;
+/** Several trees in one component (rare) stack left to right. */
+function stackTrees(state: LayoutState, trees: Tree[]): Block {
+  const blocks = trees.map((tree, index) => {
+    const internets = [...state.model.internets.values()].filter(({ attachments }) =>
+      attachments.some(({ equipmentId }) => equipmentId === tree.equipment.id) && index >= 0);
+    return treeBlock(state, tree, internets);
+  });
+  return {
+    width: blocks.reduce((sum, block) => sum + block.width, 0) + (blocks.length - 1) * BLOCK_GAP,
+    height: Math.max(...blocks.map(({ height }) => height)),
+    place(x, y) {
+      let left = x;
+      for (const block of blocks) { block.place(left, y); left += block.width + BLOCK_GAP; }
+    },
+  };
+}
+
+/**
+ * Place the model, choosing the zone grid width and level of detail that best fit the viewport.
+ * Small environments open at host detail; larger ones open at the zone overview.
+ */
+export function layoutNetworkDiagram(graph: TopologyGraph, layers: DiagramLayers, options: LayoutOptions): DiagramScene {
+  const model = buildDiagramModel(graph, layers);
+  const parts = components(model);
+  const fit = (scene: DiagramScene) => Math.min(options.viewport.width / scene.width, options.viewport.height / scene.height);
+  const best = (detail: Detail) => {
+    let chosen: DiagramScene | undefined;
+    for (let columns = 1; columns <= 6; columns++) {
+      const scene = layoutWith(model, layers, columns, detail, options, parts);
+      if (!chosen || fit(scene) > fit(chosen) + 1e-6) chosen = scene;
     }
-    return top;
+    return chosen!;
+  };
+  const hasHosts = [...model.zones.values()].some(({ hosts }) => hosts.length);
+  if (hasHosts) {
+    const detailed = best("hosts");
+    if (fit(detailed) >= HOST_DETAIL_SCALE) return detailed;
   }
-
-  y = layInternet(boundariesByDevice.get(undefined) ?? [], y);
-  for (const stations of spines) {
-    if (stations.length === 1 && peripheral.has(stations[0].equipment.id)) continue;
-    if (layDetachedPair(stations)) continue;
-    const postponed: { group: Group; node: DiagramNode }[] = [];
-    for (const [index, station] of stations.entries()) {
-      const stationGroups = groups.get(station.equipment.id) ?? [];
-      const uplinks = boundariesByDevice.get(station.equipment.id) ?? [];
-      const sparse = stationGroups.every(({ subnets }) => subnets.length === 1 && subnets[0].attachments.length === 1);
-      const localRows = !!graph.routing && (stationGroups.length > 2 || !sparse);
-      const sideGroups = localRows ? [] : stationGroups.filter(({ subnets }) => subnets.length === 1 && subnets[0].attachments.length === 1)
-        .sort((a, b) => Number(b.attachment?.name === "dmz") - Number(a.attachment?.name === "dmz"))
-        .slice(0, stationGroups.some(({ subnets }) => subnets.length > 1) ? 1 : 2);
-      if (station.transit) {
-        const { transit } = station;
-        const previous = nodesById.get(stations[index - 1].equipment.id)!;
-        const upper = transit.attachments.find(({ equipment }) => equipment.id === previous.id)!;
-        const lower = transit.attachments.find(({ equipment }) => equipment.id === station.equipment.id)!;
-        const top = y;
-        const railY = top + (graph.routing ? 28 : 48);
-        const branch = branchBox(transit, spineX - gutter - branchWidth, railY, true);
-        attachmentWire(upper, [transit.id], transit.id + ":up", path("M", spineX, previous.y + 55, "V", railY));
-        interfaceLabel(upper, transit.id + ":upper-interface", spineX + 12, graph.routing ? top + 8 : railY - 54, false);
-        if (graph.routing) {
-          const markerSpace = Math.max(0, Math.min(4, branch.sensors.length) - 1) * 26;
-          y = Math.max(top + 55 + markerSpace, branch.hosts.length ? railY + descent(branch) : 0);
-          if (sideGroups.length) y += 22;
-          branch.sensorStart = top + 21;
-          branch.sensorEnd = y - 21;
-        } else {
-          y = Math.max(railY + 52, branch.hosts.length ? railY + descent(branch) : 0);
-          if (sideGroups.length) y += 26;
-          branch.sensorStart = Math.max(previous.y + DEVICE_HEIGHT + 16, upper.name === null ? railY - 43 : railY - 33);
-          branch.sensorEnd = y - (lower.name === null ? 12 : 24);
-        }
-        y = layInternet(uplinks, y, true);
-        attachmentWire(lower, [transit.id], transit.id + ":down", path("M", spineX, railY, "V", y + 13));
-        interfaceLabel(lower, transit.id + ":lower-interface", spineX + 12, y - 8, false);
-      } else {
-        y = layInternet(uplinks, y);
-      }
-
-      const deviceY = y;
-      const node = addNode({ ...station.equipment, key: station.equipment.id, x: spineX - DEVICE_WIDTH / 2,
-        y: deviceY, width: DEVICE_WIDTH, height: DEVICE_HEIGHT });
-      if (localRows) {
-        y = layRoutedBranches(stationGroups, deviceY);
-        continue;
-      }
-      y = deviceY + DEVICE_HEIGHT;
-      sideGroups.forEach((group, slot) => {
-        const link = group.attachment!;
-        const left = sideGroups.length === 2 ? slot === 0 : index % 2 === 0;
-        const branch = branchBox(group.subnets[0], left ? spineX - gutter - branchWidth : spineX + gutter,
-          deviceY + 32, false, left ? "left" : "right");
-        attachmentWire(link, [branch.node.id], branch.node.id + ":side",
-          path("M", spineX + (left ? -22 : 22), branch.railY, "H", left ? branch.railEnd : branch.railX));
-        interfaceLabel(link, branch.node.id + ":interface", left ? branch.railEnd + 7 : spineX + 29,
-          branch.railY - 10, false, gutter - 26);
-        y = Math.max(y, branch.railY + descent(branch));
-      });
-      const later = stationGroups.filter((group) => !sideGroups.includes(group));
-      for (const group of later) postponed.push({ group, node });
-      y += 12;
-    }
-
-    const feeds = groupBy(postponed, ({ node, group }) => JSON.stringify([node.id, group.attachment?.name ?? group.subnets[0].id]));
-    [...feeds.values()].forEach((sections, lane) => {
-      const feeder = spineX + 49 + lane * 9;
-      let previousTop: number | undefined;
-      for (const { group, node } of sections) {
-        const link = group.attachment!;
-        const top = y + 18;
-        const ids = group.subnets.map(({ id }) => id);
-        if (previousTop === undefined) {
-          const sharedIds = sections.flatMap(({ group }) => group.subnets.map(({ id }) => id));
-          attachmentWire(link, sharedIds, ids[0] + ":feed",
-            path("M", spineX + 22, node.y + 34 + lane * 6, "H", feeder, "V", top));
-          interfaceLabel(link, ids[0] + ":interface", feeder + 8, top - 11, true);
-        } else {
-          attachmentWire(link, ids, ids[0] + ":extension", path("M", feeder, previousTop, "V", top));
-        }
-        const rows = layRows(group, top, feeder);
-        y = rows.bottom;
-        previousTop = rows.lastTop;
-      }
-    });
-    y += 36;
-  }
-  for (const group of groups.get(undefined) ?? []) y = layRows(group, y + 18, spineX).bottom;
-
-  // Retain loops and extra links through shared subnets without reusing another device's port.
-  let crossLane = 0;
-  for (const { subnet, attachment } of crossLinks) {
-    const branch = branchesById.get(subnet.id)!;
-    const node = nodesById.get(attachment.equipment.id)!;
-    const lane = outerX + 17 + crossLane++ * 15;
-    const exitY = node.y + 12;
-    attachmentWire(attachment, [subnet.id], JSON.stringify([subnet.id, attachment.equipment.id]),
-      path("M", spineX + 22, exitY, "H", lane, "V", branch.railY, "H", branch.railEnd));
-    interfaceLabel(attachment, subnet.id + ":" + attachment.equipment.id, branch.railEnd + 12, branch.railY - 7, false);
-  }
-
-  const entities = new Map<string, DiagramEntity>(nodesById);
-  for (const { device } of sensors) {
-    if (!entities.has(device.id)) entities.set(device.id, { kind: "device", id: device.id, device });
-  }
-  if (layers.hosts) for (const host of graph.hosts) {
-    if (!entities.has(host.id)) entities.set(host.id, { kind: "host", id: host.id, host });
-  }
-  return { nodes, nodesById, entities, wires, labels, branches, sensors, associations, linksBySegment, spineX, width, height: Math.max(y + MARGIN, 180) };
+  return best("overview");
 }

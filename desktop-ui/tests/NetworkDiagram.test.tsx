@@ -6,24 +6,54 @@ import type { CatalogItem, PackTopology, StudioApi, StudioEvent, TopologyGraph }
 import { NetworkDiagram } from "../src/NetworkDiagram";
 import * as capture from "../src/captureNetworkView";
 import { PackEnvironmentView } from "../src/PackEnvironmentView";
-import { chooseInitialBranches, indexDiagramHosts, layoutNetworkDiagram } from "../src/networkDiagramLayout";
+import { buildDiagramModel, GUTTER_GAP, hostCategory, interfaceSuffix, layoutNetworkDiagram, type DiagramScene } from "../src/networkDiagramLayout";
 
+type Host = TopologyGraph["hosts"][number];
+type Device = TopologyGraph["devices"][number];
+type Segment = TopologyGraph["segments"][number];
+
+const LAYERS = { sensors: true, hosts: true };
+const WIDE = { width: 1400, height: 760 };
+
+const segment = (name: string, cidr: string, extra: Partial<Segment> = {}): Segment =>
+  ({ id: `segment:${name}`, name, cidr, exposure: "internal", description: "", ...extra });
+const host = (hostname: string, ip: string, segments: string[], extra: Partial<Host> = {}): Host => ({
+  id: `host:${hostname}`, hostname, ip, os: "Windows 11", os_family: "windows", type: "workstation",
+  segment_ids: segments.map((name) => `segment:${name}`), ...extra,
+});
+const sensor = (hostname: string, segments: string[], extra: Partial<Device> = {}): Device => ({
+  id: `device:${hostname}`, name: hostname.toLowerCase(), hostname, kind: "network", placement: "span", direction: "bidirectional",
+  description: "", log_formats: ["zeek"], default_interface: null,
+  evidence: [{ family: "zeek", label: "Zeek", depth: "protocol", formats: ["zeek_conn", "zeek_dns"] }],
+  associations: segments.map((name) => ({ segment_id: `segment:${name}`, monitored: true, interface_name: null })), ...extra,
+});
+const firewall = (hostname: string, interfaces: Record<string, string | null>, extra: Partial<Device> = {}): Device => ({
+  ...sensor(hostname, []), kind: "firewall", placement: "tap", log_formats: ["cisco_asa"],
+  evidence: [{ family: "asa", label: "Cisco ASA", depth: "firewall", formats: ["cisco_asa"] }],
+  associations: Object.entries(interfaces).map(([name, iface]) => ({ segment_id: `segment:${name}`, monitored: true, interface_name: iface })),
+  ...extra,
+});
+
+// A legacy (segment-based) office: one large subnet, a SPAN sensor, a firewall policy interface, and an unplaced host.
 const graph: TopologyGraph = {
-  segments: [{ id: "segment:office", name: "office", cidr: "10.0.0.0/24", exposure: "internal", description: "" }],
+  segments: [segment("office", "10.0.0.0/24")],
   hosts: [
-    ...Array.from({ length: 32 }, (_, index) => ({
-      id: `host:${index + 1}`, hostname: `WS-${index + 1}`, ip: `10.0.0.${index + 1}`,
-      os: "Windows 11", os_family: "windows", segment_ids: ["segment:office"],
+    ...Array.from({ length: 32 }, (_, index) => host(`WS-${index + 1}`, `10.0.0.${index + 1}`, ["office"], {
       primary_users: index === 0 ? ["alex"] : [], roles: index === 0 ? ["workstation", "developer"] : [],
     })),
-    { id: "host:standalone", hostname: "standalone", ip: "2001:db8::1", os: "macOS 27", os_family: "macos", segment_ids: [] },
+    host("standalone", "2001:db8::1", [], { os: "macOS 27", os_family: "macos" }),
   ],
-  devices: [
-    { id: "device:span", name: "core", hostname: "CORE", kind: "network", placement: "span", direction: "bidirectional", description: "", log_formats: ["zeek"], default_interface: null, associations: [{ segment_id: "segment:office", monitored: true, interface_name: null }] },
-    { id: "device:fw", name: "edge", hostname: "FW-01", kind: "firewall", placement: "tap", direction: "inbound", description: "", log_formats: ["cisco_asa"], default_interface: null, associations: [{ segment_id: "segment:office", monitored: true, interface_name: "inside" }] },
-  ],
-  findings: [{ entity_id: "device:fw", message: "FW-01 refers to a segment absent from this environment." }],
+  devices: [sensor("CORE", ["office"]), firewall("FW-01", { office: "inside" }, { direction: "inbound" })],
+  findings: [{ entity_id: "device:FW-01", message: "FW-01 refers to a segment absent from this environment." }],
 };
+
+const zoneIds = (scene: DiagramScene) => scene.zones.flatMap(function ids(zone): string[] { return [zone.zone.id, ...zone.children.flatMap(ids)]; });
+
+async function toggleLayer(user: ReturnType<typeof userEvent.setup>, name: string, scope: HTMLElement | typeof screen = screen) {
+  await user.click(scope.getByRole("button", { name: /^Layers/ }));
+  await user.click(scope.getByRole("checkbox", { name }));
+  await user.click(scope.getByRole("button", { name: /^Layers/ }));
+}
 
 afterEach(cleanup);
 
@@ -34,10 +64,10 @@ test("both diagram questions capture the viewport and retain the full topology",
   const user = userEvent.setup();
   try {
     render(<NetworkDiagram graph={graph} revision="resolved" onAsk={onAsk} />);
-    await user.click(screen.getByRole("button", { name: "Sensors" }));
+    await toggleLayer(user, "Sensors");
     await user.click(screen.getByRole("button", { name: "Ask about this diagram" }));
     expect(onAsk).toHaveBeenLastCalledWith(expect.objectContaining({
-      revision: "resolved", topology: graph, image: shot, visible_layers: ["firewalls", "hosts"], selected_id: undefined,
+      revision: "resolved", topology: graph, image: shot, visible_layers: ["firewalls", "hosts"], selected_id: undefined, sensor_key: {},
     }));
     await user.click(screen.getByRole("button", { name: /Segment office/ }));
     await user.click(screen.getByRole("button", { name: "Ask about this", exact: true }));
@@ -49,59 +79,134 @@ test("both diagram questions capture the viewport and retain the full topology",
   } finally { captureView.mockRestore(); }
 });
 
-test("the diagram separates SPAN markers from firewall scope highlights and preserves selection", async () => {
+test("a segment-based firewall connects through inferred and monitored links instead of floating", async () => {
+  const legacy: TopologyGraph = {
+    segments: [segment("lan", "10.1.0.0/24"), segment("dmz", "10.2.0.0/24"), segment("observed", "10.3.0.0/24"), segment("lab", "10.4.0.0/24")],
+    hosts: [host("WS", "10.1.0.5", ["lan"]), host("WEB", "10.2.0.10", ["dmz"], { public_address: "203.0.113.10", public_address_source: "static_nat" }),
+      host("PROBE", "10.3.0.4", ["observed"]), host("BENCH", "10.4.0.2", ["lab"])],
+    devices: [firewall("FW", { lan: "inside", dmz: "dmz", observed: null }, {
+      nat_rules: [{ type: "static", src: [], real_ip: "10.2.0.10", mapped_ip: "203.0.113.10" }],
+    })],
+    findings: [],
+  };
+  const scene = layoutNetworkDiagram(legacy, LAYERS, { viewport: WIDE });
+  const styles = Object.fromEntries(scene.model.attachments.map(({ targetId, style }) => [targetId, style]));
+  expect(styles).toEqual({ "segment:lan": "inferred", "segment:dmz": "inferred", "segment:observed": "observes", "internet:inferred": "inferred" });
+  expect(scene.internets.map(({ internet }) => [internet.name, internet.inferred])).toEqual([["Internet", true]]);
+  expect(scene.labels.some(({ key, text }) => key.includes("segment:lab") || text === "NOT ATTACHED TO A MODELED DEVICE")).toBe(true);
+  for (const id of ["segment:lan", "segment:dmz", "segment:observed", "internet:inferred"]) {
+    expect(scene.wires.some(({ entities }) => entities.includes("device:FW") && entities.includes(id))).toBe(true);
+  }
+
+  const { container } = render(<NetworkDiagram graph={legacy} />);
+  expect(screen.getByText(/dashed links are inferred from firewall interfaces/)).toBeVisible();
+  expect(container.querySelectorAll(".diagram-edges [data-style='inferred']").length).toBeGreaterThan(0);
+  expect(container.querySelectorAll(".diagram-edges [data-style='observes']").length).toBeGreaterThan(0);
+  await userEvent.setup().click(screen.getByRole("button", { name: "Internet (inferred)" }));
+  const details = screen.getByRole("complementary", { name: "Network diagram details" });
+  expect(details).toHaveTextContent("No Internet boundary is declared");
+  expect(within(details).getByRole("button", { name: "WEB" })).toBeVisible();
+});
+
+test("a sensor is one identity across every subnet it covers", async () => {
+  const spread: TopologyGraph = {
+    segments: [segment("a", "10.1.0.0/24"), segment("b", "10.2.0.0/24"), segment("c", "10.3.0.0/24")],
+    hosts: [host("A1", "10.1.0.1", ["a"]), host("B1", "10.2.0.1", ["b"]), host("C1", "10.3.0.1", ["c"])],
+    devices: [sensor("CORE", ["a", "b"]), sensor("EDGE-IDS", ["c"], { kind: "ids", placement: "tap", log_formats: ["snort_alert"],
+      evidence: [{ family: "ids", label: "Snort", depth: "alert", formats: ["snort_alert"] }] })],
+    findings: [],
+  };
+  const { container } = render(<NetworkDiagram graph={spread} />);
+  const user = userEvent.setup();
+  const chips = screen.getAllByRole("button", { name: "Sensor CORE, Zeek, SPAN" });
+  expect(chips).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "Sensor EDGE-IDS, Snort, TAP" }).closest("[data-family]")).toHaveAttribute("data-family", "ids");
+  await user.hover(chips[0]);
+  const covered = [...container.querySelectorAll(".diagram-zone[data-covered]")].map((zone) => zone.getAttribute("aria-label"));
+  expect(covered).toEqual(["Segment a, 10.1.0.0/24", "Segment b, 10.2.0.0/24"]);
+  expect(container.querySelectorAll(".diagram-chip[data-related='true']")).toHaveLength(2);
+  await user.click(chips[1]);
+  const details = screen.getByRole("complementary");
+  expect(details).toHaveTextContent("SPAN sees traffic within each monitored subnet");
+  expect(within(details).getByRole("button", { name: "a" })).toBeVisible();
+  expect(within(details).getByRole("button", { name: "b" })).toBeVisible();
+  const key = screen.getByLabelText("Diagram key");
+  expect(within(key).getByText("TAP")).toBeVisible();
+  expect(within(key).getByText("SPAN")).toBeVisible();
+  expect(within(key).getByText("Snort IDS alerts")).toBeVisible();
+  expect(within(key).getByText("Zeek network logs")).toBeVisible();
+});
+
+test("every Zeek sensor shares one badge and its hover lists the logs it writes", async () => {
+  const connOnly = sensor("BRANCH-ZEEK", ["b"], { log_formats: ["zeek_conn"],
+    evidence: [{ family: "zeek", label: "Zeek", depth: "connection", formats: ["zeek_conn", "zeek_weird"] }] });
+  const mixed: TopologyGraph = {
+    segments: [segment("a", "10.1.0.0/24"), segment("b", "10.2.0.0/24")],
+    hosts: [host("A1", "10.1.0.1", ["a"]), host("B1", "10.2.0.1", ["b"])],
+    devices: [sensor("CORE", ["a"]), connOnly], findings: [],
+  };
+  const { container } = render(<NetworkDiagram graph={mixed} />);
+  const chips = [...container.querySelectorAll(".diagram-chip")];
+  expect(chips.map((chip) => chip.getAttribute("data-family"))).toEqual(["zeek", "zeek"]);
+  expect(screen.getByRole("button", { name: "Sensor BRANCH-ZEEK, Zeek, SPAN" }).querySelector("title")).toHaveTextContent("Zeek logs: conn, weird");
+  expect(within(screen.getByLabelText("Diagram key")).queryByText(/Connections only/)).toBeNull();
+  await userEvent.setup().hover(screen.getByRole("button", { name: "Sensor CORE, Zeek, SPAN" }));
+  expect(container.querySelector(".diagram-preview")).toHaveTextContent("Zeek logs: conn, dns");
+});
+
+test("the Layers menu explains each layer and always keeps firewalls", async () => {
+  render(<NetworkDiagram graph={graph} />);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: /^Layers/ }));
+  const menu = screen.getByRole("group", { name: "Diagram layers" });
+  expect(within(menu).getAllByRole("checkbox").map((box) => box.closest("label")!.textContent)).toEqual(["Sensors", "Hosts", "Firewall policy scopes"]);
+  expect(within(menu).getByRole("img", { name: /^About Sensors: / })).toBeVisible();
+  expect(within(menu).getByRole("img", { name: /^About Hosts: / })).toBeVisible();
+  expect(within(menu).getByRole("img", { name: /^About Firewall policy scopes: / })).toBeVisible();
+  await user.click(within(menu).getByRole("checkbox", { name: "Sensors" }));
+  await user.click(within(menu).getByRole("checkbox", { name: "Hosts" }));
+  expect(screen.getByRole("button", { name: "Firewall FW-01" })).toBeVisible();
+});
+
+test("Show on map expands a summarized subnet and selects the host there", async () => {
   const { container } = render(<NetworkDiagram graph={graph} />);
   const user = userEvent.setup();
-  const map = screen.getByRole("group", { name: /Network map/ });
-  const firewall = screen.getByRole("button", { name: "Firewall FW-01" });
-  expect(container.querySelectorAll(".diagram-marker[data-placement='span']")).toHaveLength(1);
-  const interfaceCount = container.querySelectorAll("path[data-kind='interface']").length;
-  expect(interfaceCount).toBe(0);
-  expect(container.querySelectorAll(".diagram-scope-highlight")).toHaveLength(1);
-  expect(screen.getByRole("button", { name: "Unassigned hosts" })).toBeVisible();
-  expect(screen.queryByRole("complementary")).toBeNull();
+  expect(container.querySelector(".diagram-host-card[aria-label='WS-5 Windows']")).toBeNull();
+  await user.click(screen.getByRole("button", { name: /Segment office/ }));
+  const details = screen.getByRole("complementary");
+  await user.click(within(details).getByRole("button", { name: "WS-5 Windows" }));
+  await user.click(within(details).getByRole("button", { name: "Show on map" }));
+  const card = container.querySelector(".diagram-host-card[aria-label='WS-5 Windows']");
+  expect(card).not.toBeNull();
+  expect(card).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Collapse office hosts" })).toBeVisible();
+  expect(screen.getByRole("complementary")).toHaveTextContent("In office");
+});
 
-  await user.click(firewall);
-  const details = screen.getByRole("complementary", { name: "Network diagram details" });
-  await user.hover(screen.getByRole("button", { name: "Network sensor CORE, SPAN" }));
-  expect(container.querySelectorAll(".diagram-marker[data-active='true']")).toHaveLength(1);
-  expect(container.querySelectorAll("path[data-kind='interface']")).toHaveLength(interfaceCount);
-  expect(within(details).getByText("Policy scope inside")).toBeVisible();
-  expect(firewall).toHaveAttribute("aria-pressed", "true");
-  expect(within(details).getByText(/segment absent/)).toBeVisible();
-  const scopes = screen.getByRole("button", { name: "Firewall scopes", exact: true });
-  expect(scopes).toHaveAttribute("aria-pressed", "true");
-  await user.click(scopes);
-  expect(container.querySelectorAll(".diagram-scope-highlight")).toHaveLength(0);
-  expect(firewall).toHaveAttribute("aria-pressed", "true");
-
-  const transform = () => map.querySelector("g")!.getAttribute("transform");
-  const initialTransform = transform();
-  await user.click(screen.getByRole("button", { name: "Zoom in" }));
-  expect(transform()).not.toBe(initialTransform);
-  const zoomedIn = transform();
-  fireEvent.keyDown(map, { key: "ArrowRight" });
-  expect(transform()).not.toBe(zoomedIn);
-  await user.click(screen.getByRole("button", { name: "Fit to view" }));
-  expect(transform()).toBe(initialTransform);
-
-  const capture = vi.fn();
-  const plot = map.querySelector("svg")!;
-  Object.defineProperty(plot, "setPointerCapture", { value: capture });
-  fireEvent.pointerDown(plot, { button: 0, pointerId: 1, clientX: 20, clientY: 30 });
-  expect(capture).toHaveBeenCalledWith(1);
-  fireEvent.pointerMove(plot, { pointerId: 1, clientX: 50, clientY: 45 });
-  expect(transform()).not.toBe(initialTransform);
-  fireEvent.pointerUp(plot, { pointerId: 1 });
-  expect(plot).toHaveAttribute("data-dragging", "false");
-
-  await user.click(screen.getByRole("button", { name: "Sensors" }));
-  expect(screen.queryByRole("button", { name: "Network sensor CORE, SPAN" })).not.toBeInTheDocument();
-  expect(container.querySelectorAll(".diagram-marker")).toHaveLength(0);
-  expect(within(details).getByText("Policy scope inside")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Firewalls" }));
-  expect(screen.queryByRole("button", { name: "Firewall FW-01" })).not.toBeInTheDocument();
-  expect(container.querySelectorAll("path[data-kind='interface']")).toHaveLength(0);
+test("Show on map expands a collapsed site before revealing its host", async () => {
+  const sites = ["hq", "a", "b", "c", "d", "e"];
+  const routed: TopologyGraph = {
+    segments: [...sites.map((name, index) => segment(`${name}-lan`, `10.${index}.1.0/24`)),
+      ...sites.slice(1).map((name, index) => segment(`${name}-wan`, `10.100.${index}.0/30`))],
+    devices: [], findings: [],
+    hosts: sites.map((name, index) => host(`${name.toUpperCase()}-WS`, `10.${index}.1.10`, [`${name}-lan`])),
+    routing: {
+      devices: Object.fromEntries(sites.map((name) => [name, { kind: "router" as const }])),
+      links: {
+        ...Object.fromEntries(sites.map((name, index) => [`${name}-lan`, { segment: `${name}-lan`, interfaces: { [name]: { name: "lan", ip: `10.${index}.1.1` } } }])),
+        ...Object.fromEntries(sites.slice(1).map((name, index) => [`${name}-wan`, { kind: "wan" as const, segment: `${name}-wan`,
+          interfaces: { hq: { name: `to-${name}`, ip: `10.100.${index}.1` }, [name]: { name: "wan", ip: `10.100.${index}.2` } } }])),
+      },
+    },
+  };
+  const { container } = render(<NetworkDiagram graph={routed} />);
+  const user = userEvent.setup();
+  expect(container.querySelector(".diagram-host-card[aria-label='C-WS Windows']")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "hq Router" }));
+  await user.click(within(screen.getByRole("complementary")).getByRole("button", { name: "c-wan" }));
+  await user.click(within(screen.getByRole("complementary")).getByRole("button", { name: "c" }));
+  expect(container.querySelector(".diagram-device[aria-label='c Router']")).toHaveAttribute("aria-pressed", "true");
+  expect(container.querySelectorAll(".diagram-site-card")).toHaveLength(4);
 });
 
 test("wheel zoom requires diagram focus and keeps the point under the pointer in place", () => {
@@ -128,10 +233,41 @@ test("wheel zoom requires diagram focus and keeps the point under the pointer in
   const focusedScale = camera()[2];
   expect(fireEvent.wheel(office, { ...pointer, deltaY: -3, deltaMode: WheelEvent.DOM_DELTA_LINE })).toBe(false);
   expect(camera()[2]).toBeGreaterThan(focusedScale);
-  act(() => screen.getByRole("button", { name: "Fit to view" }).focus());
+  act(() => screen.getByRole("button", { name: "Expand diagram" }).focus());
   const toolbarScale = camera()[2];
   expect(fireEvent.wheel(map, { ...pointer, deltaY: 120 })).toBe(true);
   expect(camera()[2]).toBe(toolbarScale);
+});
+
+test("pan, zoom, fit, and selection work together without moving the map for details", async () => {
+  render(<NetworkDiagram graph={graph} />);
+  const user = userEvent.setup();
+  const map = screen.getByRole("group", { name: /Network map/ });
+  const transform = () => map.querySelector("g")!.getAttribute("transform");
+  const initial = transform();
+  await user.click(screen.getByRole("button", { name: "Firewall FW-01" }));
+  expect(transform()).toBe(initial);
+  const details = screen.getByRole("complementary", { name: "Network diagram details" });
+  expect(details).toHaveTextContent("Policy scope inside");
+  expect(within(details).getByText(/segment absent/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Zoom in" }));
+  expect(transform()).not.toBe(initial);
+  fireEvent.keyDown(map, { key: "ArrowRight" });
+  const panned = transform();
+  await user.click(screen.getByRole("button", { name: "Fit to view" }));
+  expect(transform()).not.toBe(panned);
+  const plot = map.querySelector("svg")!;
+  const pointerCapture = vi.fn();
+  Object.defineProperty(plot, "setPointerCapture", { value: pointerCapture });
+  fireEvent.pointerDown(plot, { button: 0, pointerId: 1, clientX: 20, clientY: 30 });
+  expect(pointerCapture).toHaveBeenCalledWith(1);
+  const fitted = transform();
+  fireEvent.pointerMove(plot, { pointerId: 1, clientX: 50, clientY: 45 });
+  expect(transform()).not.toBe(fitted);
+  fireEvent.pointerUp(plot, { pointerId: 1 });
+  expect(plot).toHaveAttribute("data-dragging", "false");
+  fireEvent.keyDown(map, { key: "Escape" });
+  expect(screen.queryByRole("complementary")).toBeNull();
 });
 
 test("keyboard selection opens bounded host pages and individual host facts", async () => {
@@ -139,7 +275,6 @@ test("keyboard selection opens bounded host pages and individual host facts", as
   const user = userEvent.setup();
   const office = screen.getByRole("button", { name: /Segment office/ });
   fireEvent.focus(office);
-  expect(screen.getAllByText("10.0.0.0/24", { exact: true })[0]).toBeVisible();
   expect(screen.queryByRole("complementary")).toBeNull();
   fireEvent.keyDown(office, { key: "Enter" });
   const details = screen.getByRole("complementary", { name: "Network diagram details" });
@@ -147,30 +282,100 @@ test("keyboard selection opens bounded host pages and individual host facts", as
   await user.click(within(details).getByRole("button", { name: "WS-1 Windows" }));
   expect(within(details).getByText("Windows 11")).toBeVisible();
   expect(within(details).getByText("10.0.0.1")).toBeVisible();
-  expect(within(details).getByText("Primary user")).toBeVisible();
   expect(within(details).getByText("alex")).toBeVisible();
   expect(within(details).getByText("workstation, developer")).toBeVisible();
   expect(within(details).getByText("1–12 of 32")).toBeVisible();
-  expect(within(details).queryByRole("button", { name: "WS-13 Windows" })).toBeNull();
   await user.click(within(details).getByRole("button", { name: "Next hosts" }));
   expect(within(details).getByRole("button", { name: "WS-13 Windows" })).toBeVisible();
-  expect(within(details).getByText("13–24 of 32")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Unassigned hosts" }));
   expect(within(details).getByRole("button", { name: "standalone macOS" })).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Hosts" }));
+  await toggleLayer(user, "Hosts");
   expect(screen.queryByRole("button", { name: "Unassigned hosts" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "standalone macOS" })).toBeNull();
+});
+
+test("large subnets summarize by role and expand to host cards on request", async () => {
+  render(<NetworkDiagram graph={graph} />);
+  const user = userEvent.setup();
+  expect(screen.queryByRole("button", { name: "WS-1 Windows" })).toBeNull();
+  const expand = screen.getByRole("button", { name: "Expand office hosts" });
+  expect(expand).toHaveAttribute("aria-expanded", "false");
+  await user.click(expand);
+  expect(screen.getAllByRole("button", { name: /^WS-\d+ Windows$/ })).toHaveLength(32);
+  await user.click(screen.getByRole("button", { name: "Collapse office hosts" }));
+  expect(screen.queryByRole("button", { name: "WS-1 Windows" })).toBeNull();
+});
+
+test("small environments open at host detail and larger ones at the subnet overview", () => {
+  const small: TopologyGraph = { segments: [segment("corp", "10.0.0.0/16")], devices: [sensor("ZEEK", ["corp"])], findings: [],
+    hosts: [host("DC-01", "10.0.3.10", ["corp"], { type: "domain_controller", os: "Windows Server 2019" }),
+      host("SRV-01", "10.0.2.1", ["corp"], { type: "server", os: "Ubuntu 22.04", os_family: "linux" }),
+      ...Array.from({ length: 6 }, (_, index) => host(`WS-0${index + 1}`, `10.0.1.${index + 1}`, ["corp"]))] };
+  const opened = layoutNetworkDiagram(small, LAYERS, { viewport: WIDE });
+  expect(opened.detail).toBe("hosts");
+  expect(opened.zones[0].groupLabels.map(({ text }) => text)).toEqual(["DOMAIN CONTROLLER  1", "SERVER  1", "WORKSTATIONS  6"]);
+  const overview = layoutNetworkDiagram(graph, LAYERS, { viewport: { width: 720, height: 320 } });
+  expect(overview.detail).toBe("overview");
+  expect(overview.zones.find(({ zone }) => zone.id === "segment:office")!.summary).toEqual([{ category: "workstation", count: 32 }]);
+  const chosen = layoutNetworkDiagram(graph, LAYERS, { viewport: { width: 720, height: 320 }, zoneDetail: { "segment:office": "hosts" } });
+  expect(chosen.zones.find(({ zone }) => zone.id === "segment:office")!.hostCards).toHaveLength(32);
+});
+
+test("hosts belong to their most specific subnet and nested subnets draw inside their parent", () => {
+  const nested: TopologyGraph = {
+    segments: [segment("offices", "10.61.0.0/16"), segment("services", "10.61.60.0/24", { parent_id: "segment:offices" })],
+    hosts: [host("WS", "10.61.1.5", ["offices"]), host("DC", "10.61.60.10", ["offices", "services"], { primary_segment_id: "segment:services", roles: ["domain_controller"] })],
+    devices: [], findings: [],
+  };
+  const scene = layoutNetworkDiagram(nested, LAYERS, { viewport: WIDE });
+  expect(scene.zones.map(({ zone }) => zone.id)).toEqual(["segment:offices"]);
+  const [offices] = scene.zones;
+  expect(offices.children.map(({ zone }) => zone.id)).toEqual(["segment:services"]);
+  expect(offices.zone.hosts.map(({ hostname }) => hostname)).toEqual(["WS"]);
+  expect(offices.children[0].zone.hosts.map(({ hostname }) => hostname)).toEqual(["DC"]);
+  const child = offices.children[0];
+  expect(child.x).toBeGreaterThan(offices.x);
+  expect(child.y + child.height).toBeLessThanOrEqual(offices.y + offices.height);
+});
+
+test("public addresses are marked per host, and summarized subnets name those hosts", async () => {
+  const servers: TopologyGraph = {
+    segments: [segment("servers", "10.2.0.0/24")], devices: [], findings: [],
+    hosts: Array.from({ length: 9 }, (_, index) => host(`SRV-${index}`, `10.2.0.${index + 10}`, ["servers"], {
+      type: "server", ...(index === 3 ? { public_address: "203.0.113.11", public_address_source: "static_nat" as const } : {}),
+    })),
+  };
+  const scene = layoutNetworkDiagram(servers, LAYERS, { viewport: WIDE, zoneDetail: { "segment:servers": "overview" } });
+  const [zone] = scene.zones;
+  expect(zone.summary).toEqual([{ category: "server", count: 9 }]);
+  expect(zone.publicHosts.map(({ hostname }) => hostname)).toEqual(["SRV-3"]);
+  const { container } = render(<NetworkDiagram graph={servers} />);
+  // Nine hosts fit, so the subnet opens at host detail; only the reachable host is marked.
+  expect(container.querySelectorAll(".diagram-host-card[data-public]")).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "SRV-3 Windows" })).toHaveAttribute("data-public", "true");
+  expect(container.querySelector(".diagram-zone")).not.toHaveAttribute("data-public");
+  await userEvent.setup().click(screen.getByRole("button", { name: "Collapse servers hosts" }));
+  expect(screen.getByRole("button", { name: "SRV-3 public address 203.0.113.11" })).toBeVisible();
+});
+
+test("host categories prefer roles and fall back to the declared system type", () => {
+  expect(hostCategory(host("A", "10.0.0.1", [], { roles: ["file_server"], type: "server" }))).toBe("file_server");
+  expect(hostCategory(host("B", "10.0.0.2", [], { roles: [], type: "domain_controller" }))).toBe("domain_controller");
+  expect(hostCategory(host("C", "10.0.0.3", [], { roles: ["forward_proxy"], type: "server" }))).toBe("server");
+  expect(hostCategory(host("D", "10.0.0.4", [], { roles: [], type: "" }))).toBe("other");
+  expect(interfaceSuffix("10.40.10.1", "10.40.10.0/24")).toBe(".1");
+  expect(interfaceSuffix("10.40.254.2", "10.40.0.0/16")).toBe(".254.2");
+  expect(interfaceSuffix("2001:db8::1", "2001:db8::/64")).toBe("2001:db8::1");
 });
 
 test("expanded view starts focused for wheel zoom and preserves layers and the selected subnet", async () => {
   render(<NetworkDiagram graph={graph} context="Branch Office" />);
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "Sensors" }));
+  await toggleLayer(user, "Sensors");
   await user.click(screen.getByRole("button", { name: /Segment office/ }));
   await user.click(screen.getByRole("button", { name: "Expand diagram" }));
   const dialog = screen.getByRole("dialog", { name: "Expanded network diagram" });
   expect(within(dialog).getByText("Branch Office")).toBeVisible();
-  expect(within(dialog).getByRole("button", { name: "Sensors" })).toHaveAttribute("aria-pressed", "false");
+  expect(within(dialog).queryByRole("button", { name: /^Sensor CORE/ })).toBeNull();
   expect(within(dialog).getByRole("button", { name: /Segment office/ })).toHaveAttribute("aria-pressed", "true");
   const map = within(dialog).getByRole("group", { name: /Network map/ });
   const plot = map.querySelector("svg")!;
@@ -179,8 +384,7 @@ test("expanded view starts focused for wheel zoom and preserves layers and the s
   const initial = transform();
   fireEvent.wheel(plot, { clientX: 150, clientY: 140, deltaY: -120 });
   expect(transform()).not.toBe(initial);
-
-  act(() => within(dialog).getByRole("button", { name: "WS-1 Windows" }).focus());
+  act(() => within(dialog).getByRole("button", { name: "Close details" }).focus());
   const zoomed = transform();
   fireEvent.wheel(plot, { deltaY: -120 });
   expect(transform()).toBe(zoomed);
@@ -190,242 +394,21 @@ test("expanded view starts focused for wheel zoom and preserves layers and the s
   expect(screen.getByRole("button", { name: /Segment office/ })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("dense monitoring keeps sensor badges and firewall scopes separate", async () => {
-  const segments: TopologyGraph["segments"] = Array.from({ length: 16 }, (_, index) => ({
-    id: `segment:${index}`, name: `subnet-${index}`, cidr: `10.40.${index}.0/24`, description: "",
-    exposure: index === 15 ? "external" : "internal",
-  }));
-  const associations = segments.map(({ id }) => ({ segment_id: id, monitored: true, interface_name: null }));
-  const sensors = Array.from({ length: 12 }, (_, index) => ({
-    ...graph.devices[0], id: `sensor:${index}`, name: `sensor-${index}`, hostname: `SENSOR-${index}`, associations,
-  }));
-  const firewall = { ...graph.devices[1], associations: [
-    ...associations.slice(0, 6).map((entry) => ({ ...entry, interface_name: "inside" })),
-    ...associations.slice(6, 12).map((entry) => ({ ...entry, interface_name: "production" })),
-    ...associations.slice(12),
-  ] };
-  const dense = { segments, devices: [firewall, ...sensors], hosts: [], findings: [] };
-  const scene = layoutNetworkDiagram(dense, { sensors: true, firewalls: true, hosts: true }, new Map(), new Set());
-  expect(scene.labels).toEqual([]);
-  expect(scene.branches.every(({ sensors }) => sensors.some(({ device }) => device.id === "sensor:0"))).toBe(true);
-  expect(scene.wires.filter(({ kind, entities }) => kind === "interface" && entities.includes("segment:15"))).toHaveLength(0);
-  expect(scene.width).toBeLessThan(1500);
-  expect(scene.wires.filter(({ key }) => key.endsWith(":feed"))).toHaveLength(0);
-  expect(scene.wires.filter(({ key, kind }) => kind === "interface" && key.startsWith('["segment:'))).toHaveLength(0);
-  for (const node of scene.nodes) {
-    expect(node.x + node.width).toBeLessThanOrEqual(scene.width);
-    expect(node.y + node.height).toBeLessThanOrEqual(scene.height);
-  }
-  const view = render(<NetworkDiagram graph={dense} />);
-  const user = userEvent.setup();
-  const markers = () => [...view.container.querySelectorAll(".diagram-marker")];
-  expect(markers()).toHaveLength(16 * 7);
-  expect(view.container.querySelectorAll(".diagram-scope-highlight")).toHaveLength(12);
-  expect(screen.getByRole("button", { name: "Firewall FW-01" })).toBeVisible();
-  expect(markers().some((marker) => marker.getAttribute("aria-label")?.includes("FW-01"))).toBe(false);
-  await user.click(screen.getByRole("button", { name: /^Segment subnet-15,/ }));
-  const details = screen.getByRole("complementary");
-  expect(within(details).getByRole("button", { name: "FW-01", exact: true })).toBeVisible();
-  expect(within(details).getByText("Monitored by firewall")).toBeVisible();
-
-  await user.click(screen.getByRole("button", { name: /^Segment subnet-0,/ }));
-  await user.click(screen.getByRole("button", { name: "Show 5 more sensors on subnet-0" }));
-  const extra = screen.getByRole("region", { name: "Additional sensors" });
-  expect(within(extra).getAllByRole("button").map((button) => button.textContent))
-    .toEqual(sensors.slice(7).map(({ hostname }) => hostname));
-  await user.click(within(extra).getByRole("button", { name: "SENSOR-11" }));
-  expect(within(details).getByRole("heading", { name: "SENSOR-11" })).toBeVisible();
-  const highlighted = markers().filter((marker) => marker.getAttribute("data-active") === "true");
-  expect(highlighted).toHaveLength(16);
-  expect(new Set(highlighted.map((marker) => marker.textContent))).toHaveLength(1);
-});
-
-test.each([6, 8, 9])("a horizontal rail with %i sensors uses overflow only when needed", (count) => {
-  const sensors = Array.from({ length: count }, (_, index) => ({
-    ...graph.devices[0], id: `sensor:${index}`, name: `sensor-${index}`, hostname: `SENSOR-${index}`,
-  }));
-  const { container } = render(<NetworkDiagram graph={{ ...graph, devices: sensors }} />);
-  const visible = container.querySelectorAll(".diagram-marker");
-  expect(visible).toHaveLength(count > 8 ? 7 : count);
-  if (count > 8) {
-    expect(screen.getByRole("button", { name: "Show 2 more sensors on office" })).toBeVisible();
-  } else {
-    expect(screen.queryByRole("button", { name: /more sensors on office/ })).toBeNull();
-  }
-});
-
-test("inline host pages reach all 20 hosts without moving the map", async () => {
-  const groups = indexDiagramHosts(graph.hosts);
-  expect(chooseInitialBranches(groups, { width: 1000, height: 720 })).toEqual(new Set(["unassigned"]));
-  expect(chooseInitialBranches(indexDiagramHosts(graph.hosts.slice(0, 10)), { width: 1000, height: 720 }))
-    .toEqual(new Set(["segment:office"]));
-  const user = userEvent.setup();
-  render(<NetworkDiagram graph={{ ...graph, hosts: graph.hosts.slice(0, 20) }} />);
-  expect(screen.queryByRole("button", { name: "WS-1 Windows" })).toBeNull();
-  expect(screen.getByRole("button", { name: /Segment office, 10.0.0.0/ })).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Expand office hosts" }));
-  expect(screen.getByText("1–12 of 20 hosts")).toBeVisible();
-  expect(screen.getByRole("button", { name: "WS-12 Windows" })).toBeVisible();
-  expect(screen.queryByRole("button", { name: "WS-13 Windows" })).toBeNull();
-  const map = screen.getByRole("group", { name: /Network map/ });
-  const firstPage = [...map.querySelectorAll(".diagram-node[data-kind='host']")].map((node) => node.getAttribute("transform")?.split(" ")[1]);
-  expect(new Set(firstPage).size).toBe(3);
-  const camera = map.querySelector("svg > g")?.getAttribute("transform");
-  const next = screen.getByRole("button", { name: "Next hosts on office" });
-  const previous = screen.getByRole("button", { name: "Previous hosts on office" });
-  expect(previous).toHaveAttribute("aria-disabled", "true");
-  await user.click(next);
-  expect(screen.getByText("13–20 of 20 hosts")).toBeVisible();
-  expect(screen.getByRole("button", { name: "WS-20 Windows" })).toBeVisible();
-  expect(next).toHaveAttribute("aria-disabled", "true");
-  expect(map.querySelector("svg > g")?.getAttribute("transform")).toBe(camera);
-  await user.click(previous);
-  await user.click(screen.getByRole("button", { name: "WS-1 Windows" }));
-  const details = screen.getByRole("complementary", { name: "Network diagram details" });
-  expect(within(details).getByText("alex")).toBeVisible();
-  expect(within(details).getByText("workstation, developer")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Zoom in" }));
-  expect(screen.getByRole("button", { name: "Collapse office hosts" })).toHaveAttribute("aria-expanded", "true");
-});
-
-test.each([1, 4])("opening a side subnet with %i hosts leaves the map, rail, labels, and sensors in place", async (hostCount) => {
-  const dmz = { ...graph.segments[0], id: "segment:dmz", name: "dmz", cidr: "10.3.0.0/24" };
-  const dmzMonitoring = { segment_id: dmz.id, monitored: true, interface_name: null };
-  render(<NetworkDiagram graph={{
-    ...graph,
-    segments: [...graph.segments, dmz],
-    routing: {
-      devices: { edge: { kind: "firewall", firewall: "edge" } },
-      links: { dmz: { segment: "dmz", interfaces: { edge: { name: "dmz", ip: "10.3.0.254" } } } },
-    },
-    hosts: [...graph.hosts, ...Array.from({ length: hostCount }, (_, index) => ({
-      ...graph.hosts[0], id: `host:portal-${index + 1}`, hostname: `PORTAL-${index + 1}`, ip: `10.3.0.${index + 1}`,
-      os: "Ubuntu", os_family: "linux", segment_ids: [dmz.id],
-    }))],
-    devices: [
-      { ...graph.devices[0], associations: [...graph.devices[0].associations, dmzMonitoring] },
-      { ...graph.devices[0], id: "device:tap", name: "DMZ tap", hostname: "DMZ-TAP", placement: "tap", associations: [dmzMonitoring] },
-      { ...graph.devices[1], associations: [...graph.devices[1].associations, { ...dmzMonitoring, interface_name: "dmz" }] },
-    ],
-  }} />);
-  const user = userEvent.setup();
-  const map = screen.getByRole("group", { name: /Network map/ });
-  const dmzLabel = screen.getByRole("button", { name: "Segment dmz, 10.3.0.0/24" });
-  const markers = ["CORE SPAN on dmz", "DMZ-TAP TAP on dmz"].map((name) => screen.getByRole("button", { name }));
-  const [span, tap] = markers;
-  expect(span.querySelector("polygon")).toBeInTheDocument();
-  expect(span.querySelector("path")).toHaveAttribute("stroke-dasharray", "4 3");
-  expect(tap.querySelector("circle")).toBeInTheDocument();
-  expect(tap.querySelector("path")).not.toHaveAttribute("stroke-dasharray");
-  const geometry = () => ({
-    camera: map.querySelector("svg > g")?.getAttribute("transform"),
-    wires: [...map.querySelectorAll(".diagram-edges path:not([data-kind='host'])")].map((wire) => wire.getAttribute("d")),
-    interfaceLabels: map.querySelector(".diagram-interface-labels")?.innerHTML,
-    subnetLabel: dmzLabel.getAttribute("transform"),
-    markers: markers.map((marker) => marker.innerHTML),
-  });
-
-  await user.click(screen.getByRole("button", { name: "Collapse dmz hosts" }));
-  expect(screen.queryByRole("button", { name: /^PORTAL-\d Linux$/ })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Fit to view" }));
-  const collapsed = geometry();
-  const hostLinks = () => [...map.querySelectorAll(".diagram-edges path[data-kind='host']")].map((wire) => wire.getAttribute("d"));
-  const collapsedLinks = hostLinks();
-  await user.click(screen.getByRole("button", { name: "Expand dmz hosts" }));
-  expect(screen.getAllByRole("button", { name: /^PORTAL-\d Linux$/ })).toHaveLength(hostCount);
-  expect(geometry()).toEqual(collapsed);
-  if (hostCount === 1) expect(hostLinks()).toEqual(collapsedLinks);
-  await user.click(screen.getByRole("button", { name: "Collapse dmz hosts" }));
-  expect(screen.queryByRole("button", { name: /^PORTAL-\d Linux$/ })).toBeNull();
-  expect(geometry()).toEqual(collapsed);
-});
-
-test("shared policy scopes leave independent subnet rails", () => {
-  const scene = layoutNetworkDiagram({
-    ...graph,
-    segments: [...graph.segments, { id: "segment:lab", name: "lab", cidr: "2001:db8::/64", description: "", exposure: "internal" }],
-    devices: [...graph.devices, {
-      ...graph.devices[1], id: "device:fw2", name: "second-edge", hostname: "FW-02",
-      associations: [{ segment_id: "segment:office", monitored: false, interface_name: "lan" }],
-    }],
-  }, { sensors: true, firewalls: true, hosts: false }, new Map(), new Set());
-  expect(scene.branches.map(({ node }) => node.id)).toEqual(["segment:office", "segment:lab"]);
-  expect(scene.labels).toEqual([]);
-  const interfaceWires = scene.wires.filter(({ kind }) => kind === "interface");
-  expect(interfaceWires).toHaveLength(0);
-});
-
-test("named firewall scopes share colors, distinguish overlaps, and extend the palette with outlines", async () => {
-  const names = ["inside", "outside", "dmz", "production", "research", "guest", "plant", "wireless", "voice", "storage", "partners", "backup"];
-  const segments = [
-    ...names.map((name, index) => ({ ...graph.segments[0], id: `segment:${name}`, name, cidr: `10.2.${index}.0/24` })),
-    graph.segments[0],
-  ];
-  const firewall = {
-    ...graph.devices[1],
-    associations: [
-      ...names.map((name) => ({ segment_id: `segment:${name}`, monitored: true, interface_name: name })),
-      { segment_id: "segment:office", monitored: true, interface_name: "inside" },
-    ],
+test("firewall policy scopes are an optional overlay that never moves links", async () => {
+  const scoped: TopologyGraph = {
+    segments: [segment("lan", "10.1.0.0/24"), segment("servers", "10.2.0.0/24"), segment("dmz", "10.3.0.0/24")],
+    hosts: [host("A", "10.1.0.2", ["lan"]), host("B", "10.2.0.2", ["servers"]), host("C", "10.3.0.2", ["dmz"])],
+    devices: [firewall("FW", { lan: "inside", servers: "inside", dmz: "dmz" })], findings: [],
   };
-  const second = {
-    ...firewall, id: "device:fw2", name: "edge-2", hostname: "FW-02",
-    associations: [{ segment_id: "segment:office", monitored: true, interface_name: "inside" }],
-  };
-  const topology = { ...graph, segments, hosts: [], devices: [firewall, second] };
-  const { container, rerender } = render(<NetworkDiagram graph={topology} />);
-  const highlights = (root: ParentNode) => [...root.querySelectorAll<SVGRectElement>(".diagram-scope-highlight")];
-  const style = (mark: SVGElement, swatch = false) => [
-    (swatch ? mark.parentElement as SVGElement | null : mark)?.style.color,
-    mark.getAttribute("stroke-dasharray"),
-  ].join(" / ");
-  const byScope = () => new Map(highlights(container).map((mark) => [mark.querySelector("title")!.textContent, style(mark)]));
-  const initial = byScope();
-  expect(new Set(initial.values()).size).toBe(names.length + 1);
-  expect(new Set(highlights(container).map((mark) => mark.style.color)).size).toBe(8);
-  const shared = highlights(screen.getByRole("button", { name: /^Segment office,/ }));
-  expect(shared.map((mark) => style(mark))).toEqual([initial.get("FW-01 · inside"), initial.get("FW-02 · inside")]);
-  expect(new Set(shared.map((mark) => mark.getAttribute("x"))).size).toBe(2);
-
-  await userEvent.setup().click(screen.getByText("Firewall scopes (13)"));
-  const key = screen.getByRole("list", { name: "Firewall policy scopes" });
-  for (const row of within(key).getAllByRole("listitem")) {
-    expect(style(row.querySelector(".diagram-scope-swatch")!, true)).toBe(initial.get(row.querySelector("strong")!.textContent));
-  }
-  rerender(<NetworkDiagram graph={{ ...topology, devices: [second, { ...firewall, associations: [...firewall.associations].reverse() }] }} />);
-  expect(byScope()).toEqual(initial);
-});
-
-test("declared device membership forms a backbone and keeps the inside network off the core", async () => {
-  const transit = { ...graph.segments[0], id: "segment:transit", name: "edge-transit", cidr: "10.2.0.0/30" };
-  const dmz = { ...graph.segments[0], id: "segment:dmz", name: "dmz", cidr: "10.3.0.0/24" };
-  const edge = { ...graph.hosts[0], id: "host:edge", hostname: "FW-01", ip: "10.2.0.1",
-    segment_ids: [transit.id], os: "Cisco ASA", os_family: "unknown", roles: ["firewall"] };
-  const core = { ...edge, id: "host:core", hostname: "CORE-01", ip: "10.2.0.2",
-    os: "Cisco IOS-XE", roles: ["core_router"] };
-  const topology = { ...graph, segments: [...graph.segments, transit, dmz], hosts: [graph.hosts[0], edge, core],
-    devices: [graph.devices[0], { ...graph.devices[1], associations: [...graph.devices[1].associations,
-      { segment_id: dmz.id, interface_name: "dmz", monitored: false }] }] };
-  const groups = indexDiagramHosts(topology.hosts);
-  const scene = layoutNetworkDiagram(topology, { sensors: true, firewalls: true, hosts: true }, groups, new Set());
-  const firewall = scene.nodesById.get("device:fw")!;
-  const router = scene.nodesById.get(core.id)!;
-  expect(router.x).toBe(firewall.x);
-  expect(router.y).toBeGreaterThan(firewall.y + firewall.height);
-  expect(scene.nodesById.has(dmz.id)).toBe(true);
-  expect(scene.nodesById.has(edge.id)).toBe(false);
-  expect(scene.branches.find(({ node }) => node.id === transit.id)?.vertical).toBe(true);
-  const membership = scene.wires.filter(({ kind }) => kind === "membership");
-  expect(membership.map(({ entities }) => entities)).toEqual([["device:fw", transit.id], [core.id, transit.id]]);
-  expect(scene.wires.some(({ kind, entities }) => kind === "interface" && entities.includes("device:fw") && entities.includes("segment:office"))).toBe(false);
-  expect(scene.wires.some(({ entities }) => entities.includes(core.id) && entities.includes("segment:office"))).toBe(false);
-
+  const { container } = render(<NetworkDiagram graph={scoped} />);
   const user = userEvent.setup();
-  render(<NetworkDiagram graph={topology} />);
-  await user.click(screen.getByRole("button", { name: "Firewall FW-01" }));
-  expect(screen.getByRole("complementary")).toHaveTextContent("Cisco ASA");
-  await user.click(screen.getByRole("button", { name: "CORE-01 Router" }));
-  expect(screen.getByRole("complementary")).toHaveTextContent("core_router");
+  const geometry = () => [...container.querySelectorAll(".diagram-edges path")].map((path) => path.getAttribute("d"));
+  const wires = geometry();
+  expect(container.querySelectorAll(".diagram-scope-highlight")).toHaveLength(0);
+  await toggleLayer(user, "Firewall policy scopes");
+  expect(geometry()).toEqual(wires);
+  expect(container.querySelectorAll(".diagram-scope-highlight")).toHaveLength(3);
+  expect(within(screen.getByLabelText("Diagram key")).getByText("FW · inside")).toBeVisible();
 });
 
 test("empty environments keep the diagram section intelligible", () => {
@@ -463,109 +446,89 @@ test("pack requests discard superseded results and allow retry after inspection 
   expect(await screen.findByText("No network segments are declared.")).toBeVisible();
 });
 
-test("a routed subnet opens its link and subnet details together and captures the selection for chat", async () => {
-  const transit = { ...graph.segments[0], id: "segment:transit", name: "transit", cidr: "10.2.0.0/30" };
+test("routed transits are links between devices, and leaf devices sit beside their parent", async () => {
   const routed: TopologyGraph = {
-    ...graph,
-    segments: [...graph.segments, transit],
+    segments: [segment("office", "10.0.0.0/24"), segment("transit", "10.2.0.0/30"), segment("vpn-lan", "10.3.0.0/30")],
+    hosts: [host("WS-1", "10.0.0.5", ["office"]), host("CORE-01", "10.2.0.2", ["transit"], { os: "Cisco IOS XE" })],
+    devices: [firewall("FW-01", {}, { name: "edge" }), sensor("UPLINK", [], { placement: "tap" })],
+    findings: [],
     routing: {
-      devices: { edge: { kind: "firewall", firewall: "edge" }, core: { kind: "router", system: "CORE-01" } },
+      devices: { edge: { kind: "firewall", firewall: "edge" }, core: { kind: "router", system: "CORE-01" }, vpn: { kind: "router" } },
       links: {
         "edge-core": { segment: "transit", interfaces: { edge: { name: "inside", ip: "10.2.0.1" }, core: { name: "edge", ip: "10.2.0.2" } } },
-        office: { segment: "office", interfaces: { core: { name: "office", ip: "10.0.0.254" } } },
+        "core-vpn": { segment: "vpn-lan", interfaces: { core: { name: "vpn", ip: "10.3.0.1" }, vpn: { name: "lan", ip: "10.3.0.2" } } },
+        office: { segment: "office", interfaces: { core: { name: "office", ip: "10.0.0.1" } } },
       },
       gateways: { office: "core" },
     },
-    link_taps: { "device:tap": { link: "edge-core", scope: "internet" } },
-    devices: [...graph.devices, { ...graph.devices[0], id: "device:tap", name: "uplink", hostname: "UPLINK", placement: "tap", associations: [] }],
+    link_taps: { "device:UPLINK": { link: "edge-core", scope: "internet" } },
   };
-  const scene = layoutNetworkDiagram(routed, { sensors: true, firewalls: true, hosts: true }, new Map(), new Set());
-  expect(scene.wires.filter(({ kind, entities }) => kind === "interface" && entities.includes("link:edge-core"))).toHaveLength(2);
-  const officeWires = scene.wires.filter(({ kind, entities }) => kind === "interface" && entities.includes("link:office"));
-  expect(officeWires).toHaveLength(1);
-  expect(officeWires[0].entities).toContain("router:core");
+  const scene = layoutNetworkDiagram(routed, LAYERS, { viewport: WIDE });
+  expect(zoneIds(scene)).toEqual(["segment:office"]);
+  expect([...scene.model.transits.keys()]).toEqual(["link:edge-core", "link:core-vpn"]);
+  const glyph = (id: string) => scene.equipment.find(({ equipment }) => equipment.id === id)!;
+  expect(glyph("device:FW-01").y).toBeLessThan(glyph("router:core").y);
+  expect(glyph("router:vpn").y).toBe(glyph("router:core").y);
+  expect(glyph("router:vpn").labelSide).toBe("above");
+  expect(scene.labels.some(({ text }) => text === ".1")).toBe(true);
+  expect(scene.taps.map(({ chip }) => chip.device.id)).toEqual(["device:UPLINK"]);
+  expect(scene.model.equipment.get("router:core")!.host?.hostname).toBe("CORE-01");
+
   const onAsk = vi.fn(async () => undefined);
-  const { container } = render(<NetworkDiagram graph={routed} revision="routed" onAsk={onAsk} />);
-  expect(screen.getByRole("button", { name: "CORE-01 Router" })).toBeVisible();
-  const scopes = screen.getByRole("button", { name: "Firewall scopes", exact: true });
-  expect(scopes).toHaveAttribute("aria-pressed", "false");
+  render(<NetworkDiagram graph={routed} revision="routed" onAsk={onAsk} />);
   const user = userEvent.setup();
-  const geometry = () => [...container.querySelectorAll(".diagram-edges path")].map((path) => path.getAttribute("d"));
-  const wires = geometry();
-  await user.click(scopes);
-  expect(geometry()).toEqual(wires);
-  expect(container.querySelectorAll(".diagram-scope-highlight")).toHaveLength(1);
-  expect(screen.queryByRole("button", { name: "Network link edge-core" })).toBeNull();
-  await user.click(screen.getByRole("button", { name: /^Segment transit/ }));
-  const linkDetails = screen.getByRole("complementary");
-  expect(linkDetails).toHaveTextContent("10.2.0.0/30");
-  expect(linkDetails).toHaveTextContent("edge-core");
-  expect(linkDetails).toHaveTextContent("10.2.0.1");
-  expect(linkDetails).toHaveTextContent("10.2.0.2");
-  expect(linkDetails).toHaveTextContent("Internet traffic");
-  expect(screen.getByRole("button", { name: "UPLINK TAP on transit" })).toBeVisible();
-  await user.click(within(linkDetails).getByRole("button", { name: "UPLINK", exact: true }));
-  await user.click(within(linkDetails).getByRole("button", { name: "edge-core", exact: true }));
-  expect(within(linkDetails).getByRole("heading", { name: "transit", exact: true })).toBeVisible();
-  await user.click(within(linkDetails).getByRole("button", { name: "Ask about this", exact: true }));
-  expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({
-    selected_id: "segment:transit",
-    selection_label: "transit",
-    topology: routed,
-    firewall_scopes_visible: true,
-  }));
+  expect(screen.queryByRole("button", { name: /^Segment transit/ })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "CORE-01 Router" }));
+  const details = screen.getByRole("complementary");
+  expect(details).toHaveTextContent("10.2.0.2");
+  await user.click(within(details).getByRole("button", { name: "edge-core" }));
+  expect(within(details).getByRole("heading", { name: "edge-core" })).toBeVisible();
+  expect(details).toHaveTextContent("10.2.0.0/30");
+  expect(details).toHaveTextContent("Internet traffic");
+  await user.click(within(details).getByRole("button", { name: "Ask about this", exact: true }));
+  expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({ selected_id: "link:edge-core", selection_label: "edge-core", topology: routed }));
 });
 
-test("WAN and VPN links show their types in the map, legend, details, and diagram questions", async () => {
-  const makeSegment = (name: string, cidr: string) => ({ ...graph.segments[0], id: `segment:${name}`, name, cidr });
+test("WAN and VPN links separate sites, and many sites start collapsed", async () => {
+  const sites = ["hq", "a", "b", "c", "d", "e"];
+  const segments = sites.map((name, index) => segment(`${name}-lan`, `10.${index}.1.0/24`));
+  const wans = sites.slice(1).map((name, index) => segment(`${name}-wan`, `10.100.${index}.0/30`));
   const routed: TopologyGraph = {
-    ...graph,
-    devices: [],
-    hosts: [],
-    segments: [graph.segments[0], makeSegment("leased", "10.1.0.0/30"), makeSegment("tunnel", "10.2.0.0/30")],
+    segments: [...segments, ...wans], devices: [], findings: [],
+    hosts: sites.map((name, index) => host(`${name.toUpperCase()}-WS`, `10.${index}.1.10`, [`${name}-lan`])),
     routing: {
-      devices: { hq: { kind: "router" }, hub: { kind: "router" }, branch: { kind: "router" } },
+      devices: Object.fromEntries(sites.map((name) => [name, { kind: "router" as const }])),
       links: {
-        office: { segment: "office", interfaces: { hq: { name: "inside", ip: "10.0.0.1" } } },
-        leased: {
-          kind: "wan", segment: "leased",
-          interfaces: { hq: { name: "wan", ip: "10.1.0.1" }, hub: { name: "wan", ip: "10.1.0.2" } },
-        },
-        tunnel: {
-          kind: "vpn", segment: "tunnel",
-          interfaces: { hub: { name: "vpn", ip: "10.2.0.1" }, branch: { name: "vpn", ip: "10.2.0.2" } },
-        },
+        ...Object.fromEntries(sites.map((name, index) => [`${name}-lan`, { segment: `${name}-lan`, interfaces: { [name]: { name: "lan", ip: `10.${index}.1.1` } } }])),
+        ...Object.fromEntries(sites.slice(1).map((name, index) => [`${name}-wan`, {
+          kind: (index % 2 ? "vpn" : "wan") as "vpn" | "wan", segment: `${name}-wan`,
+          interfaces: { hq: { name: `to-${name}`, ip: `10.100.${index}.1` }, [name]: { name: "wan", ip: `10.100.${index}.2` } },
+        }])),
       },
     },
   };
-  const onAsk = vi.fn(async () => undefined);
-  const { container } = render(<NetworkDiagram graph={routed} revision="typed-links" onAsk={onAsk} />);
+  const scene = layoutNetworkDiagram(routed, LAYERS, { viewport: WIDE });
+  expect(scene.sites).toHaveLength(6);
+  expect(scene.sites.filter(({ collapsed }) => collapsed)).toHaveLength(5);
+  expect(scene.wires.filter(({ linkKind }) => linkKind === "wan")).toHaveLength(3);
+  expect(scene.wires.filter(({ linkKind }) => linkKind === "vpn")).toHaveLength(2);
+  const { container } = render(<NetworkDiagram graph={routed} />);
   const user = userEvent.setup();
+  expect(container.querySelectorAll(".diagram-site-card")).toHaveLength(5);
+  expect(screen.queryByRole("button", { name: "Expand site hq" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Expand site a" }));
+  expect(screen.getByRole("button", { name: "Segment a-lan, 10.1.1.0/24" })).toBeVisible();
+  expect(container.querySelectorAll(".diagram-site-card")).toHaveLength(4);
   const key = screen.getByLabelText("Diagram key");
-  const wires = (kind: string) => container.querySelectorAll(`.diagram-edges [data-kind="interface"][data-link-kind="${kind}"]`);
-  expect(wires("network")).toHaveLength(1);
-  expect(within(key).getByText("Network link").querySelector("path")).toHaveAttribute("data-link-kind", "network");
-  for (const [kind, name] of [["wan", "leased"], ["vpn", "tunnel"]]) {
-    const label = kind.toUpperCase();
-    expect(wires(kind)).toHaveLength(2);
-    expect(within(key).getByText(`${label} link`).querySelector("path")).toHaveAttribute("data-link-kind", kind);
-    const control = screen.getByRole("button", { name: new RegExp(`^Segment ${name},`) });
-    expect(control).toHaveTextContent(label);
-    await user.click(control);
-    expect(screen.getByRole("complementary")).toHaveTextContent(`${label} link`);
-    expect([...wires(kind)].every((wire) => wire.getAttribute("data-highlighted") === "true")).toBe(true);
-  }
-  await user.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Ask about this" }));
-  expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({ topology: routed, selected_id: "segment:tunnel" }));
+  expect(within(key).getByText("WAN link")).toBeVisible();
+  expect(within(key).getByText("VPN link")).toBeVisible();
 });
 
-test("an authored Internet boundary is a cloud above its firewall with a selectable link and TAP", async () => {
-  const secondary = { ...graph.devices[1], id: "device:secondary", name: "secondary", hostname: "FW-02" };
-  const tap = { ...graph.devices[0], id: "device:internet-tap", hostname: "UPLINK", placement: "tap" as const, associations: [] };
+test("an authored Internet boundary sits above its device, with IPv4 and IPv6 boundaries named apart", async () => {
+  const tap = sensor("UPLINK", [], { placement: "tap" });
   const routed: TopologyGraph = {
-    ...graph,
-    hosts: [],
-    devices: [secondary, graph.devices[1], tap],
+    segments: [segment("office", "10.0.0.0/24")], hosts: [host("WS", "10.0.0.5", ["office"])], findings: [],
+    devices: [firewall("FW-01", {}, { name: "edge" }), firewall("FW-02", {}, { name: "secondary" }), tap],
     routing: {
       devices: { edge: { kind: "firewall", firewall: "edge" }, branch: { kind: "firewall", firewall: "secondary" } },
       links: {
@@ -575,147 +538,119 @@ test("an authored Internet boundary is a cloud above its firewall with a selecta
     },
     link_taps: { [tap.id]: { link: "upstream", scope: "all" } },
   };
-  const layers = { sensors: true, firewalls: true, hosts: true };
-  const scene = layoutNetworkDiagram(routed, layers, new Map(), new Set());
-  const cloud = scene.branches.find(({ node }) => node.id === "internet:upstream")!;
-  const edge = scene.nodesById.get("device:fw")!;
-  expect(cloud.node.x + cloud.node.width / 2).toBe(edge.x + edge.width / 2);
-  expect(cloud.node.y + cloud.node.height).toBeLessThan(edge.y);
-  expect(edge.y).toBeLessThan(scene.nodesById.get(secondary.id)!.y);
-  const uplink = scene.wires.filter(({ entities }) => entities.includes("link:upstream"));
-  expect(uplink.map(({ kind, entities }) => [kind, entities])).toEqual([
-    ["interface", ["device:fw", "internet:upstream", "link:upstream"]],
-  ]);
+  const scene = layoutNetworkDiagram(routed, LAYERS, { viewport: WIDE });
+  const cloud = scene.internets.find(({ internet }) => internet.id === "internet:upstream")!;
+  const edge = scene.equipment.find(({ equipment }) => equipment.id === "device:FW-01")!;
+  expect(cloud.x).toBe(edge.x);
+  expect(cloud.y).toBeLessThan(edge.y);
+  expect(scene.zones.find(({ zone }) => zone.id === "segment:office")!.zone.attachments.map(({ equipmentId }) => equipmentId).sort())
+    .toEqual(["device:FW-01", "device:FW-02"]);
+  expect(scene.wires.filter(({ entities }) => entities.includes("device:FW-02") && entities.includes("segment:office"))).toHaveLength(1);
 
   const { rerender } = render(<NetworkDiagram graph={routed} />);
   expect(screen.getByRole("button", { name: "Internet", exact: true }).querySelector(".lucide-cloud")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "UPLINK TAP on Internet" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Sensor UPLINK, Zeek, TAP" })).toBeVisible();
   await userEvent.setup().click(screen.getByRole("button", { name: "Internet", exact: true }));
-  expect(screen.getByRole("complementary")).toHaveTextContent("upstream");
-  expect(screen.getByRole("complementary")).toHaveTextContent("All traffic");
   expect(screen.getByRole("complementary")).toHaveTextContent("192.0.2.1");
 
-  const dual = {
-    ...routed, routing: { ...routed.routing!, links: { ...routed.routing!.links,
-      upstream6: { internet: true, interfaces: { branch: { name: "outside6", ip: "2001:db8::1" } } },
-    } },
-  };
+  const dual = { ...routed, routing: { ...routed.routing!, links: { ...routed.routing!.links,
+    upstream6: { internet: true, interfaces: { branch: { name: "outside6", ip: "2001:db8::1" } } } } } };
   rerender(<NetworkDiagram graph={dual} />);
   expect(screen.getByRole("button", { name: "Internet (IPv4)", exact: true })).toBeVisible();
   expect(screen.getByRole("button", { name: "Internet (IPv6)", exact: true })).toBeVisible();
-  const secondEdge = layoutNetworkDiagram(dual, layers, new Map(), new Set());
-  const ipv6 = secondEdge.nodesById.get("internet:upstream6")!;
-  expect(ipv6.y + ipv6.height).toBeLessThan(secondEdge.nodesById.get(secondary.id)!.y);
-  expect(secondEdge.wires.find(({ entities }) => entities.includes("link:upstream6"))?.entities).toContain(secondary.id);
+  const second = layoutNetworkDiagram(dual, LAYERS, { viewport: WIDE });
+  expect(second.wires.some(({ entities }) => entities.includes("internet:upstream6") && entities.includes("device:FW-02"))).toBe(true);
 });
 
-test("dense routed sites keep their links and host choices when the diagram changes width", async () => {
-  const hq = Array.from({ length: 6 }, (_, index) => `hq-lan-${index + 1}`);
-  const plant = Array.from({ length: 5 }, (_, index) => `plant-lan-${index + 1}`);
-  const backbone = [
-    ["edge-uplink", "edge", "hq"],
-    ["hq-uplink", "hq", "vpn"],
-    ["site-transit", "vpn", "plant"],
-    ["plant-uplink", "plant", "remote"],
-  ];
-  const declared = [...backbone, ...hq.map((name) => [name, "hq"]), ...plant.map((name) => [name, "plant"])];
-  const routed: TopologyGraph = {
-    ...graph,
-    devices: [graph.devices[1]],
-    hosts: graph.hosts.slice(0, 10).map((host) => ({ ...host, segment_ids: [`segment:${hq[0]}`] })),
-    segments: declared.map(([name, , peer], index) => ({
-      ...graph.segments[0], id: `segment:${name}`, name, cidr: `10.0.${index}.0/${peer ? 30 : 24}`,
-    })),
-    routing: {
-      devices: {
-        edge: { kind: "firewall", firewall: "edge" },
-        hq: { kind: "router" },
-        vpn: { kind: "router" },
-        plant: { kind: "router" },
-        remote: { kind: "router" },
-      },
-      links: Object.fromEntries(declared.map(([name, ...devices], index) => [name, {
-        segment: name,
-        interfaces: Object.fromEntries(devices.map((device, port) =>
-          [device, { name, ip: `10.0.${index}.${port + 1}` }])),
-      }])),
-      gateways: Object.fromEntries([...hq.map((name) => [name, "hq"]), ...plant.map((name) => [name, "plant"])]),
-    },
-  };
-  const layers = { firewalls: true, sensors: true, hosts: true };
-  const hosts = indexDiagramHosts(routed.hosts);
-  const collapsed = layoutNetworkDiagram(routed, layers, hosts, new Set());
-  const expanded = layoutNetworkDiagram(routed, layers, hosts, new Set([`segment:${hq[0]}`]));
-  const compact = layoutNetworkDiagram(routed, layers, hosts, new Set(), {}, 680);
-  expect(compact.width).toBeLessThan(collapsed.width);
-  expect(compact.height).toBeGreaterThan(collapsed.height);
-  const accessBranch = (scene: typeof collapsed, name: string) =>
-    scene.branches.find(({ node }) => node.id === `segment:${name}`)!;
-  const firstRail = ({ railY, railX }: ReturnType<typeof accessBranch>) => [railX, railY];
+test("the model never invents an Internet boundary without a firewall to attach it to", () => {
+  const cloudHost: TopologyGraph = { segments: [segment("cloud", "45.83.221.0/24")], devices: [], findings: [], public_cidrs: ["45.83.220.0/28"],
+    hosts: [host("VM", "45.83.221.5", ["cloud"], { public_address: "45.83.221.5", public_address_source: "public_ip" })] };
+  expect(buildDiagramModel(cloudHost, LAYERS).internets.size).toBe(0);
+});
 
-  expect(firstRail(accessBranch(expanded, hq[0]))).toEqual(firstRail(accessBranch(collapsed, hq[0])));
-  expect(expanded.nodesById.get("router:vpn")!.y).toBeGreaterThan(collapsed.nodesById.get("router:vpn")!.y);
-  for (const scene of [collapsed, expanded, compact]) {
-    const attachments = scene.wires.filter(({ kind }) => kind === "interface");
-    expect(attachments).toHaveLength(2 * backbone.length + hq.length + plant.length);
-    for (const [name, from, to] of backbone) {
-      expect(accessBranch(scene, name).vertical).toBe(true);
-      const connections = attachments.filter(({ entities }) => entities.includes(`link:${name}`));
-      expect(connections.flatMap(({ entities }) => entities).filter((id) => id.startsWith("router:") || id === "device:fw"))
-        .toEqual([from === "edge" ? "device:fw" : `router:${from}`, `router:${to}`]);
-    }
-    for (const [subnets, owner, next] of [[hq, "hq", "vpn"], [plant, "plant", "remote"]] as const) {
-      const device = scene.nodesById.get(`router:${owner}`)!;
-      const nextDevice = scene.nodesById.get(`router:${next}`)!;
-      const rails = subnets.map((name) => {
-        const branch = accessBranch(scene, name);
-        expect(branch.railY).toBeGreaterThan(device.y);
-        expect(branch.railY).toBeLessThan(nextDevice.y);
-        const paths = attachments.filter(({ entities }) => entities.includes(`link:${name}`));
-        expect(paths.map(({ entities }) => entities)).toEqual([[
-          device.id, `segment:${name}`, `link:${name}`,
-        ]]);
-        return branch.railX;
-      });
-      expect(new Set(rails).size).toBe(scene === compact ? 2 : 4);
+/** Split orthogonal SVG paths into segments and report which wires touch one another. */
+function connectedWires(scene: DiagramScene, keys: string[]): Set<string>[] {
+  type Segment = { key: string; x1: number; y1: number; x2: number; y2: number };
+  const segments: Segment[] = [];
+  for (const wire of scene.wires.filter(({ key }) => keys.includes(key))) {
+    const tokens = wire.path.trim().split(/\s+/);
+    let x = 0; let y = 0;
+    for (let index = 0; index < tokens.length; index += 2) {
+      const command = tokens[index];
+      if (command === "M") { x = Number(tokens[index + 1]); y = Number(tokens[index + 2]); index += 1; continue; }
+      const value = Number(tokens[index + 1]);
+      const next = command === "H" ? { x: value, y } : { x, y: value };
+      segments.push({ key: wire.key, x1: x, y1: y, x2: next.x, y2: next.y });
+      ({ x, y } = next);
     }
   }
+  const onSegment = (px: number, py: number, s: Segment) =>
+    px >= Math.min(s.x1, s.x2) - 0.5 && px <= Math.max(s.x1, s.x2) + 0.5 && py >= Math.min(s.y1, s.y2) - 0.5 && py <= Math.max(s.y1, s.y2) + 0.5;
+  const touches = (a: Segment, b: Segment) => [[a.x1, a.y1], [a.x2, a.y2]].some(([px, py]) => onSegment(px, py, b))
+    || [[b.x1, b.y1], [b.x2, b.y2]].some(([px, py]) => onSegment(px, py, a));
+  const groups: Set<string>[] = [];
+  for (const key of new Set(segments.map(({ key }) => key))) groups.push(new Set([key]));
+  let merged = true;
+  while (merged) {
+    merged = false;
+    outer: for (let i = 0; i < groups.length; i++) {
+      for (let j = i + 1; j < groups.length; j++) {
+        const a = segments.filter(({ key }) => groups[i].has(key));
+        const b = segments.filter(({ key }) => groups[j].has(key));
+        if (a.some((first) => b.some((second) => touches(first, second)))) {
+          for (const key of groups[j]) groups[i].add(key);
+          groups.splice(j, 1);
+          merged = true;
+          break outer;
+        }
+      }
+    }
+  }
+  return groups;
+}
 
-  let measure!: ResizeObserverCallback;
-  vi.stubGlobal("ResizeObserver", class {
-    constructor(callback: ResizeObserverCallback) { measure = callback; }
-    observe() {}
-    disconnect() {}
-  });
-  try {
-    const { container } = render(<NetworkDiagram graph={routed} />);
-    let bodyWidth = 1200;
-    Object.defineProperty(container.querySelector(".diagram-body"), "clientWidth", { get: () => bodyWidth });
-    const resize = (width: number, height: number, available = width) => {
-      bodyWidth = available;
-      const entry = { contentRect: new DOMRect(0, 0, width, height) } as ResizeObserverEntry;
-      act(() => measure([entry], {} as ResizeObserver));
-    };
-    const horizontalPositions = () => screen.getAllByRole("button", { name: /^Segment hq-lan-/ })
-      .map((node) => node.getAttribute("transform")?.split(" ")[0]);
-    const cameraScale = () => screen.getByRole("group", { name: /Network map/ }).querySelector("svg > g")
-      ?.getAttribute("transform")?.match(/scale\(([^)]+)\)/)?.[1];
-    resize(1200, 650);
-    const widePositions = horizontalPositions();
-    expect(new Set(widePositions).size).toBe(4);
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Collapse hq-lan-1 hosts" }));
-    await user.click(screen.getByRole("button", { name: "Zoom in" }));
-    const zoom = cameraScale();
-    resize(720, 650, 1200); // The details inspector narrows the drawing, while space for layout stays stable.
-    expect(horizontalPositions()).toEqual(widePositions);
-    resize(690, 650);
-    expect(new Set(horizontalPositions()).size).toBe(2);
-    expect(cameraScale()).toBe(zoom);
-    resize(1200, 650);
-    expect(horizontalPositions()).toEqual(widePositions);
-    expect(screen.getByRole("button", { name: "Expand hq-lan-1 hosts" })).toBeVisible();
-  } finally {
-    vi.unstubAllGlobals();
+function accessWires(scene: DiagramScene, equipmentId: string): string[] {
+  return [
+    ...scene.wires.filter(({ key }) => [":trunk", ":bus:", ":gutter:"].some((part) => key.startsWith(equipmentId + part))).map(({ key }) => key),
+    ...scene.model.attachments.filter((attachment) => attachment.equipmentId === equipmentId && scene.model.zones.has(attachment.targetId)).map(({ key }) => key),
+  ];
+}
+
+test.each([
+  ["routed", true],
+  ["segment-based", false],
+])("every row of a %s subnet grid stays connected to its device", (_kind, routed) => {
+  const names = Array.from({ length: 7 }, (_, index) => `lan-${index + 1}`);
+  const many: TopologyGraph = {
+    segments: names.map((name, index) => segment(name, `10.${index}.0.0/24`)),
+    hosts: names.map((name, index) => host(`HOST-${index + 1}`, `10.${index}.0.10`, [name])),
+    devices: routed ? [] : [firewall("FW", Object.fromEntries(names.map((name) => [name, "inside"])))],
+    findings: [],
+    ...(routed ? { routing: {
+      devices: { core: { kind: "router" as const } },
+      links: Object.fromEntries(names.map((name, index) => [name, { segment: name, interfaces: { core: { name, ip: `10.${index}.0.1` } } }])),
+    } } : {}),
+  };
+  // A tall, narrow canvas forces the grid onto several rows.
+  const scene = layoutNetworkDiagram(many, LAYERS, { viewport: { width: 640, height: 1600 }, zoneDetail: Object.fromEntries(names.map((name) => [`segment:${name}`, "overview" as const])) });
+  expect(new Set(scene.zones.map(({ y }) => y)).size).toBeGreaterThan(1);
+  const device = routed ? "router:core" : "device:FW";
+  const keys = accessWires(scene, device);
+  expect(keys.filter((key) => key.includes(":bus:")).length).toBeGreaterThan(1);
+  expect(connectedWires(scene, keys)).toHaveLength(1);
+  const glyph = scene.equipment.find(({ equipment }) => equipment.id === device)!;
+  expect(scene.wires.find(({ key }) => key === device + ":trunk")!.path).toMatch(new RegExp(`^M ${glyph.x} ${glyph.y + 24} `));
+  // The gutter keeps clear of the cards it feeds.
+  const gutterX = Math.min(...scene.wires.filter(({ key }) => key.startsWith(device + ":gutter:")).map(({ path }) => Number(path.split(" ")[1])));
+  expect(Math.min(...scene.zones.map(({ x }) => x)) - gutterX).toBeGreaterThanOrEqual(GUTTER_GAP);
+  expect(gutterX).toBeGreaterThan(0);
+  // Selecting any subnet lights one unbroken path from its drop back to the device trunk.
+  for (const name of names) {
+    const id = `segment:${name}`;
+    const lit = scene.wires.filter(({ key, entities }) => keys.includes(key) && entities.includes(id)).map(({ key }) => key);
+    const drop = scene.model.attachments.find(({ equipmentId, targetId }) => equipmentId === device && targetId === id)!.key;
+    expect(lit).toContain(device + ":trunk");
+    expect(lit).toContain(drop);
+    expect(connectedWires(scene, lit)).toHaveLength(1);
   }
 });
