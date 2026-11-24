@@ -28,8 +28,8 @@ from evidenceforge.studio.codex import (
     CodexUnavailableError,
 )
 from evidenceforge.studio.state_records_v3 import ChatResult, ChatTurn
-from evidenceforge.studio.state_records_v7 import ChatInput, ChatViewState
-from evidenceforge.studio.topology import NetworkChatContext
+from evidenceforge.studio.state_records_v8 import ChatInput, ChatViewState
+from evidenceforge.studio.topology import RoutedNetworkChatContext
 
 if TYPE_CHECKING:
     from evidenceforge.studio.service import StudioService
@@ -48,7 +48,7 @@ class ChatMessageRequest(BaseModel):
     mode: Literal["start", "queue", "steer"] = "start"
     skill_name: str | None = None
     expected_turn_id: str | None = None
-    network_context: NetworkChatContext | None = None
+    network_context: RoutedNetworkChatContext | None = None
 
 
 class ChatQueuedUpdate(BaseModel):
@@ -82,7 +82,9 @@ class ChatResultContent(BaseModel):
     item_id: str | None = None
 
 
-def chat_user_input(text: str, network_context: NetworkChatContext | None) -> list[dict[str, str]]:
+def chat_user_input(
+    text: str, network_context: RoutedNetworkChatContext | None
+) -> list[dict[str, str]]:
     """Send the captured topology as source data and its viewport as a native image."""
     if network_context is None:
         return [{"type": "text", "text": text}]

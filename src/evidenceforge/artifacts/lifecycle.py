@@ -11,6 +11,7 @@ import shutil
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from uuid import uuid4
@@ -1192,6 +1193,7 @@ def validation_findings(
     from evidenceforge.composition.packs import PackRepository, parse_pack_cli_reference
     from evidenceforge.config.provider import effective_config_scope
     from evidenceforge.validation import ScenarioValidator
+    from evidenceforge.validation.schema import legacy_firewall_routing_warning
 
     try:
         graph = load_scenario_source_graph(source)
@@ -1199,8 +1201,10 @@ def validation_findings(
         if contract.family == "pack":
             reference, kind = parse_pack_cli_reference(str(source))
             repository = PackRepository(project_root)
-            repository.validate_semantics(repository.resolve(reference, expected_type=kind))
-            return []
+            pack = repository.resolve(reference, expected_type=kind)
+            repository.validate_semantics(pack)
+            warning = legacy_firewall_routing_warning(pack.environment.get("network"))
+            return [asdict(warning)] if warning else []
         compiled = compile_scenario(source, project_root=project_root, context=context)
         with effective_config_scope(compiled.effective_config):
             return [

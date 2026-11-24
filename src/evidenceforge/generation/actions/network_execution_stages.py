@@ -105,6 +105,7 @@ class NetworkRequestFacts:
     stable_id: str
     local_only: bool
     http_application_layer_only: bool
+    route_unreachable: bool
     is_fw_deny: bool
     is_tcp_probe: bool
     dns_server_ips: set[str]

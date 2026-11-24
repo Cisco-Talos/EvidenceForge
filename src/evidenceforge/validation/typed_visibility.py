@@ -181,7 +181,7 @@ def analyze_typed_fact_visibility(
                                         )
                                         if getattr(spec, "action", None) == "deny"
                                         else visibility.get_observing_sensors(
-                                            source.ip, destination
+                                            source.ip, destination, getattr(spec, "dst_port", None)
                                         )
                                     )
                                     if candidate.identity.hostname not in {

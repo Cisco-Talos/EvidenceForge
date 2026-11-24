@@ -43,6 +43,9 @@
   --syntax-number: #f2b97a;
   --syntax-keyword: #c9a6ff;
   --syntax-comment: #92959c;
+  --diagram-scope-rose: #ef9aca;
+  --diagram-scope-olive: #a4c975;
+  --diagram-firewall: #e8735f;
   /* Type, radius and elevation */
   --text-xs: 11px;
   --text-sm: 12px;
@@ -105,6 +108,9 @@
   --syntax-number: #a34d0b;
   --syntax-keyword: #7a3fc4;
   --syntax-comment: #66696f;
+  --diagram-scope-rose: #a03071;
+  --diagram-scope-olive: #50721f;
+  --diagram-firewall: #b23b28;
 }
 
 * { box-sizing: border-box; }
@@ -1136,85 +1142,266 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .scenario-workspace.network-focused .workspace-heading { padding: 12px 24px 4px; }
 .scenario-workspace.network-focused .workspace-tablist { margin-top: 8px; padding-inline: 24px; }
 .workspace-network { height: max(var(--diagram-min-height), calc(100dvh - 160px)); display: flex; flex-direction: column; min-width: 0; padding: 0 24px 16px; }
-.network-diagram { display: flex; flex: 1; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.network-diagram { display: flex; flex: 1; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
 .network-diagram-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); max-height: none; padding: 16px; }
-.diagram-titlebar, .diagram-details-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.diagram-titlebar, .diagram-unavailable { flex-wrap: wrap; }
-.diagram-titlebar .muted { font-size: var(--text-sm); }
-.network-diagram h3 { margin: 0; font-size: var(--text-lg); }
 .network-diagram p, .diagram-toolbar p { margin: 0; }
-.diagram-toolbar, .diagram-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.diagram-toolbar { justify-content: space-between; }
+/* One row: view controls on the left shrink (search narrows, the name truncates) before anything wraps. */
+.network-diagram { container-type: inline-size; }
+.diagram-toolbar, .diagram-controls { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
+.diagram-toolbar { position: relative; justify-content: space-between; gap: 16px; }
+.diagram-toolbar > .diagram-controls:first-child { flex: 1 1 0; min-width: 0; }
+.diagram-toolbar > .diagram-controls:last-child { flex: none; }
+.diagram-controls > * { flex: none; }
+@container (max-width: 820px) {
+  .diagram-toolbar { flex-wrap: wrap; }
+  .diagram-toolbar > .diagram-controls:first-child { flex-basis: 100%; }
+}
 .diagram-controls .button-quiet { min-height: 32px; }
-.diagram-controls .button-quiet[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); }
-.diagram-body { display: flex; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); }
-.diagram-canvas { flex: 1; min-width: 0; position: relative; background: var(--bg); }
-.diagram-viewport { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.diagram-controls .button-quiet.icon-only { width: 32px; padding: 0; justify-content: center; }
+.diagram-controls > .diagram-context { flex: 0 100 auto; min-width: 0; overflow: hidden; font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
+.diagram-unavailable { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.diagram-layers { position: relative; }
+.diagram-layers > button, .diagram-ask { display: inline-flex; align-items: center; gap: 6px; }
+.diagram-layers-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 4; display: grid; gap: 2px; min-width: 250px; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.diagram-layer-row { display: flex; align-items: center; gap: 4px; border-radius: var(--radius-sm); }
+.diagram-layer-row:hover { background: var(--hover-tint); }
+.diagram-layers-panel label { display: flex; flex: 1; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; }
+.diagram-layer-help { display: grid; place-items: center; width: 24px; height: 24px; margin-right: 4px; color: var(--text-3); border-radius: var(--radius-sm); cursor: help; }
+.diagram-layer-help:hover, .diagram-layer-help:focus-visible { color: var(--text-1); }
+.diagram-preview-logs { color: var(--text-2); font-size: var(--text-sm); }
+/* Coverage lens: each tier has one color everywhere it appears */
+.network-diagram [data-tier="full"], .diagram-zone[data-coverage="full"] { --tier: var(--ok); }
+.network-diagram [data-tier="protocol"], .diagram-zone[data-coverage="protocol"] { --tier: var(--info); }
+.network-diagram [data-tier="alerts"], .diagram-zone[data-coverage="alerts"] { --tier: var(--syntax-keyword); }
+.network-diagram [data-tier="connection"], .diagram-zone[data-coverage="connection"] { --tier: var(--warn); }
+.network-diagram [data-tier="firewall"], .diagram-zone[data-coverage="firewall"] { --tier: var(--text-2); }
+.network-diagram [data-tier="none"], .diagram-zone[data-coverage="none"] { --tier: var(--err); }
+.diagram-zone[data-coverage] .diagram-zone-box { stroke: var(--tier); stroke-width: 2.4px; fill: color-mix(in srgb, var(--tier) 7%, transparent); }
+.diagram-zone[data-coverage="none"] .diagram-zone-box { stroke-dasharray: 6 4; }
+.diagram-zone[data-traced] .diagram-zone-box { stroke: var(--accent); stroke-width: 2.6px; }
+.diagram-device[data-traced] .diagram-device-box { stroke: var(--accent); stroke-width: 2.4px; }
+.diagram-within-blind { fill: var(--err); font-size: 10.5px; font-weight: 650; }
+.diagram-within-key { color: var(--err); font-size: var(--text-xs); font-weight: 650; }
+.diagram-tier-mark { display: inline-block; flex: none; width: 12px; height: 9px; border: 2px solid var(--tier); border-radius: 3px; }
+.diagram-tier-mark[data-tier="none"] { border-style: dashed; }
+.diagram-lens { display: inline-flex; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.diagram-lens button { min-height: 32px; padding: 0 12px; border: 0; border-radius: 0; background: transparent; color: var(--text-2); font-weight: 550; }
+.diagram-lens button + button { border-left: 1px solid var(--border-strong); }
+.diagram-lens button[aria-pressed="true"] { background: var(--surface-3); color: var(--text-1); }
+.diagram-lens button:disabled { opacity: .45; cursor: default; }
+.diagram-coverage { margin-top: 12px; }
+.diagram-coverage-direction { display: inline-flex; margin: 0 0 8px; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.diagram-coverage-direction button { padding: 3px 10px; border: 0; border-radius: 0; background: transparent; color: var(--text-2); font-size: var(--text-sm); }
+.diagram-coverage-direction button + button { border-left: 1px solid var(--border-strong); }
+.diagram-coverage-direction button[aria-pressed="true"] { background: var(--surface-3); color: var(--text-1); }
+.diagram-coverage-group h6 { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; color: var(--text-1); font-size: var(--text-sm); font-weight: 650; }
+.diagram-coverage-group ul { list-style: none; margin: 0; padding: 0 0 0 20px; }
+.diagram-coverage-group li { display: grid; gap: 1px; padding: 4px 6px; border-radius: var(--radius-sm); }
+.diagram-coverage-group li:hover { background: var(--hover-tint); }
+.diagram-coverage-group li button { justify-self: start; padding: 0; border: 0; background: transparent; color: var(--text-1); text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+.diagram-coverage-group li span, .diagram-coverage-group li small { color: var(--text-2); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.diagram-coverage-group li small { color: var(--warn); }
+.diagram-coverage-note { font-size: var(--text-xs); }
+.diagram-policy { margin: 0; padding-left: 22px; font-size: var(--text-sm); }
+.diagram-policy li { padding: 3px 0; overflow-wrap: anywhere; }
+.diagram-policy li[data-action="deny"] strong { color: var(--err); }
+.diagram-policy li[data-action="permit"] strong { color: var(--ok); }
+/* Changes since the last revision shown */
+.diagram-changes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 6px 12px; font-size: var(--text-sm); color: var(--text-2); border: 1px solid var(--border); border-left: 3px solid var(--info); border-radius: var(--radius-sm); background: var(--surface-1); }
+.diagram-changes strong { color: var(--text-1); }
+.diagram-changes details { position: relative; }
+.diagram-changes summary { cursor: pointer; }
+.diagram-changes details ul { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; min-width: 220px; margin: 0; padding: 8px 12px; list-style: none; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.diagram-changes details li small { color: var(--text-3); }
+.network-diagram [data-change="added"] { --change: var(--ok); }
+.network-diagram [data-change="changed"] { --change: var(--warn); }
+.diagram-zone[data-change] .diagram-zone-box, .diagram-host-card[data-change] .diagram-host-box,
+.diagram-device[data-change] .diagram-device-box, .diagram-chip[data-change] .diagram-chip-box { stroke: var(--change); stroke-width: 2.4px; }
+/* Export feedback floats under the toolbar, so it never pushes the controls onto another row. */
+.diagram-copy-status { position: absolute; top: calc(100% + 8px); right: 0; z-index: 4; padding: 4px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-1); font-size: var(--text-sm); white-space: nowrap; box-shadow: var(--shadow-pop); }
+.diagram-export { position: relative; display: inline-flex; }
+.diagram-export > .icon-only { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.diagram-export-more { min-height: 32px; width: 22px; padding: 0; justify-content: center; border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.diagram-export-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 5; display: grid; min-width: 220px; padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.diagram-export-menu button { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-1); text-align: left; }
+.diagram-export-menu button:hover, .diagram-export-menu button:focus-visible { background: var(--hover-tint); }
+/* Search */
+.diagram-controls > .diagram-search { position: relative; display: flex; flex: 0 1 260px; min-width: 200px; align-items: center; }
+.diagram-search input { width: 100%; height: 32px; padding: 0 30px 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-1); color: var(--text-1); }
+.diagram-search input:focus { border-color: var(--accent-line); outline: none; }
+.diagram-search kbd { position: absolute; right: 8px; padding: 0 5px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text-3); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }
+.diagram-search-results { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 420px; max-width: 80vw; margin: 0; padding: 4px; list-style: none; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.diagram-search-results li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 7px 10px; border-radius: var(--radius-sm); cursor: pointer; }
+.diagram-search-results li[aria-selected="true"] { background: var(--surface-3); }
+.diagram-search-results li span { color: var(--text-2); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diagram-search-results li small { color: var(--text-3); font-size: var(--text-xs); }
+.diagram-search-results .diagram-search-empty { display: block; color: var(--text-2); cursor: default; }
+/* Drill-in */
+.diagram-breadcrumb { position: absolute; top: 10px; left: 10px; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 20px); padding: 6px 12px; font-size: var(--text-sm); color: var(--text-2); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); }
+.diagram-breadcrumb button { padding: 0; border: 0; background: transparent; color: var(--text-1); text-decoration: underline; text-underline-offset: 2px; }
+.diagram-breadcrumb strong { color: var(--text-1); }
+.diagram-breadcrumb .diagram-crumb { display: inline-flex; gap: 8px; }
+.diagram-breadcrumb small { margin-left: 8px; color: var(--text-3); }
+.diagram-canvas[data-focused] .diagram-preview { top: 54px; }
+.diagram-minimap { position: absolute; right: 56px; bottom: 10px; padding: 6px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); }
+.diagram-minimap svg { display: block; cursor: crosshair; }
+.diagram-minimap-site { fill: none; stroke: var(--border-strong); stroke-width: 6px; stroke-dasharray: 18 12; }
+.diagram-minimap-zone { fill: var(--info-soft); stroke: var(--info-line); stroke-width: 4px; }
+.diagram-minimap-device { fill: var(--text-2); }
+.diagram-minimap-view { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 10px; }
+/* Findings shown where they apply */
+.diagram-finding-badge path { fill: var(--warn); stroke: var(--bg); stroke-width: 1.5px; }
+.diagram-finding-badge text { fill: var(--on-solid); font-size: 10px; font-weight: 800; }
+.diagram-zone[data-finding] .diagram-zone-box { stroke: var(--warn-line); }
+.diagram-host-card[data-finding] .diagram-host-box, .diagram-chip[data-finding] .diagram-chip-box { stroke: var(--warn); }
+.diagram-findings li button { padding: 0; border: 0; background: transparent; color: inherit; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+/* Details host list */
+.diagram-host-filter { width: 100%; margin: 0 0 6px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-1); }
+.diagram-host-scroll { overflow: auto; }
+.diagram-host-scroll .diagram-host { grid-template-columns: auto minmax(0, 1fr); height: 44px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-1); }
+.diagram-host-scroll .diagram-host:hover, .diagram-host-scroll .diagram-host:focus-visible { background: var(--hover-tint); }
+.diagram-host-text { display: grid; min-width: 0; gap: 1px; }
+.diagram-host-text strong, .diagram-host-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diagram-host-text small { color: var(--text-2); font-size: var(--text-xs); }
+.diagram-host code { color: var(--text-2); font-size: var(--text-xs); }
+.diagram-body { position: relative; display: flex; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.diagram-canvas { flex: 1; min-width: 0; position: relative; background-color: var(--bg); background-image: radial-gradient(circle, var(--hover-tint) 1px, transparent 1.3px); background-size: 24px 24px; }
+/* A compositing layer keeps WebKit from leaving repaint trails while the map pans. */
+.diagram-viewport { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; transform: translateZ(0); }
 .diagram-viewport, .diagram-viewport * { -webkit-user-select: none; user-select: none; }
 .diagram-viewport[data-dragging="true"] { cursor: grabbing; }
-.diagram-viewport:focus-visible { outline-offset: -2px; }
-.diagram-interface-labels text { fill: var(--text-2); font-size: 11px; font-weight: 550; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.diagram-canvas:focus-visible { outline-offset: -2px; }
+.diagram-node { cursor: pointer; outline: none; }
+.diagram-node-box { fill: transparent; stroke: transparent; }
+/* Links */
 .diagram-edges path { fill: none; stroke: var(--text-3); stroke-width: 2px; stroke-linecap: round; stroke-linejoin: round; }
-.diagram-edges [data-kind="interface"] { stroke: var(--text-2); stroke-width: 2.5px; }
-.diagram-edges [data-kind="membership"] { stroke: var(--text-2); stroke-width: 2.5px; stroke-dasharray: 5 4; }
-.diagram-edges [data-kind="subnet"] { stroke: var(--text-1); stroke-width: 3px; }
-.diagram-edges [data-kind="host"] { stroke-width: 1.5px; }
-.diagram-edges [data-highlighted="true"] { stroke: var(--info); stroke-width: 3px; }
-.diagram-node { color: var(--text-2); cursor: pointer; outline: none; }
-.diagram-node[data-kind="host"], .diagram-node[data-equipment] { color: var(--text-1); }
-.diagram-node[data-equipment="firewall"] { color: var(--accent); }
-.diagram-node-box { fill: transparent; stroke: transparent; stroke-width: 1px; rx: var(--radius-sm); }
-.diagram-node[data-active="true"] .diagram-node-box { fill: var(--hover-tint); stroke: var(--border-strong); }
-.diagram-node[aria-pressed="true"] .diagram-node-box, .diagram-node:focus-visible .diagram-node-box { stroke: var(--accent); stroke-width: 2px; }
-.diagram-node-label { fill: var(--text-1); font-size: 15px; font-weight: 650; }
-.diagram-node[data-equipment] .diagram-node-label { paint-order: stroke; stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; }
-.diagram-node[data-kind="host"]:not([data-equipment]) .diagram-node-label { font: 600 11px ui-monospace, monospace; }
-.diagram-node-subtitle { fill: var(--text-2); font-family: ui-monospace, monospace; font-size: 13px; }
-.diagram-sensor-badge, .diagram-coverage-symbol circle, .diagram-coverage-symbol polygon { fill: var(--surface-2); stroke: var(--accent); stroke-width: 2px; }
-.diagram-sensor-stem, .diagram-coverage-symbol path { fill: none; stroke: var(--accent); stroke-width: 2px; }
-.diagram-marker text { fill: var(--accent); font-size: 11px; font-weight: 700; pointer-events: none; }
-.diagram-marker[data-active="true"] .diagram-sensor-badge,
-.diagram-marker[aria-pressed="true"] .diagram-sensor-badge, .diagram-marker:focus-visible .diagram-sensor-badge { fill: var(--accent-soft); stroke: var(--info); stroke-width: 2.5px; }
-.diagram-host-toggle, .diagram-host-page { color: var(--text-1); }
-.diagram-host-page .diagram-node-box { fill: var(--surface-2); stroke: var(--border-strong); }
-.diagram-host-page text { fill: currentColor; font-size: 12px; font-weight: 600; }
-.diagram-host-page[aria-disabled="true"] { opacity: .35; cursor: default; }
-.diagram-host-page[aria-disabled="false"]:hover .diagram-node-box { fill: var(--surface-3); }
-.diagram-overflow .diagram-node-box { fill: var(--surface-2); stroke: var(--border-strong); }
-.diagram-host-toggle:hover .diagram-node-box, .diagram-overflow:hover .diagram-node-box { fill: var(--surface-3); }
-.diagram-host-toggle text, .diagram-overflow text { fill: var(--text-2); font-size: 12px; }
-.diagram-preview { position: absolute; inset: auto auto 8px 8px; display: grid; gap: 4px; max-width: calc(100% - 16px); padding: 8px 12px; overflow-wrap: anywhere; pointer-events: none; background: var(--surface-3); border-radius: var(--radius-sm); box-shadow: var(--shadow-pop); }
-.diagram-inspector { flex: 0 0 min(var(--diagram-inspector-width), 40%); overflow: auto; min-width: 0; padding: 12px; background: var(--surface-1); border-left: 1px solid var(--border); overflow-wrap: anywhere; }
-.diagram-inspector .diagram-details-heading h4 { margin: 0; }
+.diagram-edges [data-style="inferred"] { stroke-dasharray: 6 5; }
+.diagram-edges [data-style="observes"] { stroke-dasharray: 1.5 5; stroke-width: 2.2px; }
+.diagram-edges [data-style="membership"] { stroke-dasharray: 5 4; }
+.network-diagram [data-link-kind="wan"] { --diagram-link-color: var(--info); --diagram-link-dash: 9 4 1 4; }
+.network-diagram [data-link-kind="vpn"] { --diagram-link-color: var(--syntax-keyword); --diagram-link-dash: 13 6; }
+.diagram-edges path[data-link-kind="wan"], .diagram-edges path[data-link-kind="vpn"] { stroke: var(--diagram-link-color); stroke-dasharray: var(--diagram-link-dash); stroke-width: 2.5px; }
+.diagram-edges path[data-highlighted="true"] { stroke: var(--accent); stroke-width: 3px; }
+.diagram-labels text { fill: var(--text-2); font: 600 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
+.diagram-labels text[data-kind="link"] { font: 650 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.diagram-labels text[data-kind="link-detail"] { fill: var(--text-3); font-weight: 500; }
+.diagram-labels text[data-kind="group"] { fill: var(--text-3); font: 700 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: .07em; }
+/* Sites */
+.diagram-site-frame { fill: var(--hover-tint); fill-opacity: .3; stroke: var(--border-strong); stroke-dasharray: 7 5; rx: 14px; }
+.diagram-site-label text { fill: var(--text-3); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; }
+.diagram-site-label:hover text, .diagram-site-label:focus-visible text { fill: var(--text-1); }
+.diagram-site-box { fill: var(--surface-1); fill-opacity: 1; stroke: var(--border-strong); stroke-dasharray: 7 5; rx: 14px; }
+.diagram-site-card:hover .diagram-site-box, .diagram-site-card:focus-visible .diagram-site-box { stroke: var(--accent); }
+.diagram-site-title { fill: var(--text-1); font-size: 14px; font-weight: 700; }
+.diagram-site-expand { fill: var(--accent); font-size: 11px; font-weight: 650; }
+/* Zones */
+.diagram-zone-box { fill: var(--info-soft); fill-opacity: .5; stroke: var(--info-line); stroke-width: 1.2px; rx: 10px; }
+.diagram-zone[data-unassigned] .diagram-zone-box { fill: var(--hover-tint); stroke: var(--border-strong); stroke-dasharray: 5 4; }
+.diagram-zone[data-active="true"] .diagram-zone-box, .diagram-zone[data-covered] .diagram-zone-box { stroke: var(--accent-line); stroke-width: 2px; }
+.diagram-zone[aria-pressed="true"] .diagram-zone-box, .diagram-zone:focus-visible .diagram-zone-box { stroke: var(--accent); stroke-width: 2px; }
+.diagram-zone-name { fill: var(--text-1); font-size: 13.5px; font-weight: 700; }
+.diagram-zone-cidr { fill: var(--text-2); font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.diagram-zone-count { fill: var(--text-1); font-size: 11.5px; font-weight: 650; }
+.diagram-zone svg { color: var(--text-1); }
+.diagram-zone-os, .diagram-zone-empty { fill: var(--text-2); font-size: 11px; }
+.diagram-zone-toggle text { fill: var(--text-2); font-size: 11px; font-weight: 600; }
+.diagram-toggle-box { fill: transparent; stroke: var(--border-strong); }
+.diagram-zone-toggle:hover .diagram-toggle-box, .diagram-zone-toggle:focus-visible .diagram-toggle-box { fill: var(--surface-3); stroke: var(--accent-line); }
+.diagram-zone-toggle:hover text { fill: var(--text-1); }
+.diagram-scope-highlight, .diagram-scope-swatch { fill: none; stroke: currentColor; stroke-width: 2px; }
+/* Sensor chips: color reflects how much traffic detail the logs carry */
+.diagram-chip { --chip: var(--text-2); }
+.diagram-chip[data-family="zeek"] { --chip: var(--ok); }
+.diagram-chip[data-family="ids"] { --chip: var(--syntax-keyword); }
+.diagram-chip-box { fill: var(--surface-1); stroke: var(--chip); stroke-opacity: .65; }
+.diagram-chip-mark { fill: none; stroke: var(--chip); stroke-width: 1.6px; }
+.diagram-chip-label { fill: var(--text-1); font-size: 10.5px; font-weight: 650; }
+.diagram-chip[data-related="true"] .diagram-chip-box, .diagram-chip[data-active="true"] .diagram-chip-box,
+.diagram-chip[aria-pressed="true"] .diagram-chip-box, .diagram-chip:focus-visible .diagram-chip-box { fill: var(--accent-soft); stroke: var(--accent); stroke-opacity: 1; stroke-width: 1.8px; }
+.diagram-tap { fill: var(--bg); stroke: var(--ok); stroke-width: 2px; }
+.diagram-tap[data-highlighted="true"] { stroke: var(--accent); }
+.diagram-tap-stem { stroke: var(--ok); stroke-width: 1.4px; }
+/* Hosts */
+.diagram-host-box { fill: var(--surface-1); stroke: var(--border); }
+.diagram-host-card { color: var(--text-1); }
+.diagram-host-card[data-active="true"] .diagram-host-box { stroke: var(--border-strong); fill: var(--surface-2); }
+.diagram-host-card[aria-pressed="true"] .diagram-host-box, .diagram-host-card:focus-visible .diagram-host-box { stroke: var(--accent); stroke-width: 2px; }
+.diagram-host-card[data-public] .diagram-host-os { fill: var(--info); font-weight: 650; }
+.diagram-host-card[data-public] .diagram-host-box { stroke: var(--info-line); }
+.diagram-host-card[data-compact][data-public] .diagram-host-box { fill: var(--info-soft); }
+.diagram-group-label { fill: var(--text-3); font-size: 10px; font-weight: 700; letter-spacing: .07em; }
+.diagram-host-name { fill: var(--text-1); font-size: 12px; font-weight: 650; }
+.diagram-host-card[data-compact] .diagram-host-name { font-size: 10.5px; }
+.diagram-host-ip { fill: var(--text-2); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.diagram-host-os { fill: var(--text-2); font-size: 10.5px; }
+.diagram-os-badge { fill: var(--text-2); font-size: 8.5px; font-weight: 800; letter-spacing: .02em; }
+.diagram-os-badge[data-family="windows"] { fill: var(--info); }
+.diagram-os-badge[data-family="linux"] { fill: var(--warn); }
+.diagram-public { color: var(--info); }
+.diagram-public-box { fill: var(--info-soft); stroke: var(--info-line); }
+.diagram-public-label { fill: var(--info); font-size: 10.5px; font-weight: 650; }
+.diagram-public[aria-pressed="true"] .diagram-public-box, .diagram-public:focus-visible .diagram-public-box { stroke: var(--accent); stroke-width: 2px; }
+/* Devices and the Internet */
+.diagram-device { color: var(--text-1); }
+.diagram-device-box { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.3px; }
+.diagram-device[data-kind="firewall"] { color: var(--diagram-firewall); }
+.diagram-device[data-kind="firewall"] .diagram-device-box { stroke: var(--diagram-firewall); stroke-width: 2px; }
+.diagram-device[data-active="true"] .diagram-device-box { fill: var(--surface-3); }
+.diagram-device[aria-pressed="true"] .diagram-device-box, .diagram-device:focus-visible .diagram-device-box { stroke: var(--accent); stroke-width: 2.4px; }
+.diagram-device-name { fill: var(--text-1); font-size: 13px; font-weight: 700; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.diagram-device-subtitle { fill: var(--text-2); font-size: 11px; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.diagram-internet { color: var(--text-1); }
+.diagram-internet[data-inferred] { color: var(--text-2); }
+.diagram-internet[data-active="true"] .diagram-node-box, .diagram-internet[aria-pressed="true"] .diagram-node-box, .diagram-internet:focus-visible .diagram-node-box { stroke: var(--accent); stroke-width: 2px; fill: var(--hover-tint); }
+/* Overlays on the canvas */
+.diagram-notice { padding: 4px 10px; font-size: var(--text-sm); color: var(--text-2); border-left: 3px solid var(--warn); }
+.diagram-notice strong { color: var(--text-1); }
+.diagram-zoom { position: absolute; right: 10px; bottom: 10px; display: grid; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.diagram-zoom button { display: grid; place-items: center; width: 34px; height: 32px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-1); }
+.diagram-zoom button + button { border-top: 1px solid var(--border); }
+.diagram-zoom button:hover { background: var(--hover-tint); }
+.diagram-key { position: absolute; left: 10px; bottom: 10px; max-width: min(560px, calc(100% - 80px)); padding: 8px 12px; font-size: var(--text-sm); color: var(--text-2); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); }
+.diagram-key summary { cursor: pointer; color: var(--text-1); font-weight: 650; }
+.diagram-key ul { display: flex; flex-wrap: wrap; gap: 6px 16px; list-style: none; margin: 8px 0 0; padding: 0; }
+.diagram-key li { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.diagram-key-line { fill: none; stroke: var(--text-3); stroke-width: 2px; }
+.diagram-key-line.wan { stroke: var(--info); stroke-dasharray: 9 4 1 4; }
+.diagram-key-line.vpn { stroke: var(--syntax-keyword); stroke-dasharray: 13 6; }
+.diagram-key-line.inferred { stroke-dasharray: 6 5; }
+.diagram-key-line.observes { stroke-dasharray: 1.5 5; stroke-linecap: round; }
+.diagram-key-line.membership { stroke-dasharray: 5 4; }
+.diagram-key-glyph { width: 14px; height: 14px; border: 1.5px solid var(--border-strong); border-radius: 4px; background: var(--surface-2); }
+.diagram-key-glyph[data-kind="firewall"] { border-color: var(--diagram-firewall); }
+.diagram-key-mark { width: 9px; height: 9px; border: 1.6px solid var(--ok); border-radius: 50%; }
+.diagram-key-mark[data-placement="span"] { border-radius: 1px; transform: rotate(45deg); width: 8px; height: 8px; }
+.diagram-key-chip { padding: 0 6px; border: 1px solid var(--ok); border-radius: var(--radius-pill); color: var(--text-1); font-size: 10px; font-weight: 650; line-height: 15px; }
+.diagram-key-chip[data-family="ids"] { border-color: var(--syntax-keyword); }
+.diagram-key-chip[data-family="public"] { border-color: var(--info-line); color: var(--info); background: var(--info-soft); }
+.diagram-preview { position: absolute; inset: 10px auto auto 10px; display: grid; gap: 4px; max-width: min(360px, calc(100% - 20px)); padding: 8px 12px; overflow-wrap: anywhere; pointer-events: none; background: var(--surface-3); border-radius: var(--radius-sm); box-shadow: var(--shadow-pop); }
+/* Details panel overlays the canvas, so opening it never moves the map */
+.diagram-inspector { position: absolute; top: 8px; right: 8px; bottom: 8px; z-index: 3; width: min(var(--diagram-inspector-width), calc(100% - 16px)); overflow: auto; padding: 12px 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); overflow-wrap: anywhere; }
+.diagram-inspector .diagram-details-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.diagram-inspector .diagram-details-heading h4 { margin: 4px 0 0; flex: 1; min-width: 0; font-size: var(--text-lg); overflow-wrap: anywhere; }
+.diagram-detail-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.diagram-detail-actions .button-quiet { min-height: 28px; padding: 0 10px; font-size: var(--text-sm); }
 .diagram-inspector h4, .diagram-inspector h5 { margin: 0 0 8px; font-size: var(--text-md); }
+.diagram-inspector h5 { margin-top: 14px; color: var(--text-2); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .06em; }
 .diagram-inspector p { margin: 8px 0; }
-.diagram-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; margin: 8px 0; }
+.diagram-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; margin: 8px 0; }
 .diagram-facts dt { color: var(--text-2); }
 .diagram-facts dd { margin: 0; }
+.diagram-facts dd small { color: var(--text-2); }
+.diagram-evidence-row { display: contents; }
 .diagram-associations, .diagram-hosts ul { list-style: none; padding: 0; margin: 0; }
 .diagram-associations li, .diagram-hosts li { border-top: 1px solid var(--border); }
-.diagram-associations li { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 8px 0; align-items: baseline; }
-.diagram-associations li button { padding: 0; border: 0; background: transparent; color: var(--text-1); text-align: left; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
-.diagram-associations li span, .diagram-host span, .diagram-hosts h5 span { color: var(--text-2); font-size: var(--text-sm); }
-.diagram-hosts, .diagram-attached-devices { margin-top: 12px; }
+.diagram-associations li { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 7px 0; align-items: baseline; }
+.diagram-associations li button, .diagram-facts dd button, .diagram-inspector p button { padding: 0; border: 0; background: transparent; color: var(--text-1); text-align: left; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.diagram-associations li span, .diagram-host span, .diagram-hosts h5 span, .diagram-inspector h5 > span { color: var(--text-2); font-size: var(--text-sm); }
+.diagram-hosts { margin-top: 12px; }
 .diagram-host { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; text-align: left; padding: 8px 4px; }
 .diagram-host:hover, .diagram-host[aria-expanded="true"] { background: var(--hover-tint); }
 .diagram-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; font-size: var(--text-xs); }
 .diagram-pagination .button-quiet { font-size: var(--text-xs); padding: 0 8px; }
-.diagram-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; color: var(--text-2); font-size: var(--text-sm); }
-.diagram-legend span { display: inline-flex; align-items: center; gap: 8px; }
-.diagram-legend i { display: inline-block; width: 20px; border-top: 2px solid var(--text-2); }
-.diagram-legend i.diagram-membership-key { border-top-style: dashed; }
-.diagram-legend .diagram-key-mark { position: relative; display: inline-grid; place-items: center; min-width: 22px; height: 22px; color: var(--accent); font-size: var(--text-xs); font-weight: 650; }
-.diagram-key-mark::before { content: ""; position: absolute; width: 20px; height: 20px; border: 1px solid currentColor; border-radius: var(--radius-pill); }
-.diagram-key-mark[data-placement="span"]::before { width: 15px; height: 15px; border-radius: 0; transform: rotate(45deg); }
-.diagram-sensor-key { position: relative; }
-.diagram-sensor-key summary { cursor: pointer; }
-.diagram-sensor-key ul { display: flex; flex-wrap: wrap; gap: 4px 8px; list-style: none; margin: 0; padding: 0; }
-details.diagram-sensor-key[open] ul { position: absolute; bottom: calc(100% + 8px); z-index: 2; width: max-content; max-width: min(340px, 58vw); max-height: min(310px, 45vh); overflow: auto; display: grid; gap: 4px; padding: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-1); box-shadow: var(--shadow-pop); }
-.diagram-sensor-key button { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--radius-sm); text-align: left; }
-.diagram-sensor-key button[data-active="true"] { background: var(--info-soft); }
-.diagram-sensor-key button small { color: var(--text-2); }
 .diagram-findings { color: var(--warn); margin: 8px 0 0; overflow-wrap: anywhere; }
 .diagram-findings summary { cursor: pointer; }
 .diagram-findings ul, ul.diagram-findings { padding-left: 20px; }
@@ -1431,7 +1618,7 @@ details.diagram-sensor-key[open] ul { position: absolute; bottom: calc(100% + 8p
 .pack-workflow { display: grid; gap: 8px; }
 .pack-workflow p, .pack-workflow h4, .pack-workflow ul { margin: 0; }
 .pack-workflow code, .pack-delete-dialog { overflow-wrap: anywhere; }
-.pack-workflow .state-success, .pack-workflow .error-text { display: flex; gap: 8px; align-items: flex-start; }
+.pack-workflow .state-success, .pack-workflow .state-warning, .pack-workflow .error-text { display: flex; gap: 8px; align-items: flex-start; }
 .pack-workflow svg { flex-shrink: 0; }
 .pack-delete-dialog ul { max-height: 220px; overflow: auto; padding-left: 20px; }
 
@@ -1889,3 +2076,4 @@ details.diagram-sensor-key[open] ul { position: absolute; bottom: calc(100% + 8p
   .brand.brand-compact .brand-logo-sidebar, .brand.brand-compact > small { display: none; }
   .brand.brand-compact .brand-mark { display: block; }
 }
+

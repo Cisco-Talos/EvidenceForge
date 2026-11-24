@@ -754,6 +754,11 @@ class SensorMultiplexEmitter(LogEmitter):
             )
             if ledger.orig.packets + ledger.resp.packets <= 1:
                 packet_observed_duration = None
+            canonical_state = str(render_data.get("conn_state", "OTH"))
+            if observation.path_role == "forward_only":
+                canonical_state = "S0"
+            elif observation.path_role == "return_only":
+                canonical_state = "SHR" if str(render_data.get("proto")) == "tcp" else "OTH"
             render_data.update(
                 {
                     "duration": packet_observed_duration,
@@ -775,7 +780,7 @@ class SensorMultiplexEmitter(LogEmitter):
                     "resp_ip_bytes": ledger.resp.ip_bytes,
                     "missed_bytes": ledger.missed_bytes,
                     "conn_state": native_zeek_connection_state(
-                        str(render_data.get("proto", "")), str(render_data.get("conn_state", "OTH"))
+                        str(render_data.get("proto", "")), canonical_state
                     ),
                     "history": native_zeek_connection_history(
                         str(render_data.get("proto", "")), observation.history

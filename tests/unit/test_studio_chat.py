@@ -295,7 +295,7 @@ async def test_result_links_exclude_files_outside_the_permitted_source(
 
 def test_restart_holds_queued_and_uncertain_claims(studio: StudioService) -> None:
     from evidenceforge.studio.chat import ChatRuntime
-    from evidenceforge.studio.state_records_v7 import ChatInput
+    from evidenceforge.studio.state_records_v8 import ChatInput
 
     chat = conversation(studio, active=False)
     studio.store.chat.save_input(
@@ -478,7 +478,28 @@ def test_network_question_creates_a_private_author_draft(
                 "item_id": item.id,
                 "network_context": {
                     "revision": "diagram-source",
-                    "topology": {"segments": [], "hosts": [], "devices": [], "findings": []},
+                    "selected_id": "link:uplink",
+                    "firewall_scopes_visible": False,
+                    "topology": {
+                        "segments": [],
+                        "hosts": [],
+                        "devices": [],
+                        "findings": [],
+                        "routing": {
+                            "devices": {"edge": {"kind": "router"}},
+                            "links": {
+                                "uplink": {
+                                    "internet": True,
+                                    "interfaces": {
+                                        "edge": {"name": "wan", "ip": "192.0.2.1"},
+                                    },
+                                }
+                            },
+                            "routes": {
+                                "edge": [{"destination": "0.0.0.0/0", "internet_link": "uplink"}]
+                            },
+                        },
+                    },
                 },
             },
         )
@@ -490,6 +511,9 @@ def test_network_question_creates_a_private_author_draft(
         assert view.include_current_view
         assert view.network_context is not None
         assert view.network_context.revision == "diagram-source"
+        assert view.network_context.selected_id == "link:uplink"
+        assert view.network_context.firewall_scopes_visible is False
+        assert view.network_context.topology.routing.links["uplink"].internet
         assert not studio.store.chat.inputs(created["id"])
 
 
@@ -676,7 +700,7 @@ def test_fake_app_server_dispatches_fifo_and_holds_work_across_restart(
 def test_concurrent_draft_saves_cannot_clear_a_queue_hold(studio: StudioService) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    from evidenceforge.studio.state_records_v7 import ChatViewState
+    from evidenceforge.studio.state_records_v8 import ChatViewState
 
     chat = conversation(studio, active=False)
 

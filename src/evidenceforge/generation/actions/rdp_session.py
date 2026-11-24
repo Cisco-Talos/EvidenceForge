@@ -853,6 +853,20 @@ class RdpSessionActionBundle:
             self._request.source_ip,
         )
         source_ip, source_system, source_pid = self._resolve_source(rng, user)
+        visibility = getattr(self._executor.dispatcher, "visibility_engine", None)
+        if visibility is not None and visibility.routing is not None:
+            flow = visibility.routed_connection(source_ip, self._request.target_system.ip, 3389)
+            if not flow.reachable:
+                return self._executor.generate_connection(
+                    src_ip=source_ip,
+                    dst_ip=self._request.target_system.ip,
+                    dst_port=3389,
+                    time=self._request.time,
+                    source_system=source_system,
+                    src_port=self._request.source_port,
+                    suppress_application_side_effects=True,
+                    emit_dns=False,
+                )
         requested_end_plan = self._request.session_end_plan
         duration = rng.uniform(60.0, RDP_TRANSPORT_DURATION_MAX_SECONDS)
         if hard_deadline_duration_cap is not None:

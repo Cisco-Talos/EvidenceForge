@@ -32,8 +32,8 @@ export type PackPublisherStatus = Schema["PackPublisherStatus"];
 export type PackCreation = { item: CatalogItem; conversation: Conversation };
 export type PackReview = Schema["PackReview"];
 export type PackTopology = Schema["PackTopology"];
-export type TopologyGraph = Schema["TopologyGraph"];
-export type NetworkChatContext = Schema["NetworkChatContext"];
+export type TopologyGraph = Schema["RoutedTopologyGraph"];
+export type NetworkChatContext = Schema["RoutedNetworkChatContext"];
 export type PackDeleteReview = Schema["PackDeleteReview"];
 export type PackDeleted = Schema["PackDeleted"];
 export type AffectedItem = Schema["AffectedItem"];
@@ -186,6 +186,31 @@ export class StudioApi {
     } finally {
       unlisten();
     }
+  }
+
+  /** Save an image the page rendered: a native save dialog in Studio, a download in a browser. */
+  async saveImage(image: Blob, filename: string): Promise<DownloadResult> {
+    if (!isTauri()) {
+      const objectUrl = URL.createObjectURL(image);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      return { status: "browser" };
+    }
+    const location = await this.request<{ directory: string | null }>("/v1/export-location").catch(() => ({ directory: null }));
+    const headers: Record<string, string> = { "x-eforge-filename": encodeURIComponent(filename) };
+    if (location.directory) headers["x-eforge-directory"] = encodeURIComponent(location.directory);
+    const saved = await invoke<string | null>("save_diagram_image", new Uint8Array(await image.arrayBuffer()), { headers });
+    if (!saved) return { status: "cancelled" };
+    const separator = Math.max(saved.lastIndexOf("/"), saved.lastIndexOf("\\"));
+    if (separator > 0) {
+      await this.request("/v1/export-location", "PUT", { directory: saved.slice(0, separator) }).catch(() => undefined);
+    }
+    return { status: "saved", path: saved };
   }
 
   async cancelExport(id: string): Promise<void> {

@@ -21,7 +21,7 @@ from evidenceforge.studio.contexts import ConfigurationState, configuration_stat
 from evidenceforge.studio.processes import launch_options
 from evidenceforge.studio.settings import StudioSettings, controller_settings
 from evidenceforge.studio.store import Project
-from evidenceforge.studio.topology import TopologyGraph, project_topology
+from evidenceforge.studio.topology import RoutedTopologyGraph, project_topology
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class EnvironmentReport(BaseModel):
     authored_kind: str = ""
     selected_packs: list[SelectedPack] = Field(default_factory=list)
     effective_scenario: dict[str, Any] = Field(default_factory=dict)
-    topology: TopologyGraph | None = None
+    topology: RoutedTopologyGraph | None = None
     field_origins: dict[str, str] = Field(default_factory=dict)
     organization_model_origins: dict[str, str] = Field(default_factory=dict)
     catalog_origins: dict[str, str] = Field(default_factory=dict)

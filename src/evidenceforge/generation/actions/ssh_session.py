@@ -3255,6 +3255,23 @@ class SshSessionActionBundle:
     def execute_with_identity(self) -> tuple[str, str]:
         """Expand the bundle and return its transport UID and owned session LogonID."""
 
+        visibility = getattr(self.executor.dispatcher, "visibility_engine", None)
+        if visibility is not None and visibility.routing is not None:
+            flow = visibility.routed_connection(
+                self.request.source_ip, self.request.target_system.ip, 22
+            )
+            if not flow.reachable:
+                uid = self.executor.generate_connection(
+                    src_ip=self.request.source_ip,
+                    dst_ip=self.request.target_system.ip,
+                    dst_port=22,
+                    time=self.request.time,
+                    source_system=self.request.source_system,
+                    src_port=self.request.source_port,
+                    suppress_application_side_effects=True,
+                    emit_dns=False,
+                )
+                return uid, ""
         if _get_os_category(self.request.target_system.os) == "macos":
             if (
                 self.request.target_system.architecture != "arm64"

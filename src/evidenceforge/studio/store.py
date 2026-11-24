@@ -19,7 +19,7 @@ from evidenceforge.desktop.library import LibraryItem
 from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 from evidenceforge.studio.search import SearchMatch, index_sources, matching_excerpts, yaml_entries
 from evidenceforge.studio.state_records_v4 import ExampleInstallation
-from evidenceforge.studio.state_records_v7 import ChatControl, ChatViewState
+from evidenceforge.studio.state_records_v8 import ChatControl, ChatViewState
 
 
 def indexed_draft_identity(path: Path, entries: list[dict[str, Any]]) -> str | None:

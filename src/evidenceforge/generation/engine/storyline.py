@@ -2228,7 +2228,7 @@ class StorylineMixin:
         system: System,
         time: datetime,
         rng: random.Random,
-    ) -> str:
+    ) -> str | None:
         """Resolve process session ownership for typed events and command spills."""
         if not hasattr(self, "world_planner"):
             sessions = self.state_manager.get_sessions_for_user(actor.username)
@@ -2290,6 +2290,8 @@ class StorylineMixin:
             storyline_protected=True,
             required_until=required_until,
         )
+        if target_session is None:
+            return None
         self._record_storyline_logon(actor, system, target_session.logon_id)
         return target_session.logon_id
 
@@ -2299,7 +2301,7 @@ class StorylineMixin:
         system: System,
         time: datetime,
         rng: random.Random,
-    ) -> str:
+    ) -> str | None:
         """Forward the existing spill entrypoint to shared session resolution."""
         return self._resolve_storyline_process_logon_id(actor, system, time, rng)
 

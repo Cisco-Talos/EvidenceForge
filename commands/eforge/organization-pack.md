@@ -62,8 +62,8 @@ Determine:
 2. The exact industry source/publisher/name and compatible version constraints.
 3. Whether to initialize a blank pack or fork the closest organization sample.
 4. Whether the pack must stand alone or intentionally depends on a named consumer scenario.
-5. Which reusable users, systems, groups, services, network segments, sensors, email topology,
-   storage topology, SMB client/server platforms and services, mapping/credential modes, Samba
+5. Which reusable users, systems, groups, services, network segments, routed links, sensors, email
+   topology, storage topology, SMB client/server platforms and services, mapping/credential modes, Samba
    audit depth, stable exact-host deployment, stable exact-source collection policy, and baseline
    activity belong to the organization.
 6. Which organization-specific personas, processes, applications, destinations, traffic, or
@@ -108,8 +108,8 @@ order:
 2. Add only organization-specific catalog exports.
 3. Author the partial or complete `environment` fragment.
 4. Author the partial or complete `baseline_activity` fragment.
-5. Reconcile users, personas, systems, groups, roles, services, segments, sensors, email routes,
-   storage shares/mappings, and catalog references across the effective composed model.
+5. Reconcile users, personas, systems, groups, roles, services, segments, routed links, sensors,
+   email routes, storage shares/mappings, and catalog references across the effective composed model.
 
 Pack custom applications use the public pack process shape: exact native path and commands plus
 complete Windows PE/module metadata where applicable. Compilation adapts that shape into the typed

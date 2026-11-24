@@ -535,27 +535,119 @@ within the scenario workspace. Changed scenario/dependency/configuration inputs 
 environment** trigger a new inspection. Progress and the last check time appear in the section
 header; refresh failures remain inline.
 
-The **Network** tab draws subnet rails labeled with their names and CIDR blocks. A shared subnet
-can form the backbone between modeled network devices. Solid lines show declared firewall
-interfaces, and dashed lines show device membership in a subnet. The sensor key identifies TAP
-circles with solid stems and SPAN diamonds with dashed stems. Each rail shows the sensors that
-fit. When space runs out, click its **+N** badge to see the remaining sensors. The firewall's
-details show its monitored subnets and log formats.
-Small host groups expand inline when space permits. Click a branch's host count to expand it,
-and use **Previous** and **Next** to browse larger subnets 12 hosts at a time. The subnet details
-also list its hosts and device associations. Select a host to see its IP address, operating
-system, primary users, and roles. Use **Sensors**, **Firewalls**, and
-**Hosts** to toggle layers.
-Drag the canvas or use the arrow keys to pan. **Fit to view** fits all visible layers, and
-**Expand diagram** fills the Studio window. Press Escape to return to the tab.
+The scenario workflow runs from **Author** through **Validate**, **Visualize**,
+**Generate**, and **Evaluate**. After validation, Studio suggests reviewing the diagram
+before a new generation. The review is optional, and you can open the diagram while
+diagnosing validation findings.
+
+Validation warns when a firewall uses legacy segment-based visibility. Use authored
+routing for new firewall models so log coverage follows traffic the device handles
+across its interfaces. Existing scenarios can still generate with legacy visibility.
+
+The **Visualize** tab draws the environment as a network diagram that fits the window. Each
+subnet is a card with its name, CIDR block, sensors and hosts. Devices are laid out from the
+Internet boundary inward: an edge firewall above the core router, with subnets below the device
+that serves them. A device with no subnets of its own, such as a VPN concentrator, sits beside
+its parent. A subnet inside a larger declared range is drawn inside that range, and each host
+appears once, in its most specific subnet.
+
+When authored routing joins sites with WAN or VPN links, each site gets its own outlined area.
+Sites are named after the common prefix of their subnet names, or their first device. With more
+than four sites, only the Internet-facing site starts expanded; select a site card to expand it.
+Select a site's label to collapse it. A collapsed site shows a summary card and only its links to
+other sites; its internal links and sensors return when it is expanded. Internet boundaries sit
+above every site, outside them, so they stay visible when a site is collapsed; each declared
+Internet link gets its own cloud. Links are long enough for their labels, which stay clear of
+the sites and subnets they connect.
+Ordinary links use solid gray lines, WAN links blue dash-dot lines and VPN links violet long
+dashes. Point-to-point transit subnets are drawn as labeled links with the interface name and
+address at each end. An interface named after its subnet shows only its address, such as `.1`.
+
+Scenarios that use the segment-based network model have no declared links. The diagram then
+infers them and says so above the map. A dashed line joins a firewall to each subnet in its
+policy interface map, and a dotted line to each subnet it only monitors. An Internet cloud labeled
+*inferred* appears above the firewall when NAT, `public_cidrs` or a public host address implies
+one. Subnets that no modeled device connects are grouped under **Not attached to a modeled
+device**.
+
+Sensors are chips named by their tool: green **Zeek** chips write network logs and violet
+**Snort** chips raise IDS alerts. Hover over a chip to see exactly which Zeek logs that sensor
+writes, such as only `conn` and `weird`. A circle marks a TAP and a diamond a SPAN. Chips show the sensor name when it fits, and **+N** opens the subnet's full
+sensor list. Hover over or select a sensor to highlight every subnet and link it observes. A TAP
+on an ordinary link can capture all traffic or only Internet traffic. For WAN circuits and VPN
+tunnels, place sensors on the termination-side network.
+
+Host icons follow each host's roles, or its declared type when no roles are set. A host with a
+public address (a static NAT address or a routable IP) is marked individually; when its subnet is
+summarized, that host is listed by name. Small environments open with every host card visible.
+Larger ones open with subnet summaries; select **Show N hosts** in a card to expand it. Very large
+subnets show their first 48 hosts on the map and list the rest in the details.
+
+Select any subnet, device, sensor, host, link or Internet boundary for details. The details panel
+opens over the map without moving it. It shows addresses, gateways, interfaces, sensors with their
+log formats, contained subnets and hosts. Filter a subnet's host list by name, address, operating
+system, role or user. Select a host there to show it on the map: its subnet expands, and so does
+its site if collapsed.
+
+Use the **Find host, IP or subnet** box above the map, or press `/`, to search hostnames, IP and
+public addresses, subnet names and ranges, sensors and devices. A complete IP address also finds
+the most specific subnet that contains it, even when no host uses that address. Use the arrow keys
+and Enter to choose a match. Choosing it turns on a hidden layer when needed and reveals the item.
+
+Double-click a subnet, or select **Focus subnet** in its details, to zoom in on its hosts.
+A breadcrumb shows where you are and leads back to the overview; Escape also returns. Select the
+site in the breadcrumb, or double-click a site's label on the map, to fit the whole site; a
+collapsed site expands first. While you are zoomed in, a small overview map shows the visible
+area; select a point on it, or drag across it, to move the view.
+
+Select **Visibility** to outline each subnet by the weakest network evidence for traffic reaching it
+from other subnets and the Internet: protocol logs and IDS alerts, protocol logs, IDS alerts alone,
+connection records only, firewall logs only, or nothing. **Unobserved within** marks a subnet whose
+own hosts can talk to each other without any network sensor seeing it, as with a TAP on its
+uplink. The generation engine's own routing and visibility rules compute this for
+the displayed revision, from one representative address in each subnet and one Internet address.
+A subnet's or host's details list that traffic under **Network evidence**, grouped the same way,
+with a row for traffic within the subnet and one for the Internet. Switch between traffic **to**
+and **from** the subnet, and hover over a row to trace its path on the map: the links it crosses,
+the devices that forward it, and the sensors that see it. Rows also note flows that are not
+delivered, such as traffic a firewall denies. Visibility needs network sensors; it is unavailable
+for an environment without them or one that cannot be compiled, such as an incomplete pack.
+
+A firewall's details include its address translation and its policy rules in order, ending with
+its default action. A firewall with six or more rules has a filter: type text or a port number, or
+a full IP address to find the rules that apply to it through its subnet, a range, `any` or
+`external`. Filtered rules keep their place numbers in the policy.
+
+Select the export button to save an image of the map exactly as shown, with its current zoom,
+collapsed sites, layers and selection, as a PNG; fit or focus the view first to choose what it
+includes. Its menu can copy the same image to the clipboard instead. The toolbar reads from view
+controls to actions: **Layers**, the **Topology** and **Visibility** lens, search, the item's name,
+then **Ask** (about this diagram), **Refresh environment**, export and expand. It stays on one row,
+shortening the search box and the name first, and wraps only in a narrow window.
+
+After an Author edit, the diagram notes what changed since the revision you last viewed in this
+Studio session: added and changed subnets, hosts, sensors and devices are outlined, and removed
+ones are listed. Hide the outlines or dismiss the note when you are done.
+
+A warning mark on a subnet, device, sensor or host means the environment has a finding about it.
+Select the item to read the finding in its details. The findings list below the map links to each
+item it can show. **Layers** shows or hides sensors and hosts, and can add the **Firewall
+policy scopes** overlay, which outlines subnets that share a firewall policy interface. Hover over
+the info icon beside each layer for a description. Firewalls and routers are always shown.
+Drag the canvas or use the arrow keys to pan. With focus in the diagram, scroll the mouse wheel
+to zoom around the pointer. The zoom controls in the corner include **Fit to view**. The expand
+button fills the Studio window and focuses the canvas for wheel zoom. Press Escape to close the
+details or return to the tab.
 
 Use **Ask about this diagram** to open an Author draft with the full topology for the displayed
-revision. **Ask about this** in the details panel also identifies the selected item. The draft
+revision, including authored routing and the firewall scope setting. **Ask about this** in the
+details panel also identifies the selected item. The draft
 includes a thumbnail of the current viewport by default. Clear **Include current view** to send
 the topology without the image.
 
-An organization pack's **Network** tab shows the selected version or draft's environment
-fragment. Open a consuming scenario to see its composed environment.
+An organization pack's **Visualize** tab follows **Validate & Release** and shows the
+selected version or draft's environment fragment. Open a consuming scenario to see its
+composed environment.
 
 ### Drafts and local releases
 

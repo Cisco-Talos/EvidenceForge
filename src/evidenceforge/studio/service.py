@@ -200,7 +200,7 @@ from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.startup_diagnostics import startup_phase
 from evidenceforge.studio.state_io import StudioStateError
 from evidenceforge.studio.state_records_v3 import ChatPreference
-from evidenceforge.studio.state_records_v7 import ChatInput, ChatViewState
+from evidenceforge.studio.state_records_v8 import ChatInput, ChatViewState
 from evidenceforge.studio.state_upgrade import (
     OperationRequest,
     StateCoordinator,
@@ -219,7 +219,7 @@ from evidenceforge.studio.store import (
     StudioEvent,
     StudioStore,
 )
-from evidenceforge.studio.topology import NetworkChatContext, PackTopology
+from evidenceforge.studio.topology import PackTopology, RoutedNetworkChatContext
 
 
 def _archive_stem(name: str) -> str:
@@ -405,7 +405,7 @@ class ConversationRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, pattern=SCENARIO_NAME_PATTERN)
 
     display_name: DisplayName | None = None
-    network_context: NetworkChatContext | None = None
+    network_context: RoutedNetworkChatContext | None = None
 
 
 class SourceRecoveryRequest(BaseModel):
@@ -437,7 +437,7 @@ class TurnRequest(BaseModel):
     text: str = Field(min_length=1)
     skill_name: str | None = None
     client_message_id: str | None = None
-    network_context: NetworkChatContext | None = None
+    network_context: RoutedNetworkChatContext | None = None
 
 
 class TurnSubmission(Conversation):

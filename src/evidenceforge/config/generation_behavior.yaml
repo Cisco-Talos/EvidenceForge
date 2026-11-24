@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 569
+current_revision: 571
 history_start_revision: 1
-behavior_surface_sha256: 831e206129b759226cde6777d7535d37e51dddc9c466835800bdf356e3a44214
+behavior_surface_sha256: 5fcf1064647178674f61975b79165d2d9e18a5e2c9744ef5741c7c37c6d4ab63
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6595,3 +6595,29 @@ changes:
   - web_access
   summary: Match Samba logoffs to native closes, scope web requests by client, and compare
     4688 child credentials with eCAR, using the creator when the native target is absent.
+- revision: 570
+  id: authored-routing-and-link-taps
+  impact: localized
+  domains:
+  - network-reachability
+  - sensor-visibility
+  - firewall-policy-and-nat
+  - remote-application-lifecycle
+  formats:
+  - zeek
+  - snort_alert
+  - cisco_asa
+  - ecar
+  - syslog
+  - windows
+  summary: Resolve forward and return paths, enforce traversed firewall policies,
+    and attribute link TAP evidence for scenarios with authored routing.
+- revision: 571
+  id: typed-wan-and-vpn-links
+  impact: none
+  domains:
+  - network-reachability
+  - sensor-visibility
+  formats: []
+  summary: Accept explicit WAN and abstract VPN links and require their sensors on
+    termination-side networks. Preserve forwarding and existing link serialization.

@@ -53,6 +53,7 @@ from pydantic import (
 from evidenceforge.config.compatibility import warn_legacy_config
 from evidenceforge.models.http import HttpMultipartEntitySpec
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
+from evidenceforge.models.routing import LinkTap, RoutingTopology
 from evidenceforge.naming import SCENARIO_NAME_PATTERN
 from evidenceforge.source_families import (
     FORMAT_FAMILIES,
@@ -2579,7 +2580,8 @@ class NetworkSensor(BaseModel):
     type: str = Field(..., pattern="^(network|ids|firewall)$")
     name: str
     hostname: str = ""
-    monitoring_segments: list[str]
+    monitoring_segments: list[str] = Field(default_factory=list)
+    link_tap: LinkTap | None = Field(default=None, exclude_if=lambda value: value is None)
     direction: str = Field(default="bidirectional", pattern="^(inbound|outbound|bidirectional)$")
     placement: str = Field(default="span", pattern="^(span|tap)$")
     capture_profile: str = Field(
@@ -2613,6 +2615,13 @@ class NetworkSensor(BaseModel):
     )
     nat_rules: list[NatRule] = Field(default_factory=list)
     description: str = ""
+
+    @model_validator(mode="after")
+    def require_capture_location(self) -> "NetworkSensor":
+        """Require the existing segment declaration unless a physical TAP is selected."""
+        if self.link_tap is None and "monitoring_segments" not in self.model_fields_set:
+            raise ValueError("Sensor requires monitoring_segments or link_tap")
+        return self
 
     @field_validator("capture_profile")
     @classmethod
@@ -2658,6 +2667,7 @@ class NetworkConfig(BaseModel):
     """
 
     segments: list[NetworkSegment]
+    routing: RoutingTopology | None = Field(default=None, exclude_if=lambda value: value is None)
     sensors: list[NetworkSensor] = Field(default_factory=list)
     public_cidrs: list[str] = Field(
         default_factory=list,
@@ -2684,6 +2694,36 @@ class NetworkConfig(BaseModel):
         if not v:
             raise ValueError("Network config must have at least one segment")
         return v
+
+    @model_validator(mode="after")
+    def validate_link_sensor_placements(self) -> "NetworkConfig":
+        """Require direct WAN and VPN monitoring to use a termination-side network link."""
+        if self.routing is None:
+            return self
+        restricted = {
+            name: link for name, link in self.routing.links.items() if link.kind != "network"
+        }
+        segments = {
+            link.segment: name for name, link in restricted.items() if link.segment is not None
+        }
+        for sensor in self.sensors:
+            link_name = sensor.link_tap.link if sensor.link_tap is not None else None
+            if link_name not in restricted and sensor.type != "firewall":
+                link_name = next(
+                    (
+                        segments[segment]
+                        for segment in sensor.monitoring_segments
+                        if segment in segments
+                    ),
+                    None,
+                )
+            if link_name is not None and link_name in restricted:
+                kind = restricted[link_name].kind.upper()
+                raise ValueError(
+                    f"Sensor {sensor.name!r} cannot monitor {kind} link {link_name!r} directly. "
+                    "Place it on a network link or subnet at a termination instead."
+                )
+        return self
 
 
 class ProxyConfig(BaseModel):

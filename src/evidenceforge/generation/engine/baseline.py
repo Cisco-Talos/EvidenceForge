@@ -3760,9 +3760,9 @@ class BaselineMixin:
                     session_end_plan=request.session_end_plan,
                     _prepared_rdp_bootstrap=request.prepared_bootstrap,
                 )
-            session_time = (
-                result.session.start_time if result.session is not None else execution_anchor
-            )
+            if result.session is None:
+                continue
+            session_time = result.session.start_time
             self._remember_baseline_rdp_session(
                 target_hostname=target_system.hostname,
                 source_hostname=source_hostname,
@@ -6864,7 +6864,7 @@ class BaselineMixin:
                     session_end_plan=session_end_plan,
                     allow_existing=False,
                 )
-            return session.logon_id
+            return session.logon_id if session is not None else None
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
         session_on_system = next(
@@ -7672,56 +7672,14 @@ class BaselineMixin:
         Walks rules in order (first match wins). Returns 'permit' or 'deny'.
         If no rule matches, returns sensor.default_action.
         """
-        import ipaddress as _ipaddress
+        from evidenceforge.generation.firewall_policy import evaluate_firewall_policy
 
-        def _resolve_segment(ip: str) -> str:
-            """Resolve an IP to a segment name, or 'external' if not in any."""
-            for seg_name, cidr in segment_cidrs.items():
-                try:
-                    if _ipaddress.ip_address(ip) in cidr:
-                        return seg_name
-                except (ValueError, KeyError):
-                    continue
-            return "external"
-
-        def _matches_specifier(ip: str, ip_segment: str, spec: str) -> bool:
-            """Check if an IP/segment matches a rule specifier."""
-            if spec == "any":
-                return True
-            if spec == "external":
-                return ip_segment == "external"
-            if spec == ip_segment:
-                return True
-            # Try IP match
-            try:
-                if _ipaddress.ip_address(ip) == _ipaddress.ip_address(spec):
-                    return True
-            except ValueError:
-                pass
-            # Try CIDR match
-            try:
-                if _ipaddress.ip_address(ip) in _ipaddress.ip_network(spec, strict=False):
-                    return True
-            except ValueError:
-                pass
-            return False
-
-        src_seg = _resolve_segment(src_ip)
-        dst_seg = _resolve_segment(dst_ip)
-
-        for rule in sensor.policy:
-            if not _matches_specifier(src_ip, src_seg, rule.src):
-                continue
-            if not _matches_specifier(dst_ip, dst_seg, rule.dst):
-                continue
-            # Check port (empty list = any)
-            if rule.ports:
-                port_list = [int(p) if isinstance(p, int) else p for p in rule.ports]
-                if "any" not in port_list and dst_port not in port_list:
-                    continue
-            return rule.action
-
-        return sensor.default_action
+        visibility = getattr(getattr(self, "dispatcher", None), "visibility_engine", None)
+        if visibility is not None and visibility.routing is not None:
+            segment_cidrs = visibility.routing.segments
+            src_ip = visibility.resolve_endpoint_ip(src_ip)
+            dst_ip = visibility.resolve_endpoint_ip(dst_ip)
+        return evaluate_firewall_policy(src_ip, dst_ip, dst_port, sensor, segment_cidrs)
 
     def _firewall_controls_connection_path(
         self,
@@ -7743,6 +7701,9 @@ class BaselineMixin:
         visibility = getattr(getattr(self, "dispatcher", None), "visibility_engine", None)
         if visibility is not None and not visibility.firewall_traverses(sensor, src_ip, dst_ip):
             return False
+
+        if visibility is not None and visibility.routing is not None:
+            return True
 
         src_segments = _resolve_segments(src_ip)
         dst_segments = _resolve_segments(dst_ip)
@@ -8828,7 +8789,7 @@ class BaselineMixin:
                 terminal_activity_plans = []
             if activities and hasattr(self, "world_planner"):
                 if session_end_plan is None:
-                    self.world_planner.ensure_user_session(
+                    session = self.world_planner.ensure_user_session(
                         user,
                         system,
                         event_time,
@@ -8841,7 +8802,7 @@ class BaselineMixin:
                         ),
                     )
                 else:
-                    self.world_planner.ensure_user_session(
+                    session = self.world_planner.ensure_user_session(
                         user,
                         system,
                         event_time,
@@ -8850,6 +8811,8 @@ class BaselineMixin:
                         session_end_plan=session_end_plan,
                         allow_existing=False,
                     )
+                if session is None:
+                    return
             elif activities:
                 self._ensure_session_on_system(user, system, event_time, rng)
 
@@ -14240,6 +14203,8 @@ class BaselineMixin:
                         allow_existing=True,
                         required_until=current_hour + timedelta(hours=1),
                     )
+                    if bootstrap.session is None:
+                        continue
                     terminal_transport_close = (
                         getattr(bootstrap.session, "network_close_time", None)
                         if terminal_pass

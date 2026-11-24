@@ -97,6 +97,7 @@ def _surface_paths(package_root: Path) -> tuple[Path, ...]:
         package_root / "_windows_cleanup_native.py",
         package_root / "_windows_paths.py",
         package_root / "models" / "scenario.py",
+        package_root / "models" / "routing.py",
         package_root / "output_targets.py",
         package_root / "utils" / "ids.py",
         package_root / "utils" / "platforms.py",

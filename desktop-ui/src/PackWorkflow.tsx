@@ -37,6 +37,10 @@ export function PackWorkflow({ item, api, onPrepare }: {
     <RequestFeedback pending={!!checking} label="Validating pack and locked dependencies…" error={activity?.error || error} completedAt={activity?.completedAt || checkedAt} completedLabel="Checked" previousLabel={!checking && (activity?.error || error) && review ? "Last available pack review:" : undefined} />
     {!checking && review && (review.valid ? <>
       <p className="state-success"><ShieldCheck size={16} /> Pack and locked dependencies passed validation.</p>
+      {review.warnings?.map((warning) => <div key={warning.field_path}>
+        <p className="state-warning"><TriangleAlert size={16} aria-hidden="true" />{warning.message}</p>
+        {warning.suggestion && <p className="muted">{warning.suggestion}</p>}
+      </div>)}
       <p><strong>{review.reference}</strong></p>
       <p className="muted small">Digest: <code>{review.digest}</code></p>
       <h4>Industry dependencies</h4>{review.dependencies?.length ? <ul>{review.dependencies.map((dependency) => <li key={dependency}>{dependency}</li>)}</ul> : <p className="muted">No industry dependencies.</p>}

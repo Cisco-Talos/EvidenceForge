@@ -762,13 +762,12 @@ Studio-wide rewrite unless the task asks for it.
 - Page titles live in the top bar as the page's `h1`; primary page actions (New scenario, New pack)
   sit beside it. Libraries refresh automatically on entry and focus; do not add manual refresh
   buttons.
-- The scenario workspace shows readiness as a labeled pipeline (Author → Validate → Generate →
-  Evaluate) via `ReadinessPipeline` (`src/ReadinessPipeline.tsx`). Environment is a reference
-  section, not a step: it is computed for `nextStep` but not drawn. Tabs and Overview cards use the
-  same verbs (Author, Validate, Generate & Evaluate; packs: Validate & Release). It promotes exactly
-  one next action (`nextStep`) as the surface's only primary button; section headers must not
-  repeat the promoted action. Derive step state from the existing `scenarioStates`/
-  `environmentState` helpers; do not add parallel status logic.
+- The scenario workspace shows readiness as a labeled pipeline (Author → Validate → Visualize →
+  Generate → Evaluate) via `ReadinessPipeline` (`src/ReadinessPipeline.tsx`). Environment is a
+  reference section considered by `nextStep`. Visualize is an optional review with a neutral
+  status. Section headers use the same verbs as the tabs. The pipeline promotes one next
+  action (`nextStep`) as the surface's only primary button, and section headers omit that action.
+  Derive operation status from the existing `scenarioStates` and `environmentState` helpers.
 - Workspace sections are tabs over an Overview: Overview shows each `WorkspaceSection` header as an
   equal-height card, and a tab or card shows that one section expanded. Keep hidden sections mounted
   (`hidden`) so in-progress inspection survives tab switches. Chat focus remains the dedicated

@@ -218,6 +218,8 @@ def handle_spillage(
             time,
             rng,
         )
+        if spill_logon_id is None:
+            return context.malicious_event
     if spec.surface in HTTP_SURFACES:
         # The credential leaks into a web server's access log; pick the
         # destination web server (the validator requires one to exist).
@@ -287,6 +289,8 @@ def handle_adversarial_payload(
             time,
             rng,
         )
+        if payload_logon_id is None:
+            return context.malicious_event
     if spec.surface in HTTP_SURFACES:
         # The payload rides to a web server's access log; pick the destination.
         # An authored `scheme:` (http/https) forces the transport; otherwise the

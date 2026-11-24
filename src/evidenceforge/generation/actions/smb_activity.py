@@ -616,6 +616,20 @@ class SmbActivityActionBundle:
         server = preparation.server
         client_system = preparation.client_system
         client_ip = preparation.client_ip
+        visibility = getattr(self.executor.dispatcher, "visibility_engine", None)
+        if visibility is not None and visibility.routing is not None:
+            flow = visibility.routed_connection(client_ip, server.ip, 445)
+            if not flow.reachable:
+                uid = self.executor.generate_connection(
+                    src_ip=client_ip,
+                    dst_ip=server.ip,
+                    dst_port=445,
+                    time=self.request.time,
+                    source_system=client_system,
+                    suppress_application_side_effects=True,
+                    emit_dns=False,
+                )
+                return SmbActivityResult("", (), (uid,) if uid else (), (), self.request.time)
         auth_protocol = preparation.auth_protocol
         principal_user = preparation.principal_user
         effective_uid = preparation.effective_uid

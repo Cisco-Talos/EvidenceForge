@@ -541,6 +541,21 @@ class ProxyTransactionActionBundle:
         dst_ip = request.dst_ip
         src_port = request.src_port
 
+        visibility = getattr(executor.dispatcher, "visibility_engine", None)
+        if visibility is not None and visibility.routing is not None:
+            flow = visibility.routed_connection(request.src_ip, proxy_sys.ip, listener_port)
+            if not flow.reachable:
+                return executor.generate_connection(
+                    src_ip=request.src_ip,
+                    dst_ip=proxy_sys.ip,
+                    dst_port=listener_port,
+                    time=request.time,
+                    source_system=request.source_system,
+                    src_port=request.src_port,
+                    proxy_bypass=True,
+                    emit_dns=False,
+                )
+
         planned_request_count = max(
             1,
             int(request.http.flow_transaction_count or 1) if request.http is not None else 1,
@@ -624,6 +639,21 @@ class ProxyTransactionActionBundle:
                 elif not request.preserve_explicit_proxy_dst_ip:
                     dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
 
+        if visibility is not None and visibility.routing is not None:
+            flow = visibility.routed_connection(proxy_sys.ip, dst_ip, request.dst_port)
+            if not flow.reachable:
+                executor.generate_connection(
+                    src_ip=proxy_sys.ip,
+                    dst_ip=dst_ip,
+                    dst_port=request.dst_port,
+                    time=request.time,
+                    source_system=proxy_sys,
+                    proxy_bypass=True,
+                    emit_dns=False,
+                )
+                proxy_context = replace(proxy_context, status_code=502)
+                if proxy_context.method == "CONNECT":
+                    proxy_context = self._shape_failed_connect(proxy_context)
         affinity = self._channel_affinity(
             proxy_context=proxy_context,
             proxy_sys=proxy_sys,
