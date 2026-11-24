@@ -31,11 +31,25 @@ If no network config is provided, all connections are visible (backward compat).
 import ipaddress
 import logging
 import random
+from dataclasses import dataclass
 
 from evidenceforge.events.contexts import NatContext
+from evidenceforge.generation.firewall_policy import evaluate_firewall_policy
+from evidenceforge.generation.routing import Path, RoutingTable
 from evidenceforge.models.scenario import NatRule, NetworkConfig, NetworkSensor, System
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RoutedConnection:
+    forward: Path
+    reverse: Path
+    denied_by: NetworkSensor | None = None
+
+    @property
+    def reachable(self) -> bool:
+        return self.forward.delivered and self.reverse.delivered
 
 
 class NetworkVisibilityEngine:
@@ -65,9 +79,15 @@ class NetworkVisibilityEngine:
         self._pat_port_counters: dict[tuple[str, int], int] = {}
         # VIP routing: static NAT mapped_ip ↔ real_ip lookups
         self._vip_to_real_ip: dict[str, str] = {}
+        self._vip_firewall: dict[str, str] = {}
         self._real_ip_to_vip: dict[str, str] = {}
         # Public address space for external scan targets
         self._public_cidrs: list[ipaddress.IPv4Network] = []
+        self.routing = (
+            RoutingTable(network_config, systems)
+            if network_config is not None and network_config.routing is not None
+            else None
+        )
 
         if self._enabled:
             self._build_topology(network_config, systems)
@@ -126,12 +146,187 @@ class NetworkVisibilityEngine:
         """
         if sensor.type != "firewall" or not src_ip or not dst_ip:
             return True
+        if self.routing is not None:
+            return any(
+                self.routing.firewalls.get(hop.forwarder) == sensor.name
+                for hop in self.routed_connection(src_ip, dst_ip).forward.hops
+            )
         if src_ip in self._vip_to_real_ip or dst_ip in self._vip_to_real_ip:
             return True
         try:
             return self._interface_for(sensor, src_ip) != self._interface_for(sensor, dst_ip)
         except ValueError:
             return True
+
+    def routed_connection(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int | None = None,
+        *,
+        denied_entities: tuple[str, ...] | None = None,
+    ) -> RoutedConnection | None:
+        """Resolve the observed prefix and return path for a stateful flow."""
+        if self.routing is None:
+            return None
+        src, dst = self.resolve_endpoint_ip(src_ip), self.resolve_endpoint_ip(dst_ip)
+        try:
+            forward = self.routing.trace(src, dst)
+        except ValueError:
+            return RoutedConnection(Path((), False, "invalid endpoint"), Path((), False))
+        translator = self._vip_firewall.get(dst_ip)
+        if translator is not None and not any(
+            self.routing.firewalls.get(hop.forwarder) == translator for hop in forward.hops
+        ):
+            # Follow the address actually requested. A shortcut to the private
+            # endpoint does not carry a packet addressed to its public VIP.
+            attempted = self.routing.trace(src, dst_ip)
+            stop = next(
+                (
+                    index
+                    for index, hop in enumerate(attempted.hops)
+                    if self.routing.firewalls.get(hop.forwarder) == translator
+                ),
+                len(attempted.hops),
+            )
+            forward = Path(
+                attempted.hops[:stop], False, f"VIP {dst_ip} needs a path through {translator}"
+            )
+        for index, hop in enumerate(forward.hops):
+            sensor_name = self.routing.firewalls.get(hop.forwarder)
+            sensor = self.get_sensor(sensor_name) if sensor_name else None
+            if sensor is None:
+                continue
+            forced_deny = denied_entities is not None and (
+                not denied_entities
+                or {sensor.name.casefold(), (sensor.hostname or sensor.name).casefold()}
+                & {name.casefold() for name in denied_entities}
+            )
+            policy_deny = (
+                dst_port is not None
+                and evaluate_firewall_policy(src, dst, dst_port, sensor, self.routing.segments)
+                == "deny"
+            )
+            if forced_deny or policy_deny:
+                return RoutedConnection(
+                    Path(forward.hops[:index], False, f"{sensor.name} denied traffic"),
+                    Path((), False),
+                    sensor,
+                )
+        reverse = self.routing.trace(dst, src) if forward.delivered else Path((), False)
+        return RoutedConnection(forward, reverse)
+
+    def _routed_sensors(
+        self, src_ip: str, dst_ip: str, flow: RoutedConnection, *, has_response: bool
+    ) -> list[NetworkSensor]:
+        src = self.resolve_endpoint_ip(src_ip)
+        dst = self.resolve_endpoint_ip(dst_ip)
+        if src == dst and not flow.forward.hops:
+            return []
+        source_segments = self._resolve_ip_segments(src)
+        destination_segments = self._resolve_ip_segments(dst)
+        hops = flow.forward.hops + (flow.reverse.hops if flow.reachable and has_response else ())
+        links = {hop.link for hop in hops}
+        firewalls = {
+            self.routing.firewalls[hop.forwarder]
+            for hop in flow.forward.hops
+            if hop.forwarder in self.routing.firewalls
+        }
+        if flow.denied_by is not None:
+            firewalls.add(flow.denied_by.name)
+        observed = {self.routing.topology.links[link].segment for link in links}
+        # Same-subnet unicast can reach a segment SPAN without crossing an uplink.
+        if not hops and flow.forward.delivered:
+            observed.update(source_segments & destination_segments)
+        visible_source = source_segments & observed
+        visible_destination = destination_segments & observed if flow.forward.delivered else set()
+        sensors: list[NetworkSensor] = []
+        for sensor in self._sensors:
+            if sensor.type == "firewall":
+                visible = sensor.name in firewalls
+            elif sensor.link_tap is not None:
+                visible = sensor.link_tap.link in links and (
+                    sensor.link_tap.scope == "all" or self.routing.is_internet_flow(src, dst)
+                )
+            else:
+                visible = self._sensor_can_observe(sensor, visible_source, visible_destination)
+            if visible:
+                sensors.append(sensor)
+        return sensors
+
+    def tap_path_role(self, sensor: NetworkSensor, src_ip: str, dst_ip: str, dst_port: int) -> str:
+        """Identify a TAP that sees only one direction of an established flow."""
+        if sensor.link_tap is None:
+            return ""
+        flow = self.routed_connection(src_ip, dst_ip, dst_port)
+        if flow is None or not flow.reachable:
+            return ""
+        link = sensor.link_tap.link
+        forward = any(hop.link == link for hop in flow.forward.hops)
+        reverse = any(hop.link == link for hop in flow.reverse.hops)
+        if forward != reverse:
+            return "forward_only" if forward else "return_only"
+        return ""
+
+    def forwarding_interfaces(self, hostname: str, src_ip: str, dst_ip: str) -> tuple[str, str]:
+        """Get the actual ingress and egress interface names at one firewall."""
+        sensor = self.get_sensor(hostname)
+        if sensor is None:
+            return "", ""
+        if self.routing is not None:
+            flow = self.routed_connection(src_ip, dst_ip)
+            for index, hop in enumerate(flow.forward.hops):
+                if index and self.routing.firewalls.get(hop.forwarder) == sensor.name:
+                    links = self.routing.topology.links
+                    return (
+                        links[flow.forward.hops[index - 1].link].interfaces[hop.forwarder].name,
+                        links[hop.link].interfaces[hop.forwarder].name,
+                    )
+        return self._interface_for(sensor, src_ip), self._interface_for(sensor, dst_ip)
+
+    def tap_uses_external_tuple(
+        self, sensor: NetworkSensor, src_ip: str, dst_ip: str, nat: NatContext
+    ) -> bool:
+        """Locate the TAP relative to the translation applied to this connection."""
+        if self.routing is None or sensor.link_tap is None:
+            return False
+        flow = self.routed_connection(src_ip, dst_ip)
+        if flow is None:
+            return False
+        pre_nat_dst = nat.pre_nat_dst_ip or dst_ip
+        destination_nat = nat.nat_type == "static" and nat.mapped_dst_ip != pre_nat_dst
+        if destination_nat:
+            translator = self._vip_firewall.get(pre_nat_dst)
+        else:
+            translator = None
+            for hop in flow.forward.hops:
+                name = self.routing.firewalls.get(hop.forwarder)
+                firewall = self.get_sensor(name) if name else None
+                if firewall is not None and any(
+                    rule.type == nat.nat_type
+                    and rule.mapped_ip == nat.mapped_src_ip
+                    and (
+                        rule.real_ip == src_ip
+                        if rule.type == "static"
+                        else self._ip_matches_src(src_ip, rule)
+                    )
+                    for rule in firewall.nat_rules
+                ):
+                    translator = name
+                    break
+        if translator is None:
+            return False
+        for path, before_translation in (
+            (flow.forward, destination_nat),
+            (flow.reverse, not destination_nat),
+        ):
+            external = before_translation
+            for hop in path.hops:
+                if self.routing.firewalls.get(hop.forwarder) == translator:
+                    external = not before_translation
+                if hop.link == sensor.link_tap.link:
+                    return external
+        return False
 
     def infer_sensor_path_role(
         self,
@@ -213,6 +408,7 @@ class NetworkVisibilityEngine:
             for rule in sensor.nat_rules:
                 if rule.type == "static" and rule.mapped_ip and rule.real_ip:
                     self._vip_to_real_ip[rule.mapped_ip] = rule.real_ip
+                    self._vip_firewall[rule.mapped_ip] = sensor.name
                     self._real_ip_to_vip[rule.real_ip] = rule.mapped_ip
                     # VIP inherits the real_ip's segment membership
                     real_segs = self._ip_to_segments.get(rule.real_ip, set())
@@ -275,11 +471,18 @@ class NetworkVisibilityEngine:
     def _resolve_ip_segments(self, ip: str) -> set[str]:
         """Return the set of segment names an IP belongs to.
 
-        First checks the pre-built IP→segment map. If not found, falls back
-        to checking CIDR containment (for IPs not explicitly mapped).
+        Routed traffic uses the most specific subnet selected by the forwarding
+        table. The legacy model can associate an address with multiple segments.
 
         Returns empty set for external IPs not in any segment.
         """
+        if self.routing is not None:
+            try:
+                segment = self.routing.segment(ipaddress.ip_address(self.resolve_endpoint_ip(ip)))
+            except ValueError:
+                return set()
+            return {segment} if segment is not None else set()
+
         # Fast path: pre-mapped IP
         if ip in self._ip_to_segments:
             return self._ip_to_segments[ip]
@@ -358,26 +561,34 @@ class NetworkVisibilityEngine:
         if not self._enabled:
             return True
 
+        if self.routing is not None:
+            return bool(self.get_observing_sensors(src_ip, dst_ip))
+
         src_segments = self._resolve_ip_segments(src_ip)
         dst_segments = self._resolve_ip_segments(dst_ip)
-
         return any(
             self._sensor_can_observe(sensor, src_segments, dst_segments)
             and self.firewall_traverses(sensor, src_ip, dst_ip)
             for sensor in self._sensors
         )
 
-    def get_observing_sensors(self, src_ip: str, dst_ip: str) -> list[NetworkSensor]:
-        """Return list of sensors that would observe this connection.
-
-        If no network config, returns empty list (caller uses default behavior).
-        """
+    def get_observing_sensors(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int | None = None,
+        *,
+        denied_entities: tuple[str, ...] | None = None,
+        has_response: bool = True,
+    ) -> list[NetworkSensor]:
+        """Return sensors on the resolved path, or with legacy segment coverage."""
         if not self._enabled:
             return []
-
+        flow = self.routed_connection(src_ip, dst_ip, dst_port, denied_entities=denied_entities)
+        if flow is not None:
+            return self._routed_sensors(src_ip, dst_ip, flow, has_response=has_response)
         src_segments = self._resolve_ip_segments(src_ip)
         dst_segments = self._resolve_ip_segments(dst_ip)
-
         return [
             sensor
             for sensor in self._sensors
@@ -435,6 +646,9 @@ class NetworkVisibilityEngine:
         """
         if not self._enabled:
             return []
+
+        if self.routing is not None and dst_ip:
+            return self.get_observing_sensors(src_ip, dst_ip, denied_entities=())
 
         src_segments = self._resolve_ip_segments(src_ip)
         if not src_segments:
@@ -545,17 +759,27 @@ class NetworkVisibilityEngine:
         when traffic crosses a segment boundary — same-segment traffic
         is never NATted.
         """
+        flow = self.routed_connection(src_ip, dst_ip, dst_port)
+        if flow is None:
+            traversed = self._sensors
+        else:
+            names = dict.fromkeys(
+                self.routing.firewalls[hop.forwarder]
+                for hop in flow.forward.hops
+                if hop.forwarder in self.routing.firewalls
+            )
+            traversed = [sensor for name in names if (sensor := self.get_sensor(name)) is not None]
         src_segments = self._resolve_ip_segments(src_ip)
         dst_segments = self._resolve_ip_segments(dst_ip)
 
         # Static VIPs inherit the real host's segment for visibility, but a
         # connection aimed at the public VIP still needs DNAT context before
         # endpoint sources render the host-local tuple.
-        for sensor in self._sensors:
+        for sensor in traversed:
             if sensor.type != "firewall" or not sensor.nat_rules:
                 continue
             sensor_segs = set(sensor.monitoring_segments)
-            if not (sensor_segs & src_segments or sensor_segs & dst_segments):
+            if flow is None and not (sensor_segs & src_segments or sensor_segs & dst_segments):
                 continue
             for rule in sensor.nat_rules:
                 if (
@@ -577,7 +801,7 @@ class NetworkVisibilityEngine:
             return None
 
         # Iterate firewall sensors with NAT rules, scoped to connection path
-        for sensor in self._sensors:
+        for sensor in traversed:
             if sensor.type != "firewall" or not sensor.nat_rules:
                 continue
             sensor_segs = set(sensor.monitoring_segments)
@@ -587,7 +811,7 @@ class NetworkVisibilityEngine:
             has_static_vip_match = any(
                 r.type == "static" and r.mapped_ip == dst_ip for r in sensor.nat_rules
             )
-            if not (
+            if flow is None and not (
                 sensor_segs & src_segments or sensor_segs & dst_segments or has_static_vip_match
             ):
                 continue

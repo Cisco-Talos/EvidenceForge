@@ -2510,6 +2510,20 @@ class NetworkObservationPlanner:
                 if self.visibility_engine is not None
                 else "unspecified"
             )
+            directional_role = (
+                self.visibility_engine.tap_path_role(
+                    sensor, transaction.src_ip, transaction.dst_ip, transaction.dst_port
+                )
+                if self.visibility_engine is not None and sensor is not None
+                else ""
+            )
+            if directional_role:
+                if directional_role == "return_only" and transaction.resp_pkts == 0:
+                    continue
+                path_role = directional_role
+                formats = formats & {"zeek_conn"}
+                if not formats:
+                    continue
             tuple_view, local_orig, local_resp = self._sensor_view(event, sensor)
             observed_start, observed_close = self._observed_interval(
                 transaction.started_at,
@@ -2530,6 +2544,15 @@ class NetworkObservationPlanner:
                 source=sensor_identity.casefold(),
                 lifecycle_id=path_role,
             )
+            src_interface, dst_interface = (
+                self.visibility_engine.forwarding_interfaces(
+                    sensor_identity, transaction.src_ip, transaction.dst_ip
+                )
+                if self.visibility_engine is not None
+                and sensor is not None
+                and sensor.type == "firewall"
+                else ("", "")
+            )
             firewall_reason, firewall_teardown = self._firewall_teardown_plan(
                 event,
                 formats,
@@ -2539,21 +2562,13 @@ class NetworkObservationPlanner:
                 scope=observation_scope,
                 runtime=runtime,
                 source_interface=(
-                    (event.firewall.src_interface if event.firewall is not None else "")
-                    or (
-                        self.visibility_engine.sensor_interface(sensor_identity, tuple_view.src_ip)
-                        if self.visibility_engine is not None
-                        else ""
-                    )
-                ),
+                    event.firewall.src_interface if event.firewall is not None else ""
+                )
+                or src_interface,
                 destination_interface=(
-                    (event.firewall.dst_interface if event.firewall is not None else "")
-                    or (
-                        self.visibility_engine.sensor_interface(sensor_identity, tuple_view.dst_ip)
-                        if self.visibility_engine is not None
-                        else ""
-                    )
-                ),
+                    event.firewall.dst_interface if event.firewall is not None else ""
+                )
+                or dst_interface,
                 security_levels=sensor.interface_security_levels if sensor is not None else None,
             )
             firewall_teardown_observed = self._before_output_end(firewall_teardown)
@@ -2584,6 +2599,25 @@ class NetworkObservationPlanner:
             history, file_observations, request_body_len, response_body_len = (
                 self._observed_protocol(event, observed_traffic)
             )
+            if directional_role:
+                forward_only = directional_role == "forward_only"
+                if forward_only:
+                    observed_traffic = replace(
+                        observed_traffic,
+                        resp=DirectionalTrafficLedger(),
+                        missed_resp_bytes=capture_traffic.missed_resp_bytes
+                        + capture_traffic.resp.payload_bytes,
+                    )
+                else:
+                    observed_traffic = replace(
+                        observed_traffic,
+                        orig=DirectionalTrafficLedger(),
+                        missed_orig_bytes=capture_traffic.missed_orig_bytes
+                        + capture_traffic.orig.payload_bytes,
+                    )
+                history = "".join(flag for flag in history if flag.isupper() == forward_only)
+                file_observations = ()
+                request_body_len = response_body_len = None
             source_times, source_durations = self._source_native_protocol_timing(
                 event,
                 canonical_start=ensure_utc(transaction.started_at),
@@ -3034,6 +3068,13 @@ class NetworkObservationPlanner:
         ):
             return tuple_view, local_orig, local_resp
 
+        external_tap = (
+            self.visibility_engine.tap_uses_external_tuple(
+                sensor, transaction.src_ip, transaction.dst_ip, nat
+            )
+            if sensor.link_tap is not None
+            else None
+        )
         sensor_segments = set(sensor.monitoring_segments)
         inbound = nat.nat_type == "static" and bool(
             nat.pre_nat_dst_ip or (nat.mapped_dst_ip and nat.mapped_dst_ip != transaction.dst_ip)
@@ -3044,7 +3085,11 @@ class NetworkObservationPlanner:
             global_dst_ip = nat.pre_nat_dst_ip or transaction.dst_ip
             global_dst_port = nat.pre_nat_dst_port or transaction.dst_port
             local_segments = self.visibility_engine._resolve_ip_segments(local_dst_ip)
-            inside = bool(sensor_segments & local_segments)
+            inside = (
+                not external_tap
+                if external_tap is not None
+                else bool(sensor_segments & local_segments)
+            )
             tuple_view = NetworkTuple(
                 src_ip=transaction.src_ip,
                 src_port=transaction.src_port,
@@ -3055,7 +3100,12 @@ class NetworkObservationPlanner:
             return tuple_view, local_orig, local_resp or inside
 
         source_segments = self.visibility_engine._resolve_ip_segments(transaction.src_ip)
-        if sensor_segments & source_segments:
+        inside = (
+            not external_tap
+            if external_tap is not None
+            else bool(sensor_segments & source_segments)
+        )
+        if inside:
             return tuple_view, local_orig, local_resp
         tuple_view = NetworkTuple(
             src_ip=nat.mapped_src_ip or transaction.src_ip,

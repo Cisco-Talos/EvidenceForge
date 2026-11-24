@@ -2216,10 +2216,10 @@ test("workspace opens on an Overview with a readiness strip, section tabs and no
   const { container } = await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   const tabs = screen.getByRole("tablist", { name: "Workspace sections" });
-  expect(within(tabs).getAllByRole("tab").map((entry) => entry.getAttribute("aria-label"))).toEqual(["Overview", "Author", "Environment", "Network", "Validate", "Generate & Evaluate"]);
+  expect(within(tabs).getAllByRole("tab").map((entry) => entry.getAttribute("aria-label"))).toEqual(["Overview", "Author", "Environment", "Validate", "Visualize", "Generate & Evaluate"]);
   expect(within(tabs).getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
   const readiness = screen.getByRole("region", { name: "Readiness" });
-  expect(within(readiness).getAllByRole("listitem").map((entry) => entry.querySelector("strong")?.textContent)).toEqual(["Author", "Validate", "Generate", "Evaluate"]);
+  expect(within(readiness).getAllByRole("listitem").map((entry) => entry.querySelector("strong")?.textContent)).toEqual(["Author", "Validate", "Visualize", "Generate", "Evaluate"]);
   expect(screen.queryByRole("region", { name: "Scenario YAML" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Score a run" })).toBeNull();
   for (const name of ["Author", "Environment", "Generate & Evaluate"]) {
@@ -2232,6 +2232,27 @@ test("workspace opens on an Overview with a readiness strip, section tabs and no
   expect(screen.queryByRole("region", { name: "Environment", exact: true })).toBeNull();
   await user.click(within(tabs).getByRole("tab", { name: "Overview" }));
   expect(screen.getByRole("region", { name: "Environment", exact: true })).toBeVisible();
+});
+
+test("validation recommends Visualize and generation is available before and after opening it", async () => {
+  const { jobs, validations } = snapshot;
+  snapshot.jobs = [];
+  snapshot.validations = { alpha: { source_sha256: "sha-alpha", completed_at: 1800000000,
+    result: { exit_code: 0, error: "", report: { valid: true, issues: [] } } } };
+  try {
+    await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const readiness = screen.getByRole("region", { name: "Readiness" });
+    expect(within(screen.getByRole("region", { name: "Generate & Evaluate" })).getByRole("button", { name: "Generate", exact: true })).toBeEnabled();
+    await user.click(within(readiness).getByRole("button", { name: "Visualize network", exact: true }));
+    expect(screen.getByRole("tab", { name: "Visualize" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("region", { name: "Visualize" })).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Generate & Evaluate" }));
+    const returnedReadiness = within(screen.getByRole("region", { name: "Readiness" }));
+    expect(returnedReadiness.getByRole("button", { name: "Generate", exact: true })).toBeEnabled();
+    expect(returnedReadiness.getByRole("button", { name: "Visualize: Review diagram" })).toBeEnabled();
+  } finally { snapshot.jobs = jobs; snapshot.validations = validations; }
 });
 
 test("returning from chat preserves the draft and expanded workspace sections", async () => {
@@ -2446,9 +2467,11 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
       expect(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Packs" })).toHaveClass("selected");
       expect(container.querySelector(".back-link")).toHaveTextContent("Packs");
       expect(pack.hidden).toBe(true);
-      const packEnvironment = screen.queryByRole("tab", { name: "Network", exact: true });
+      const packEnvironment = screen.queryByRole("tab", { name: "Visualize", exact: true });
       if (kind === "organization_pack") {
         expect(packEnvironment).toBeVisible();
+        expect(within(screen.getByRole("tablist", { name: "Workspace sections" })).getAllByRole("tab").map((entry) => entry.getAttribute("aria-label")))
+          .toEqual(["Overview", "Author", "Validate & Release", "Visualize", "Assets"]);
         await user.click(packEnvironment!);
         expect(await screen.findByRole("button", { name: /Segment office/ })).toBeVisible();
       } else {
@@ -2522,7 +2545,7 @@ test("Environment loads lazily and reuses its inspection until inputs change or 
   } finally { request.mockImplementation(original); snapshot.items = originalItems; snapshot.dependencies = originalDependencies; }
 });
 
-test("Network and Environment share one lazily resolved scenario revision", async () => {
+test("Visualize and Environment share one lazily resolved scenario revision", async () => {
   const apiRequest = vi.mocked(useStudio().api!.request);
   const original = apiRequest.getMockImplementation()!;
   const originalConversations = snapshot.conversations;
@@ -2553,7 +2576,8 @@ test("Network and Environment share one lazily resolved scenario revision", asyn
     await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    await user.click(screen.getByRole("tab", { name: "Network" }));
+    await user.click(within(screen.getByRole("region", { name: "Readiness" })).getByRole("button", { name: "Visualize: Review diagram" }));
+    expect(screen.getByRole("tab", { name: "Visualize" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("button", { name: /Segment office/ })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Assets" })).toBeNull();
     await user.click(screen.getByRole("tab", { name: "Environment" }));

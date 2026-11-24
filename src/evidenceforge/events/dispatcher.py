@@ -19455,6 +19455,17 @@ class EventDispatcher:
                 self.visibility_engine.get_log_formats_for_link_local(event.network.src_ip)
             )
             sensors = self.visibility_engine.get_link_local_sensors(event.network.src_ip)
+        elif self.visibility_engine.routing is not None:
+            sensors = self.visibility_engine.get_observing_sensors(
+                event.network.src_ip,
+                event.network.dst_ip,
+                event.network.dst_port,
+                denied_entities=event.firewall.enforcing_entities if is_fw_deny else None,
+                has_response=event.network.resp_pkts > 0,
+            )
+            event._visible_network_formats = expand_formats(
+                {name for sensor in sensors for name in sensor.log_formats}
+            )
         elif is_fw_deny:
             event._visible_network_formats = set(
                 self.visibility_engine.get_log_formats_for_source_only(

@@ -27,7 +27,7 @@ from evidenceforge.studio.state_migrations import (
 )
 from evidenceforge.studio.state_schema import BASELINE_SQL, FTS_SQL, LEDGER_SQL, LEGACY_TABLE_SETS
 
-DATABASE_VERSION = 7
+DATABASE_VERSION = 8
 FTS_TABLES = {
     "items_fts",
     "items_fts_data",
@@ -154,6 +154,14 @@ MIGRATIONS = (
         description="Retain optional network diagram context in chat drafts and dispatch claims",
         affected=("chat_controls", "chat_inputs"),
         # Older records have no attachments; leave their payloads untouched.
+        sql="",
+    ),
+    Migration(
+        id="studio-db-0008",
+        source=7,
+        target=8,
+        description="Preserve authored routing and the firewall overlay in captured diagrams",
+        affected=("chat_controls", "chat_inputs"),
         sql="",
     ),
 )
@@ -373,6 +381,12 @@ def validate_records(connection: sqlite3.Connection) -> None:
 
         models["chat_controls"] = ChatControlV7
         models["chat_inputs"] = ChatInputV7
+    if connection.execute("PRAGMA user_version").fetchone()[0] >= 8:
+        from evidenceforge.studio.state_records_v8 import ChatControl as ChatControlV8
+        from evidenceforge.studio.state_records_v8 import ChatInput as ChatInputV8
+
+        models["chat_controls"] = ChatControlV8
+        models["chat_inputs"] = ChatInputV8
     for table, model in models.items():
         if table not in existing:
             continue

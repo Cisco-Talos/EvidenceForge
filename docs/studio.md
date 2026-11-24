@@ -535,27 +535,53 @@ within the scenario workspace. Changed scenario/dependency/configuration inputs 
 environment** trigger a new inspection. Progress and the last check time appear in the section
 header; refresh failures remain inline.
 
-The **Network** tab draws subnet rails labeled with their names and CIDR blocks. A shared subnet
-can form the backbone between modeled network devices. Solid lines show declared firewall
-interfaces, and dashed lines show device membership in a subnet. The sensor key identifies TAP
-circles with solid stems and SPAN diamonds with dashed stems. Each rail shows the sensors that
-fit. When space runs out, click its **+N** badge to see the remaining sensors. The firewall's
-details show its monitored subnets and log formats.
+The scenario workflow runs from **Author** through **Validate**, **Visualize**,
+**Generate**, and **Evaluate**. After validation, Studio suggests reviewing the diagram
+before a new generation. The review is optional, and you can open the diagram while
+diagnosing validation findings.
+
+Validation warns when a firewall uses legacy segment-based visibility. Use authored
+routing for new firewall models so log coverage follows traffic the device handles
+across its interfaces. Existing scenarios can still generate with legacy visibility.
+
+The **Visualize** tab labels subnet rails with their names and CIDR blocks. Ordinary
+network links use solid gray lines. WAN links use blue dash-dot lines and VPN links use
+violet long dashes. The map and key label both link types. Short gray dashes show device
+membership in a shared subnet in scenarios that use the original network model.
+An authored Internet boundary appears as a cloud above its edge device. Separate IPv4
+and IPv6 boundaries carry address-family labels.
+**Firewall scopes** highlights subnets that
+share a firewall policy interface. The key matches each named scope to its color and outline.
+Subnets that belong to multiple scopes show a band for each one. The overlay starts enabled
+for the original model and can be shown alongside authored routing. Routed subnets are grouped
+next to the device that connects them. Select a subnet name to see its gateway, hosts,
+link type, attached interfaces, and sensors together. Select the Internet cloud to see
+its uplink details.
+
+The sensor key identifies TAP circles with solid stems and SPAN diamonds with dashed stems.
+When a rail runs out of space, click its **+N** badge to see the remaining sensors. A TAP on
+an ordinary network link can capture all traffic on that link or only traffic to and from
+the Internet. For WAN circuits and VPN tunnels, place sensors on the termination-side network.
 Small host groups expand inline when space permits. Click a branch's host count to expand it,
 and use **Previous** and **Next** to browse larger subnets 12 hosts at a time. The subnet details
 also list its hosts and device associations. Select a host to see its IP address, operating
 system, primary users, and roles. Use **Sensors**, **Firewalls**, and
 **Hosts** to toggle layers.
-Drag the canvas or use the arrow keys to pan. **Fit to view** fits all visible layers, and
-**Expand diagram** fills the Studio window. Press Escape to return to the tab.
+Dense diagrams use fewer subnet columns in a narrow window and keep manual host expansion
+choices as the window resizes. Drag the canvas or use the arrow keys to pan. With focus in
+the diagram, scroll the mouse wheel to zoom around the pointer. **Fit to view** fits all
+visible layers. **Expand diagram** fills the Studio window and focuses the canvas for
+wheel zoom. Press Escape to return to the tab.
 
 Use **Ask about this diagram** to open an Author draft with the full topology for the displayed
-revision. **Ask about this** in the details panel also identifies the selected item. The draft
+revision, including authored routing and the firewall scope setting. **Ask about this** in the
+details panel also identifies the selected item. The draft
 includes a thumbnail of the current viewport by default. Clear **Include current view** to send
 the topology without the image.
 
-An organization pack's **Network** tab shows the selected version or draft's environment
-fragment. Open a consuming scenario to see its composed environment.
+An organization pack's **Visualize** tab follows **Validate & Release** and shows the
+selected version or draft's environment fragment. Open a consuming scenario to see its
+composed environment.
 
 ### Drafts and local releases
 

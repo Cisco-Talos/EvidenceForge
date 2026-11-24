@@ -2742,7 +2742,7 @@ export interface components {
         };
         /**
          * ChatInput
-         * @description Keep the attachment bound to the queued message and its dispatch ID.
+         * @description Queued message with its captured routed diagram.
          */
         ChatInput: {
             /** Id */
@@ -2772,7 +2772,7 @@ export interface components {
             created_at: number;
             /** Error */
             error?: string | null;
-            network_context?: components["schemas"]["NetworkChatContext"] | null;
+            network_context?: components["schemas"]["RoutedNetworkChatContext"] | null;
         };
         /**
          * ChatMessageRequest
@@ -2793,7 +2793,7 @@ export interface components {
             skill_name?: string | null;
             /** Expected Turn Id */
             expected_turn_id?: string | null;
-            network_context?: components["schemas"]["NetworkChatContext"] | null;
+            network_context?: components["schemas"]["RoutedNetworkChatContext"] | null;
         };
         /**
          * ChatPreference
@@ -2947,7 +2947,7 @@ export interface components {
         };
         /**
          * ChatViewState
-         * @description Keep the captured view in the composer until it is sent.
+         * @description Composer state with a routed diagram draft.
          */
         ChatViewState: {
             /**
@@ -2973,7 +2973,7 @@ export interface components {
                 };
             };
             pending_message?: components["schemas"]["ChatDraftSubmission"] | null;
-            network_context?: components["schemas"]["NetworkChatContext"] | null;
+            network_context?: components["schemas"]["RoutedNetworkChatContext"] | null;
             /**
              * Include Current View
              * @default true
@@ -3173,7 +3173,7 @@ export interface components {
             name?: string | null;
             /** Display Name */
             display_name?: string | null;
-            network_context?: components["schemas"]["NetworkChatContext"] | null;
+            network_context?: components["schemas"]["RoutedNetworkChatContext"] | null;
         };
         /**
          * ConversationUpdate
@@ -3329,7 +3329,7 @@ export interface components {
             effective_scenario?: {
                 [key: string]: unknown;
             };
-            topology?: components["schemas"]["TopologyGraph"] | null;
+            topology?: components["schemas"]["RoutedTopologyGraph"] | null;
             /** Field Origins */
             field_origins?: {
                 [key: string]: string;
@@ -3829,6 +3829,20 @@ export interface components {
             release_notes?: string | null;
         };
         /**
+         * LinkTap
+         * @description Observe a declared link, optionally limited to Internet flows.
+         */
+        LinkTap: {
+            /** Link */
+            link: string;
+            /**
+             * Scope
+             * @default all
+             * @enum {string}
+             */
+            scope: "all" | "internet";
+        };
+        /**
          * LinuxSandboxNotice
          * @description A likely Linux sandbox prerequisite reported by Codex.
          */
@@ -3839,29 +3853,6 @@ export interface components {
              * @enum {string}
              */
             code: "bubblewrap_missing" | "user_namespace_restricted";
-        };
-        /**
-         * NetworkChatContext
-         * @description The topology and optional viewport captured when a user opens Author from Network.
-         */
-        NetworkChatContext: {
-            /** Revision */
-            revision: string;
-            topology: components["schemas"]["TopologyGraph"];
-            /** Selected Id */
-            selected_id?: string | null;
-            /** Selection Label */
-            selection_label?: string | null;
-            /** Visible Layers */
-            visible_layers?: ("sensors" | "firewalls" | "hosts")[];
-            /** Expanded Subnet Ids */
-            expanded_subnet_ids?: string[];
-            /** Sensor Key */
-            sensor_key?: {
-                [key: string]: string;
-            };
-            /** Image */
-            image?: string | null;
         };
         /**
          * NoteHistoryEntry
@@ -4069,6 +4060,8 @@ export interface components {
             model_contributions?: {
                 [key: string]: string[];
             };
+            /** Warnings */
+            warnings?: components["schemas"]["ValidationIssue"][];
             /**
              * Error
              * @default
@@ -4086,7 +4079,7 @@ export interface components {
             source_sha256: string;
             /** Digest */
             digest: string;
-            topology: components["schemas"]["TopologyGraph"];
+            topology: components["schemas"]["RoutedTopologyGraph"];
         };
         /**
          * ParentComparison
@@ -4662,6 +4655,121 @@ export interface components {
             calibration_evidence_id: string;
         };
         /**
+         * RoutedNetworkChatContext
+         * @description Capture physical topology and the visibility of the firewall policy overlay.
+         */
+        RoutedNetworkChatContext: {
+            /** Revision */
+            revision: string;
+            topology: components["schemas"]["RoutedTopologyGraph"];
+            /** Selected Id */
+            selected_id?: string | null;
+            /** Selection Label */
+            selection_label?: string | null;
+            /** Visible Layers */
+            visible_layers?: ("sensors" | "firewalls" | "hosts")[];
+            /** Expanded Subnet Ids */
+            expanded_subnet_ids?: string[];
+            /** Sensor Key */
+            sensor_key?: {
+                [key: string]: string;
+            };
+            /** Image */
+            image?: string | null;
+            /** Firewall Scopes Visible */
+            firewall_scopes_visible?: boolean | null;
+        };
+        /**
+         * RoutedTopologyGraph
+         * @description Topology with optional authored routing and physical TAP attachments.
+         */
+        RoutedTopologyGraph: {
+            /** Segments */
+            segments: components["schemas"]["TopologySegment"][];
+            /** Hosts */
+            hosts: components["schemas"]["TopologyHost"][];
+            /** Devices */
+            devices: components["schemas"]["TopologyDevice"][];
+            /** Findings */
+            findings: components["schemas"]["TopologyFinding"][];
+            routing?: components["schemas"]["RoutingTopology"] | null;
+            /** Link Taps */
+            link_taps?: {
+                [key: string]: components["schemas"]["LinkTap"];
+            };
+        };
+        /**
+         * RoutingDevice
+         * @description Forwarding device, optionally represented by a system or firewall sensor.
+         */
+        RoutingDevice: {
+            /**
+             * Kind
+             * @default router
+             * @enum {string}
+             */
+            kind: "router" | "switch" | "firewall";
+            /** System */
+            system?: string | null;
+            /** Firewall */
+            firewall?: string | null;
+        };
+        /**
+         * RoutingInterface
+         * @description One addressed interface on a link.
+         */
+        RoutingInterface: {
+            /** Name */
+            name: string;
+            /** Ip */
+            ip: string;
+        };
+        /**
+         * RoutingLink
+         * @description A segment with attached interfaces, or a link to the Internet boundary.
+         */
+        RoutingLink: {
+            /** Segment */
+            segment?: string | null;
+            /**
+             * Internet
+             * @default false
+             */
+            internet: boolean;
+            /**
+             * Kind
+             * @description Ordinary network link (the default), WAN circuit, or abstract VPN tunnel.
+             * @enum {string}
+             */
+            kind?: "network" | "wan" | "vpn";
+            /** Interfaces */
+            interfaces: {
+                [key: string]: components["schemas"]["RoutingInterface"];
+            };
+        };
+        /**
+         * RoutingTopology
+         * @description Static topology shared by generation, validation, and Studio.
+         */
+        RoutingTopology: {
+            /** Devices */
+            devices: {
+                [key: string]: components["schemas"]["RoutingDevice"];
+            };
+            /** Links */
+            links: {
+                [key: string]: components["schemas"]["RoutingLink"];
+            };
+            /** Gateways */
+            gateways?: {
+                [key: string]: string;
+            };
+            /** Routes */
+            routes?: {
+                [key: string]: components["schemas"]["StaticRoute"][];
+            };
+        };
+        /**
          * RuntimeCleanupReport
          * @description Current cleanup outcome, including warnings that survive a UI reconnect.
          */
@@ -5109,6 +5217,18 @@ export interface components {
             path: string;
         };
         /**
+         * StaticRoute
+         * @description A route via a neighbor's address or an explicit Internet link.
+         */
+        StaticRoute: {
+            /** Destination */
+            destination: string;
+            /** Next Hop */
+            next_hop?: string | null;
+            /** Internet Link */
+            internet_link?: string | null;
+        };
+        /**
          * StudioEvent
          * @description One monotonically numbered change for reconnecting clients.
          */
@@ -5324,20 +5444,6 @@ export interface components {
             message: string;
         };
         /**
-         * TopologyGraph
-         * @description Logical relationships from one environment snapshot, independent of layout.
-         */
-        TopologyGraph: {
-            /** Segments */
-            segments: components["schemas"]["TopologySegment"][];
-            /** Hosts */
-            hosts: components["schemas"]["TopologyHost"][];
-            /** Devices */
-            devices: components["schemas"]["TopologyDevice"][];
-            /** Findings */
-            findings: components["schemas"]["TopologyFinding"][];
-        };
-        /**
          * TopologyHost
          * @description One host and every segment that contains its configured address.
          */
@@ -5389,7 +5495,7 @@ export interface components {
             skill_name?: string | null;
             /** Client Message Id */
             client_message_id?: string | null;
-            network_context?: components["schemas"]["NetworkChatContext"] | null;
+            network_context?: components["schemas"]["RoutedNetworkChatContext"] | null;
         };
         /**
          * TurnSubmission
@@ -5530,6 +5636,26 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * ValidationIssue
+         * @description Represents a validation issue found in a scenario.
+         *
+         *     Attributes:
+         *         severity: "error" (blocks generation), "warning", or "info" (coverage note)
+         *         field_path: Dot-separated path to the problematic field
+         *         message: Human-readable description of the issue
+         *         suggestion: Optional actionable suggestion to fix the issue
+         */
+        ValidationIssue: {
+            /** Severity */
+            severity: string;
+            /** Field Path */
+            field_path: string;
+            /** Message */
+            message: string;
+            /** Suggestion */
+            suggestion?: string | null;
         };
         /**
          * ValidationProvenance

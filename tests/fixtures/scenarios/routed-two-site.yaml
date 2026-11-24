@@ -1,0 +1,121 @@
+schema_version: "3.0"
+status: draft
+draft_id: 7acfa604-950c-47a4-a916-535a72658782
+name: routed-two-site-test
+description: Two-site fixture for static routing, link capture, and firewall scope rendering.
+
+environment:
+  description: HQ and manufacturing connected by a routed transit.
+  users:
+    - username: alex
+      full_name: Alex Example
+      email: alex@example.test
+      primary_system: HQ-CLIENT
+  systems:
+    - {hostname: HQ-CLIENT, ip: 10.40.10.10, os: Ubuntu 24.04, type: workstation}
+    - {hostname: HQ-SERVER, ip: 10.40.20.10, os: Ubuntu 24.04, type: server}
+    - {hostname: DMZ-SERVER, ip: 10.40.60.10, os: Ubuntu 24.04, type: server}
+    - {hostname: MFG-CLIENT, ip: 10.50.10.10, os: Ubuntu 24.04, type: workstation}
+    - {hostname: MFG-CORE, ip: 10.50.90.1, os: Cisco IOS, type: server, roles: [router]}
+  network:
+    segments:
+      - {name: hq-clients, cidr: 10.40.10.0/24, exposure: internal}
+      - {name: hq-servers, cidr: 10.40.20.0/24, exposure: internal}
+      - {name: dmz, cidr: 10.40.60.0/24, exposure: external}
+      - {name: mfg-clients, cidr: 10.50.10.0/24, exposure: internal}
+      - {name: mfg-management, cidr: 10.50.90.0/24, exposure: internal}
+      - {name: edge-transit, cidr: 10.40.254.0/30, exposure: internal}
+      - {name: site-transit, cidr: 10.60.0.0/30, exposure: internal}
+    routing:
+      devices:
+        EDGE: {kind: firewall, firewall: edge-asa}
+        HQ-CORE: {kind: router}
+        MFG-CORE: {kind: router, system: MFG-CORE}
+      links:
+        upstream:
+          internet: true
+          interfaces: {EDGE: {name: outside, ip: 192.0.2.1}}
+        edge-core:
+          segment: edge-transit
+          interfaces:
+            EDGE: {name: inside, ip: 10.40.254.1}
+            HQ-CORE: {name: edge, ip: 10.40.254.2}
+        intersite:
+          segment: site-transit
+          interfaces:
+            HQ-CORE: {name: wan, ip: 10.60.0.1}
+            MFG-CORE: {name: wan, ip: 10.60.0.2}
+        users:
+          segment: hq-clients
+          interfaces: {HQ-CORE: {name: clients, ip: 10.40.10.1}}
+        servers:
+          segment: hq-servers
+          interfaces: {HQ-CORE: {name: servers, ip: 10.40.20.1}}
+        dmz-uplink:
+          segment: dmz
+          interfaces: {EDGE: {name: dmz, ip: 10.40.60.1}}
+        plant:
+          segment: mfg-clients
+          interfaces: {MFG-CORE: {name: plant, ip: 10.50.10.1}}
+        management:
+          segment: mfg-management
+          interfaces: {MFG-CORE: {name: management, ip: 10.50.90.1}}
+      gateways:
+        hq-clients: HQ-CORE
+        hq-servers: HQ-CORE
+        dmz: EDGE
+        mfg-clients: MFG-CORE
+        mfg-management: MFG-CORE
+      routes:
+        EDGE:
+          - {destination: 10.40.0.0/16, next_hop: 10.40.254.2}
+          - {destination: 10.50.0.0/16, next_hop: 10.40.254.2}
+          - {destination: 0.0.0.0/0, internet_link: upstream}
+        HQ-CORE:
+          - {destination: 10.50.0.0/16, next_hop: 10.60.0.2}
+          - {destination: 0.0.0.0/0, next_hop: 10.40.254.1}
+        MFG-CORE:
+          - {destination: 0.0.0.0/0, next_hop: 10.60.0.1}
+    sensors:
+      - type: firewall
+        name: edge-asa
+        hostname: EDGE
+        monitoring_segments: [hq-clients, hq-servers, mfg-clients, dmz]
+        interfaces: {hq-clients: inside, hq-servers: inside, mfg-clients: inside, dmz: dmz}
+        log_formats: [cisco_asa]
+        policy:
+          - {src: any, dst: any, ports: [22, 8080], action: deny}
+          - {src: any, dst: any, action: permit}
+        nat_rules:
+          - {type: dynamic_pat, src: [hq-clients, mfg-clients], mapped_ip: 192.0.2.1}
+          - {type: static, real_ip: 10.40.60.10, mapped_ip: 192.0.2.2}
+      - {type: network, name: zeek-core, placement: tap, link_tap: {link: edge-core, scope: internet}}
+      - {type: network, name: zeek-wan, placement: tap, link_tap: {link: intersite}}
+      - {type: network, name: zeek-outside, placement: tap, link_tap: {link: upstream}}
+      - {type: network, name: zeek-dmz, placement: tap, link_tap: {link: dmz-uplink}}
+      - type: ids
+        name: ids-core
+        placement: tap
+        log_formats: [snort_alert]
+        link_tap: {link: edge-core, scope: internet}
+time_window:
+  start: "2026-01-12T12:00:00Z"
+  duration: "15m"
+  warmup: "1h"
+baseline_activity: {description: Minimal activity for routing tests, intensity: low, variation: low}
+storyline:
+  - id: reachability
+    time: "+3m"
+    actor: alex
+    system: HQ-CLIENT
+    activity: Normal HTTP requests to the site and Internet.
+    events:
+      - {type: connection, dst_ip: 10.50.10.10, dst_port: 80, method: GET, uri: /intersite}
+      - {type: connection, dst_ip: 198.51.100.30, dst_port: 80, method: GET, uri: /internet}
+      - {type: connection, dst_ip: 198.51.100.30, dst_port: 8080, service: http, method: GET, uri: /outbound-denied}
+      - {type: connection, source_ip: 198.51.100.30, dst_ip: 10.40.10.10, dst_port: 8080, service: http, method: GET, uri: /inbound-denied}
+      - {type: connection, source_ip: 198.51.100.30, dst_ip: 192.0.2.2, dst_port: 80, method: GET, uri: /dmz}
+output:
+  logs: [{format: zeek}, {format: cisco_asa}, {format: snort_alert}]
+  destination: ./output
+  compression: false

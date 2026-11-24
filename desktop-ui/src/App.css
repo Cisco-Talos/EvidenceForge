@@ -43,6 +43,8 @@
   --syntax-number: #f2b97a;
   --syntax-keyword: #c9a6ff;
   --syntax-comment: #92959c;
+  --diagram-scope-rose: #ef9aca;
+  --diagram-scope-olive: #a4c975;
   /* Type, radius and elevation */
   --text-xs: 11px;
   --text-sm: 12px;
@@ -105,6 +107,8 @@
   --syntax-number: #a34d0b;
   --syntax-keyword: #7a3fc4;
   --syntax-comment: #66696f;
+  --diagram-scope-rose: #a03071;
+  --diagram-scope-olive: #50721f;
 }
 
 * { box-sizing: border-box; }
@@ -1152,7 +1156,7 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .diagram-viewport { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 .diagram-viewport, .diagram-viewport * { -webkit-user-select: none; user-select: none; }
 .diagram-viewport[data-dragging="true"] { cursor: grabbing; }
-.diagram-viewport:focus-visible { outline-offset: -2px; }
+.diagram-canvas:focus-visible { outline-offset: -2px; }
 .diagram-interface-labels text { fill: var(--text-2); font-size: 11px; font-weight: 550; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
 .diagram-edges path { fill: none; stroke: var(--text-3); stroke-width: 2px; stroke-linecap: round; stroke-linejoin: round; }
 .diagram-edges [data-kind="interface"] { stroke: var(--text-2); stroke-width: 2.5px; }
@@ -1160,6 +1164,12 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .diagram-edges [data-kind="subnet"] { stroke: var(--text-1); stroke-width: 3px; }
 .diagram-edges [data-kind="host"] { stroke-width: 1.5px; }
 .diagram-edges [data-highlighted="true"] { stroke: var(--info); stroke-width: 3px; }
+.network-diagram [data-link-kind="wan"] { --diagram-link-color: var(--info); --diagram-link-dash: 9 4 1 4; }
+.network-diagram [data-link-kind="vpn"] { --diagram-link-color: var(--syntax-keyword); --diagram-link-dash: 13 6; }
+.diagram-edges path[data-link-kind]:not([data-link-kind="network"]),
+.diagram-link-key path { fill: none; stroke: var(--diagram-link-color, var(--text-2)); stroke-dasharray: var(--diagram-link-dash, none); }
+.diagram-edges path[data-highlighted="true"][data-link-kind]:not([data-link-kind="network"]) { stroke-width: 4px; }
+.diagram-link-key path { stroke-width: 2px; }
 .diagram-node { color: var(--text-2); cursor: pointer; outline: none; }
 .diagram-node[data-kind="host"], .diagram-node[data-equipment] { color: var(--text-1); }
 .diagram-node[data-equipment="firewall"] { color: var(--accent); }
@@ -1431,7 +1441,7 @@ details.diagram-sensor-key[open] ul { position: absolute; bottom: calc(100% + 8p
 .pack-workflow { display: grid; gap: 8px; }
 .pack-workflow p, .pack-workflow h4, .pack-workflow ul { margin: 0; }
 .pack-workflow code, .pack-delete-dialog { overflow-wrap: anywhere; }
-.pack-workflow .state-success, .pack-workflow .error-text { display: flex; gap: 8px; align-items: flex-start; }
+.pack-workflow .state-success, .pack-workflow .state-warning, .pack-workflow .error-text { display: flex; gap: 8px; align-items: flex-start; }
 .pack-workflow svg { flex-shrink: 0; }
 .pack-delete-dialog ul { max-height: 220px; overflow: auto; padding-left: 20px; }
 
@@ -1889,3 +1899,15 @@ details.diagram-sensor-key[open] ul { position: absolute; bottom: calc(100% + 8p
   .brand.brand-compact .brand-logo-sidebar, .brand.brand-compact > small { display: none; }
   .brand.brand-compact .brand-mark { display: block; }
 }
+
+.diagram-scope-highlight, .diagram-scope-swatch {
+  fill: currentColor;
+  fill-opacity: 0.12;
+  stroke: currentColor;
+}
+.diagram-legend i.diagram-scope-key { border-top-style: dashed; }
+.diagram-scope-caption { color: var(--text-2); fill: currentColor; font-size: 11px; font-weight: 650; }
+.diagram-scope-key-entry { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px; padding: 4px 0; }
+.diagram-scope-key-entry div { display: grid; gap: 2px; overflow-wrap: anywhere; }
+.diagram-scope-key-entry small { color: var(--text-2); }
+.diagram-link-type { fill: var(--diagram-link-color); font-size: var(--text-xs); font-weight: 700; }

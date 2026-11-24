@@ -340,7 +340,7 @@ class SessionPlan:
 class SessionBootstrapResult:
     """Result of creating or reusing a session."""
 
-    session: ActiveSession
+    session: ActiveSession | None
     network_uid: str | None = None
 
 
@@ -1231,7 +1231,7 @@ class WorldPlanner:
         storyline_protected: bool = False,
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
-    ) -> ActiveSession:
+    ) -> ActiveSession | None:
         return self.bootstrap_user_session(
             user=user,
             target_system=target_system,
@@ -2222,6 +2222,11 @@ class WorldPlanner:
             ids_alerts=ids_alerts,
             **({"pty": True} if pty else {}),
         )
+        visibility = getattr(
+            getattr(self.activity_generator, "dispatcher", None), "visibility_engine", None
+        )
+        if not logon_id and visibility is not None and visibility.routing is not None:
+            return SessionBootstrapResult(session=None, network_uid=uid)
         session = self.state_manager.get_session(logon_id)
         if session is None:
             raise RuntimeError(f"Failed to resolve SSH session {logon_id}")
@@ -2298,6 +2303,11 @@ class WorldPlanner:
             session_end_plan=session_end_plan,
             ids_alerts=ids_alerts,
         )
+        visibility = getattr(
+            getattr(self.activity_generator, "dispatcher", None), "visibility_engine", None
+        )
+        if not logon_id and visibility is not None and visibility.routing is not None:
+            return SessionBootstrapResult(session=None, network_uid=uid)
         session = self.state_manager.get_session(logon_id)
         if session is None:
             raise RuntimeError(
@@ -2412,6 +2422,8 @@ class WorldPlanner:
             session_kind="interactive",
             allow_existing=True,
         )
+        if source_session is None:
+            return -1
         parent_pid = source_session.explorer_pid or source_session.process_tree_root
         if parent_pid is None:
             sys_pids = getattr(self.activity_generator, "_system_pids", {}).get(

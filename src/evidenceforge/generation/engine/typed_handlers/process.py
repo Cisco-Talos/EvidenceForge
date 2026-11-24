@@ -88,6 +88,8 @@ def handle_process(
             time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
     logon_id = self._resolve_storyline_process_logon_id(actor, system, time, rng)
+    if logon_id is None:
+        return context.malicious_event
     process_actor = self._storyline_local_process_actor_for_logon(
         process_actor,
         system,
@@ -309,7 +311,7 @@ def handle_process(
                 reserved_start_time,
                 rng,
             )
-            if rebound_logon_id == process_logon_id:
+            if rebound_logon_id is None or rebound_logon_id == process_logon_id:
                 reserved_start_time = None
                 break
             process_logon_id = rebound_logon_id

@@ -11,7 +11,7 @@ import { ActionShortcut, type ObjectAction } from "./ObjectActions";
 import { ChatView } from "./ChatView";
 import { ConversationList } from "./ConversationList";
 import { HeaderSummary, WorkspaceSection } from "./WorkspaceSection";
-import { nextStep, ReadinessPipeline, readinessSteps, type PipelineStep, type StepId } from "./ReadinessPipeline";
+import { nextStep, ReadinessPipeline, readinessSteps, type StepId } from "./ReadinessPipeline";
 import { StatusPill } from "./StatusPill";
 import { ArtifactLifecycle } from "./ArtifactLifecycle";
 import { PackWorkflow } from "./PackWorkflow";
@@ -59,7 +59,7 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   const [localEnvironmentFeedback, setLocalEnvironmentFeedback] = useState<RequestState>({ pending: false });
   const dependencyFeedback = catalog?.environmentFeedback?.(item) || localEnvironmentFeedback;
   const [environmentRefresh, setEnvironmentRefresh] = useState(0);
-  const networkOpen = tab === "network";
+  const networkOpen = tab === "visualize";
   const inspectEnvironment = item.kind === "scenario" && (tab === "environment" || networkOpen);
   const health = snapshot.dependencies?.[item.id];
   const environmentInspection = useEnvironmentInspection({
@@ -199,30 +199,37 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
     },
   };
   const steps = readinessSteps({ starter, conversations: conversations.length, authoring: activeChats > 0, environment: environmentState(health, environmentRefreshing), states: [validationStatus, states[1], states[2]] });
+  const openVisualization = () => setTab("visualize");
   const exportBundle = sharedActions.find((entry) => entry.id === "export-bundle");
   const next = item.kind === "scenario" ? nextStep(steps, {
     author: { id: "author", label: "Continue authoring", group: "work", run: () => preferred ? onOpenConversation(preferred) : onCreateConversation() },
     environment: { id: "review-environment", label: "Review environment", group: "work", run: () => setTab("environment") },
-    validate: validateAction, fix: fixAction, generate: generateAction,
+    validate: validateAction, fix: fixAction,
+    visualize: { id: "visualize", label: "Visualize network", group: "work", run: openVisualization },
+    generate: generateAction,
     evaluate: evaluateAction, reevaluate: { ...evaluateAction, id: "reevaluate", label: "Re-evaluate" },
     viewRun: { id: "view-run", label: "Open latest run", group: "work", disabled: !latestGeneration, reason: "No runs yet", run: () => onNavigate(latestEvaluation && latestEvaluation.status !== "completed" ? "scoring" : "generation", (latestEvaluation && latestEvaluation.status !== "completed" ? latestEvaluation : latestGeneration)?.id ?? null) },
     export: exportBundle,
-  }, validationIssues.length > 0) : null;
+  }, validationIssues.length > 0, openedNetwork) : null;
   function openStep(id: StepId) {
     if (id === "author") { if (preferred) onOpenConversation(preferred); else setTab("conversations"); return; }
+    if (id === "visualize") { openVisualization(); return; }
     setTab(id === "environment" ? "environment" : id === "validate" ? "validation" : "runs");
   }
   /** A section header's labeled status, from the same readiness step the strip shows. */
   // The Runs summary already notes unverified inputs, so the pill names the outcome instead.
-  const stepPill = (step: PipelineStep, context: string) => <StatusPill tone={step.tone === "todo" ? "neutral" : step.tone} label={step.status === "Inputs unverified" ? "Generated" : step.status} detail={step.detail} ariaLabel={`${context}: ${step.detail}`} />;
+  const stepPill = (id: StepId, context: string) => {
+    const step = steps.find((step) => step.id === id)!;
+    return <StatusPill tone={step.tone === "todo" ? "neutral" : step.tone} label={step.status === "Inputs unverified" ? "Generated" : step.status} detail={step.detail} ariaLabel={`${context}: ${step.detail}`} />;
+  };
   // The readiness strip owns the promoted action; section headers do not repeat it.
   const promoted = next?.id;
   const findingCount = validationIssues.filter((issue) => ["error", "warning"].includes(String((issue as { severity?: string }).severity || "").toLowerCase())).length;
   const tabs: [string, string, number?, string?][] = item.kind === "scenario"
     // Tabs and cards use the readiness strip's verbs; Environment is a reference section, not a step.
-    ? [["overview", "Overview"], ["conversations", "Author", conversations.length], ["environment", "Environment"], ["network", "Network"], ["validation", "Validate", findingCount, validationStatus.state === "error" ? "err" : "warn"], ["runs", "Generate & Evaluate", runCount]]
+    ? [["overview", "Overview"], ["conversations", "Author", conversations.length], ["environment", "Environment"], ["validation", "Validate", findingCount, validationStatus.state === "error" ? "err" : "warn"], ["visualize", "Visualize"], ["runs", "Generate & Evaluate", runCount]]
     : [["overview", "Overview"], ["conversations", "Author", conversations.length], ["validation", "Validate & Release"], ["assets", "Assets"]];
-  if (item.kind === "organization_pack") tabs.splice(2, 0, ["network", "Network"]);
+  if (item.kind === "organization_pack") tabs.splice(3, 0, ["visualize", "Visualize"]);
   const conversationList = <ConversationList conversations={conversations} selectedId={selectedConversation} onOpen={onOpenConversation} onRename={onRenameConversation} onDelete={onDeleteConversation} />;
 
   return <div className={`scenario-page scenario-workspace ${chatFocus ? "focused" : ""} ${networkOpen ? "network-focused" : ""}`}>
@@ -245,7 +252,7 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
     </header>
     {!chatFocus && !networkOpen && item.kind === "scenario" && <ReadinessPipeline steps={steps} next={next} hint={next?.id === "generate" ? sizeLabel : (next?.id === "evaluate" || next?.id === "reevaluate") && latestCompleted ? `Latest run · ${formatTime(latestCompleted.started_at || latestCompleted.submitted_at || 0)}` : undefined} onStep={openStep} />}
     {!chatFocus && <div className="workspace-tablist" role="tablist" aria-label="Workspace sections">{tabs.map(([id, label, count, tone]) => <button key={id} type="button" role="tab" aria-label={label} aria-selected={(tab ?? "overview") === id} onClick={() => setTab(id === "overview" ? null : id)}>{label}{count ? <span className={`tab-count ${tone || ""}`} aria-hidden="true">{count}</span> : null}</button>)}</div>}
-    {(networkOpen || openedNetwork) && item.kind !== "industry_pack" && <section className="workspace-network" aria-label="Network" hidden={!networkOpen || chatFocus}>
+    {(networkOpen || openedNetwork) && item.kind !== "industry_pack" && <section className="workspace-network" aria-label="Visualize" hidden={!networkOpen || chatFocus}>
       {item.kind === "organization_pack"
         ? <PackEnvironmentView key={item.id} item={item} api={api} subscribeEvents={subscribeEvents} onChanged={onChanged} onAsk={onAskNetwork} />
         : scenarioGraph
@@ -266,13 +273,13 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
       {item.kind !== "scenario" && <div data-workspace-section="validation" hidden={!!tab && tab !== "validation"}><WorkspaceSection title="Validate & Release" icon={<ShieldCheck size={19} />} summary={<span>Check catalogs and dependencies · export a portable release</span>} expanded={tab === "validation"} onToggle={() => toggle("validation")} actions={<><ActionShortcut action={validateAction} ariaLabel="Validate pack" /><CatalogObjectMenu item={item} label="Validation and release actions" actionIds={["validate", "fix", "publish", "export-release"]} fallbackActions={[validateAction, fixAction, packExportAction]} /></>}><PackWorkflow key={item.id} item={item} api={api} onPrepare={onPrepare} /></WorkspaceSection></div>}
       {item.kind !== "scenario" && <div data-workspace-section="assets" hidden={!!tab && tab !== "assets"}><WorkspaceSection title="Assets" icon={<Package size={19} />} summary={<span>Browse assets · draft edits keep the same draft</span>} expanded={tab === "assets"} onToggle={() => toggle("assets")} actions={<><ActionShortcut action={addAssetAction} /></>}><AssetBrowser key={item.id} item={item} api={api} onChanged={onChanged} embedded /></WorkspaceSection></div>}
       {item.kind === "scenario" && <>
-        <div data-workspace-section="environment" aria-busy={environmentRefreshing} hidden={!!tab && tab !== "environment"}><WorkspaceSection title="Environment" keepMounted icon={<Boxes size={19} />} status={stepPill(steps[1], "Environment")} summary={<HeaderSummary summary={environmentInfo} />} expanded={tab === "environment"} onToggle={() => toggle("environment")} actions={<><ActionShortcut action={environmentAction} />{tab === "environment" && <button type="button" className="button-quiet" onClick={() => setTab("network")}>Open network diagram</button>}</>} footer={environmentError && <div className="workspace-operation-feedback"><RequestFeedback pending={false} label="Refreshing environment…" error={environmentError} /></div>}>
+        <div data-workspace-section="environment" aria-busy={environmentRefreshing} hidden={!!tab && tab !== "environment"}><WorkspaceSection title="Environment" keepMounted icon={<Boxes size={19} />} status={stepPill("environment", "Environment")} summary={<HeaderSummary summary={environmentInfo} />} expanded={tab === "environment"} onToggle={() => toggle("environment")} actions={<><ActionShortcut action={environmentAction} />{tab === "environment" && <button type="button" className="button-quiet" onClick={openVisualization}>Open network diagram</button>}</>} footer={environmentError && <div className="workspace-operation-feedback"><RequestFeedback pending={false} label="Refreshing environment…" error={environmentError} /></div>}>
           <EnvironmentView embedded inspection={environmentInspection} dependencyHealth={health} onImportPacks={onImportPacks} onOpenPack={onOpenPack} item={item} packs={snapshot.items.filter((entry) => entry.kind !== "scenario")} api={api} onChanged={onChanged} onPrepare={onPrepare} onError={onError} />
         </WorkspaceSection></div>
-        <div data-workspace-section="validation" aria-busy={validating} hidden={!!tab && tab !== "validation"}><WorkspaceSection title="Validate" icon={<ShieldCheck size={19} />} status={stepPill(steps[2], "Validation")} summary={<HeaderSummary summary={validationInfo} />} expanded={tab === "validation"} onToggle={() => toggle("validation")} actions={<>{!validating && validationIssues.length > 0 && promoted !== fixAction.id && <ActionShortcut action={fixAction} />}{promoted !== validateAction.id && <ActionShortcut action={validateAction} ariaLabel="Validate scenario" />}</>}>
+        <div data-workspace-section="validation" aria-busy={validating} hidden={!!tab && tab !== "validation"}><WorkspaceSection title="Validate" icon={<ShieldCheck size={19} />} status={stepPill("validate", "Validation")} summary={<HeaderSummary summary={validationInfo} />} expanded={tab === "validation"} onToggle={() => toggle("validation")} actions={<>{!validating && validationIssues.length > 0 && promoted !== fixAction.id && <ActionShortcut action={fixAction} />}{promoted !== validateAction.id && <ActionShortcut action={validateAction} ariaLabel="Validate scenario" />}</>}>
           {validating ? <div className="validation-progress" role="status"><LoaderCircle size={18} aria-hidden="true" />Validating current scenario…</div> : validationFailed ? <><p className="error-text" role="alert">{validationActivity.error}</p>{validation && <><p className="muted">Previous validation results:</p><ValidationPanel result={validation} embedded /></>}</> : validationDetails ? <ValidationPanel result={validation} embedded /> : undefined}
         </WorkspaceSection></div>
-        <div data-workspace-section="runs" hidden={!!tab && tab !== "runs"}><WorkspaceSection title="Generate & Evaluate" icon={<Play size={19} />} status={<>{stepPill(steps[3], "Generation")}{stepPill(steps[4], "Evaluation")}</>} summary={<HeaderSummary summary={runInfo} />} expanded={tab === "runs"} onToggle={() => toggle("runs")} actions={<><ActionShortcut action={forecastAction} className={`run-size-trigger ${forecastAction.label.startsWith("Latest") ? "latest" : "forecast"}`} />{promoted !== generateAction.id && <ActionShortcut action={generateAction} />}</>} footer={tab !== "runs" && active.length > 0 && <div className="workspace-live-runs">{active.map((job) => <JobCard key={job.id} job={job} name={item.name} grouped sizeBytes={sizes[job.id]} idPrefix="live-run" onNavigateRow={() => navigateJob(job)} api={api} onError={onError} onChanged={onChanged} />)}</div>}>
+        <div data-workspace-section="runs" hidden={!!tab && tab !== "runs"}><WorkspaceSection title="Generate & Evaluate" icon={<Play size={19} />} status={<>{stepPill("generate", "Generation")}{stepPill("evaluate", "Evaluation")}</>} summary={<HeaderSummary summary={runInfo} />} expanded={tab === "runs"} onToggle={() => toggle("runs")} actions={<><ActionShortcut action={forecastAction} className={`run-size-trigger ${forecastAction.label.startsWith("Latest") ? "latest" : "forecast"}`} />{promoted !== generateAction.id && <ActionShortcut action={generateAction} />}</>} footer={tab !== "runs" && active.length > 0 && <div className="workspace-live-runs">{active.map((job) => <JobCard key={job.id} job={job} name={item.name} grouped sizeBytes={sizes[job.id]} idPrefix="live-run" onNavigateRow={() => navigateJob(job)} api={api} onError={onError} onChanged={onChanged} />)}</div>}>
           {runCount ? <ScenarioRuns jobs={jobs} imports={imports} sizes={sizes} item={item} snapshot={snapshot} api={api} onError={onError} onChanged={onChanged} focusJobId={focusJobId} focusVersion={runFocusVersion} /> : undefined}
         </WorkspaceSection></div>
       </>}

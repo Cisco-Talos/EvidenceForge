@@ -501,6 +501,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._sensor_security_levels: dict[str, dict[str, int]] = {}
         # VIP→real_ip for interface resolution (set by emitter_setup)
         self._vip_to_real_ip: dict[str, str] = {}
+        self.physical_interfaces: Callable[[str, str, str], tuple[str, str]] | None = None
         # Threat detection: per-(sensor, src_ip) deny rate tracking
         self._deny_timestamps: dict[tuple[str, str], deque[datetime]] = {}
         self._last_alert_time: dict[tuple[str, str], datetime | None] = {}
@@ -826,8 +827,17 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             projected_network = _AsaNetworkProjection.from_observation(network, observation)
         src_interface = self._resolve_interface(projected_network.src_ip, sensor_hostname)
         dst_interface = self._resolve_interface(projected_network.dst_ip, sensor_hostname)
+        if self.physical_interfaces is not None:
+            src_interface, dst_interface = self.physical_interfaces(
+                sensor_hostname, network.src_ip, network.dst_ip
+            )
         firewall = event.firewall
-        if firewall is not None:
+        if firewall is not None and (
+            self.physical_interfaces is None
+            or not firewall.enforcing_entities
+            or sensor_hostname.casefold()
+            in {name.casefold() for name in firewall.enforcing_entities}
+        ):
             src_interface = firewall.src_interface or src_interface
             dst_interface = firewall.dst_interface or dst_interface
         return _AsaRouteProjection(
@@ -878,7 +888,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             nat_view = route.nat
             fw_hostname = sensor_hostname or "fw01"
 
-            if is_deny:
+            if is_deny and (
+                self.physical_interfaces is None
+                or not fw.enforcing_entities
+                or sensor_hostname.casefold() in {name.casefold() for name in fw.enforcing_entities}
+            ):
                 if self._should_suppress_outside_private_deny(
                     sensor_net, src_iface, dst_iface, sensor_hostname
                 ):

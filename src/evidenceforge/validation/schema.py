@@ -33,6 +33,7 @@ This module provides validation beyond Pydantic's schema validation:
 import ipaddress
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
@@ -43,6 +44,7 @@ import yaml
 from evidenceforge.models import Scenario
 from evidenceforge.models.exceptions import PathSafetyError
 from evidenceforge.models.ids import policy_fingerprint
+from evidenceforge.models.scenario import NetworkConfig
 from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _stable_seed
 
@@ -147,6 +149,36 @@ class ValidationIssue:
     suggestion: str | None = None
 
 
+def legacy_firewall_routing_warning(
+    network: NetworkConfig | Mapping[str, Any] | None,
+) -> ValidationIssue | None:
+    """Recommend authored routing for effective scenarios and standalone pack fragments."""
+    if network is None:
+        return None
+    if isinstance(network, NetworkConfig):
+        if network.routing is not None:
+            return None
+        names = [sensor.name for sensor in network.sensors if sensor.type == "firewall"]
+    else:
+        if network.get("routing") is not None:
+            return None
+        names = [
+            sensor["name"] for sensor in network.get("sensors", []) if sensor["type"] == "firewall"
+        ]
+    if not names:
+        return None
+    firewalls = ", ".join(repr(name) for name in names)
+    return ValidationIssue(
+        severity="warning",
+        field_path="environment.network.routing",
+        message=f"Firewall sources {firewalls} use legacy segment-based visibility.",
+        suggestion=(
+            "Use authored routing in the scenario or organization pack. Bind each firewall "
+            "device to its sensor by name so coverage follows the traffic it handles."
+        ),
+    )
+
+
 class ScenarioValidator:
     """Validates cross-references and logical consistency in scenarios."""
 
@@ -226,9 +258,11 @@ class ScenarioValidator:
         self._validate_macos_persistence()
         self._validate_network_segments()
         self._validate_network_sensors()
+        routing_valid = self._validate_routing()
         self._validate_output_formats()
         self._validate_sensor_backed_outputs()
-        self._validate_evidence_reachability()
+        if routing_valid:
+            self._validate_evidence_reachability()
         self._validate_proxy_output_topology()
         # Eval-informed checks
         self._validate_format_os_compatibility()
@@ -2849,6 +2883,58 @@ class ScenarioValidator:
                             suggestion=f"Known formats: {', '.join(sorted(known_sensor_formats))}",
                         )
                     )
+
+    def _validate_routing(self) -> bool:
+        """Check the effective graph and warn about statically unreachable connections."""
+        from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+
+        environment = self.scenario.environment
+        network = environment.network
+        if network is None:
+            return True
+        if network.routing is None:
+            if warning := legacy_firewall_routing_warning(network):
+                self.issues.append(warning)
+            for index, sensor in enumerate(network.sensors):
+                if sensor.link_tap is not None:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"environment.network.sensors.{index}.link_tap",
+                            message="Link TAPs require an authored routing topology",
+                        )
+                    )
+            return not any(sensor.link_tap is not None for sensor in network.sensors)
+        try:
+            visibility = NetworkVisibilityEngine(network, environment.systems)
+        except ValueError as error:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="environment.network.routing",
+                    message=str(error),
+                )
+            )
+            return False
+        for index, entry in enumerate(self.scenario.storyline or []):
+            system = self._get_system(entry.system)
+            if system is None:
+                continue
+            for event_index, event in enumerate(entry.events):
+                if event.type != "connection" or not _is_ip_literal(event.dst_ip):
+                    continue
+                flow = visibility.routed_connection(event.source_ip or system.ip, event.dst_ip)
+                if flow is not None and not flow.reachable:
+                    reason = flow.forward.reason or f"return path: {flow.reverse.reason}"
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            field_path=f"storyline.{index}.events.{event_index}",
+                            message=f"Connection is unreachable in the authored topology ({reason})",
+                            suggestion="Review the intended gateway and static routes for this flow",
+                        )
+                    )
+        return True
 
     def _validate_sensor_backed_outputs(self) -> None:
         """Validate sensor-backed outputs against configured sensors/firewalls."""

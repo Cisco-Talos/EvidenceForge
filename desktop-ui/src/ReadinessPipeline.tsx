@@ -1,14 +1,14 @@
 import type { ReactElement } from "react";
-import { Check, LoaderCircle, TriangleAlert, X } from "lucide-react";
+import { Check, LoaderCircle, Network, TriangleAlert, X } from "lucide-react";
 import type { OperationState } from "./ScenarioStates";
 import { ActionShortcut, type ObjectAction } from "./ObjectActions";
 
-export type StepTone = "ok" | "warn" | "err" | "info" | "todo";
-export type StepId = "author" | "environment" | "validate" | "generate" | "evaluate";
+export type StepTone = "ok" | "warn" | "err" | "info" | "todo" | "neutral";
+export type StepId = "author" | "environment" | "validate" | "visualize" | "generate" | "evaluate";
 
 export interface PipelineStep { id: StepId; label: string; tone: StepTone; detail: string; status: string }
 
-const tones: Record<OperationState["state"], StepTone> = { success: "ok", warning: "warn", error: "err", working: "info", stale: "warn", none: "todo" };
+const tones: Record<OperationState["state"], Exclude<StepTone, "neutral">> = { success: "ok", warning: "warn", error: "err", working: "info", stale: "warn", none: "todo" };
 
 /** Errors cover failed, stopped and cancelled jobs; name which one happened. */
 function endedLabel(detail: string): string {
@@ -20,8 +20,7 @@ function score(detail: string): string | undefined {
 }
 
 /**
- * Translate the existing operation states into the five readiness steps. This adds no status
- * logic of its own: every tone comes from `scenarioStates`/`environmentState`.
+ * Translate the existing operation states into readiness steps and include the diagram review.
  */
 export function readinessSteps({ starter, conversations, authoring, environment, states }: {
   starter: boolean; conversations: number; authoring: boolean; environment: OperationState; states: OperationState[];
@@ -40,46 +39,54 @@ export function readinessSteps({ starter, conversations, authoring, environment,
     generate: { ok: "Generated", warn: generation.state === "stale" ? "Stale" : "Inputs unverified", err: endedLabel(generation.detail), info: "Generating…", todo: "Not run" },
     evaluate: { ok: evaluationScore ? `Passed · ${evaluationScore}` : "Passed", warn: evaluation.state === "stale" ? "Stale" : evaluationScore ? `Evaluated · ${evaluationScore}` : "Evaluated", err: evaluation.detail.startsWith("Failed acceptance") ? "Failed acceptance" : endedLabel(evaluation.detail), info: "Evaluating…", todo: "Not run" },
   };
-  const step = (id: Exclude<StepId, "author">, label: string, state: OperationState): PipelineStep => {
+  const step = (id: keyof typeof statusFor, label: string, state: OperationState): PipelineStep => {
     const tone = tones[state.state];
     return { id, label, tone, status: statusFor[id][tone], detail: state.detail };
   };
-  return [author, step("environment", "Environment", environment), step("validate", "Validate", validation), step("generate", "Generate", generation), step("evaluate", "Evaluate", evaluation)];
+  return [
+    author,
+    step("environment", "Environment", environment),
+    step("validate", "Validate", validation),
+    { id: "visualize", label: "Visualize", tone: "neutral", status: "Review diagram", detail: "Open the network diagram for review." },
+    step("generate", "Generate", generation),
+    step("evaluate", "Evaluate", evaluation),
+  ];
 }
 
 export interface NextStepActions {
   author: ObjectAction; environment: ObjectAction; validate: ObjectAction; fix: ObjectAction;
-  generate: ObjectAction; viewRun: ObjectAction; export?: ObjectAction;
+  visualize: ObjectAction; generate: ObjectAction; viewRun: ObjectAction; export?: ObjectAction;
   /** Evaluate the latest completed run; `reevaluate` retries an evaluation job that failed. */
   evaluate: ObjectAction; reevaluate: ObjectAction;
 }
 
 /** The single most useful action for the current readiness, in pipeline order. */
-export function nextStep(steps: PipelineStep[], actions: NextStepActions, hasFindings: boolean): ObjectAction | null {
-  const tone = Object.fromEntries(steps.map((entry) => [entry.id, entry.tone])) as Record<StepId, StepTone>;
-  if (tone.author === "todo") return actions.author;
-  if (tone.environment === "err") return actions.environment;
-  if (tone.validate === "info" || tone.generate === "info" || tone.evaluate === "info") return tone.validate === "info" ? null : actions.viewRun;
-  if (tone.validate === "err") return hasFindings ? actions.fix : actions.validate;
-  if (tone.validate === "todo" || (tone.validate === "warn" && steps[2].status === "Stale")) return actions.validate;
-  if (tone.generate !== "ok") return actions.generate;
-  const evaluation = steps[4].status;
-  if (tone.evaluate === "todo" || evaluation === "Stale") return actions.evaluate;
+export function nextStep(steps: PipelineStep[], actions: NextStepActions, hasFindings: boolean, diagramOpened = false): ObjectAction | null {
+  const byId = Object.fromEntries(steps.map((entry) => [entry.id, entry])) as Record<StepId, PipelineStep>;
+  const { author, environment, validate, generate, evaluate } = byId;
+  if (author.tone === "todo") return actions.author;
+  if (environment.tone === "err") return actions.environment;
+  if (validate.tone === "info" || generate.tone === "info" || evaluate.tone === "info") return validate.tone === "info" ? null : actions.viewRun;
+  if (validate.tone === "err") return hasFindings ? actions.fix : actions.validate;
+  if (validate.tone === "todo" || validate.status === "Stale") return actions.validate;
+  if (!diagramOpened && (generate.tone === "todo" || generate.status === "Stale")) return actions.visualize;
+  if (generate.tone !== "ok") return actions.generate;
+  if (evaluate.tone === "todo" || evaluate.status === "Stale") return actions.evaluate;
   // A failed acceptance is a real result: re-running gives the same answer, so show the scorecard.
-  if (tone.evaluate === "err" && evaluation !== "Failed acceptance") return actions.reevaluate;
-  if (tone.evaluate !== "ok") return actions.viewRun;
+  if (evaluate.tone === "err" && evaluate.status !== "Failed acceptance") return actions.reevaluate;
+  if (evaluate.tone !== "ok") return actions.viewRun;
   return actions.export || null;
 }
 
 const stepIcons: Record<StepTone, (props: { size: number }) => ReactElement> = {
   ok: ({ size }) => <Check size={size} />, warn: ({ size }) => <TriangleAlert size={size} />, err: ({ size }) => <X size={size} />,
   info: ({ size }) => <LoaderCircle size={size} className="spinning" />, todo: () => <span className="step-dot" />,
+  neutral: ({ size }) => <Network size={size} />,
 };
 
 /**
- * The workspace's readiness strip: the four work steps (Author → Validate → Generate → Evaluate)
- * and the one next action. Environment stays in `steps` so an environment problem can still be
- * the promoted action, but it is a reference section, not a step to perform.
+ * The workspace's readiness strip and its next action. Environment stays in `steps` so
+ * an environment problem can still be the promoted action.
  */
 export function ReadinessPipeline({ steps: allSteps, next, hint, onStep }: {
   steps: PipelineStep[]; next: ObjectAction | null; hint?: string; onStep: (step: StepId) => void;

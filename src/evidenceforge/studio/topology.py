@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+from evidenceforge.models.routing import LinkTap, RoutingTopology
 from evidenceforge.models.scenario import NetworkConfig, NetworkSegment, System
 from evidenceforge.utils.platforms import platform_for_os
 
@@ -126,6 +127,20 @@ class NetworkChatContext(BaseModel):
         return value
 
 
+class RoutedTopologyGraph(TopologyGraph):
+    """Topology with optional authored routing and physical TAP attachments."""
+
+    routing: RoutingTopology | None = None
+    link_taps: dict[str, LinkTap] = Field(default_factory=dict)
+
+
+class RoutedNetworkChatContext(NetworkChatContext):
+    """Capture physical topology and the visibility of the firewall policy overlay."""
+
+    topology: RoutedTopologyGraph
+    firewall_scopes_visible: bool | None = None
+
+
 class PackTopology(BaseModel):
     """An exact organization pack fragment and its captured identity."""
 
@@ -134,7 +149,7 @@ class PackTopology(BaseModel):
     reference: str
     source_sha256: str
     digest: str
-    topology: TopologyGraph
+    topology: RoutedTopologyGraph
 
 
 class _SensorDeclaration(BaseModel):
@@ -143,7 +158,8 @@ class _SensorDeclaration(BaseModel):
     type: DeviceKind
     name: str
     hostname: str = ""
-    monitoring_segments: list[str]
+    monitoring_segments: list[str] = Field(default_factory=list)
+    link_tap: LinkTap | None = None
     placement: Literal["span", "tap"] = "span"
     direction: Literal["inbound", "outbound", "bidirectional"] = "bidirectional"
     log_formats: list[str] = Field(default_factory=lambda: ["zeek"])
@@ -152,6 +168,7 @@ class _SensorDeclaration(BaseModel):
 
 
 class _NetworkDeclaration(BaseModel):
+    routing: RoutingTopology | None = None
     segments: list[NetworkSegment]
     sensors: list[_SensorDeclaration] = Field(default_factory=list)
 
@@ -167,7 +184,7 @@ class _EnvironmentDeclaration(BaseModel):
     network: _NetworkDeclaration | None = None
 
 
-def project_topology(environment: dict[str, Any]) -> TopologyGraph:
+def project_topology(environment: dict[str, Any]) -> RoutedTopologyGraph:
     """Project an effective scenario environment or a partial organization model."""
     declaration = _EnvironmentDeclaration.model_validate(environment)
     segments = declaration.network.segments if declaration.network else []
@@ -284,4 +301,15 @@ def project_topology(environment: dict[str, Any]) -> TopologyGraph:
                 associations=associations,
             )
         )
-    return TopologyGraph(segments=diagram_segments, hosts=hosts, devices=devices, findings=findings)
+    return RoutedTopologyGraph(
+        segments=diagram_segments,
+        hosts=hosts,
+        devices=devices,
+        findings=findings,
+        routing=declaration.network.routing if declaration.network else None,
+        link_taps={
+            f"device:{sensor.hostname or sensor.name}": sensor.link_tap
+            for sensor in sensors
+            if sensor.link_tap is not None and device_counts[sensor.hostname or sensor.name] == 1
+        },
+    )

@@ -64,8 +64,8 @@ Never load every scenario reference by default. Read these direct references con
   baseline, formats, or observation behavior changes.
 - `/eforge:references:scenario-environment-identities` — when users, systems, groups, platform
   accounts, stale accounts, or network identities change.
-- `/eforge:references:scenario-environment-network` — when segments, sensors, firewall policy,
-  NAT, or public reachability changes.
+- `/eforge:references:scenario-environment-network` — when segments, routed links (including WAN
+  and VPN), sensor placement, firewall policy, NAT, or public reachability changes.
 - `/eforge:references:scenario-environment-overrides` — only for exact Scenario 2.0 deployment or
   source-observation overrides.
 - `/eforge:references:scenario-baseline-output` — when time, baseline shaping, observation profile,

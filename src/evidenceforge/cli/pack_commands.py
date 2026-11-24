@@ -8,12 +8,14 @@ from __future__ import annotations
 import json
 import logging
 import zipfile
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, NoReturn
 
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from evidenceforge.composition.compiler import resolve_management_project_root
 from evidenceforge.composition.models import PackReference, PackType
@@ -34,6 +36,7 @@ from evidenceforge.composition.releases import (
     validate_efpack,
 )
 from evidenceforge.models.exceptions import EvidenceForgeError, PackError
+from evidenceforge.validation.schema import legacy_firewall_routing_warning
 
 pack_app = typer.Typer(help="Create, inspect, copy, and validate scenario packs.")
 publisher_app = typer.Typer(help="Configure the publisher identity used for pack authoring.")
@@ -357,19 +360,21 @@ def validate_pack(
         repository = _repository(project_root)
         pack = _resolve_cli_pack(reference, project_root)
         dependencies = repository.validate_semantics(pack)
+        warning = legacy_firewall_routing_warning(pack.environment.get("network"))
         payload = {
             "valid": True,
             "pack": _pack_payload(pack),
             "dependencies": [
                 dependency.selected().model_dump(mode="json") for dependency in dependencies
             ],
+            "warnings": [asdict(warning)] if warning else [],
         }
         from evidenceforge.artifacts.properties import remember_validation, validation_signature
 
         try:
             source = pack.root / "pack.yaml"
             before = validation_signature(source, repository.project_root)
-            remember_validation(source, repository.project_root, before)
+            remember_validation(source, repository.project_root, before, int(warning is not None))
         except (EvidenceForgeError, OSError, ValueError) as exc:
             logger.debug("Validation record is unavailable: %s", exc)
     except (PackError, ValueError) as exc:
@@ -387,6 +392,9 @@ def validate_pack(
             f"[green]✓[/green] Valid {pack.manifest.type} pack "
             f"{pack.manifest.name}@{pack.manifest.version}"
         )
+        if warning:
+            console.print(Text(f"⚠ {warning.message}", style="yellow"))
+            console.print(Text(warning.suggestion or ""))
 
 
 @pack_app.command("init")

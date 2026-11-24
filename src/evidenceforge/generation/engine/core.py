@@ -1083,6 +1083,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             network_config=self.scenario.environment.network,
             systems=self.scenario.environment.systems,
         )
+        if visibility_engine.routing is not None:
+            from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
+
+            asa_emitter = self.emitters.get("cisco_asa")
+            if isinstance(asa_emitter, CiscoAsaEmitter):
+                asa_emitter.physical_interfaces = visibility_engine.forwarding_interfaces
         from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG, SourceOwnerKind
         from evidenceforge.generation.source_deployment_compiler import (
             compile_scenario_source_deployment,

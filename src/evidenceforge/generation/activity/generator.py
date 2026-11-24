@@ -12394,7 +12394,7 @@ class ActivityGenerator:
                     session_end_plan=request.session_end_plan,
                     rdp_transport_time=time,
                 )
-                return result.session.logon_id
+                return result.session.logon_id if result.session is not None else ""
             explicit_source_system = source_system
             if explicit_source_system is None and source_ip is not None:
                 explicit_source_system = self._ip_to_system.get(source_ip)

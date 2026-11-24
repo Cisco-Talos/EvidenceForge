@@ -31,6 +31,19 @@ test("invalid pack details prepare a repair without sending a turn", async () =>
   expect(request).toHaveBeenCalledTimes(1);
 });
 
+test("a legacy firewall warning is visible alongside successful pack validation", async () => {
+  const warning = {
+    severity: "warning", field_path: "environment.network.routing",
+    message: "Firewall sources 'edge' use legacy segment-based visibility.",
+    suggestion: "Use authored routing in the scenario or organization pack.",
+  };
+  const request = vi.fn(async () => ({ valid: true, warnings: [warning] }));
+  render(<PackWorkflow item={item} api={{ request } as unknown as StudioApi} onPrepare={vi.fn()} />);
+  expect(await screen.findByText(warning.message)).toBeVisible();
+  expect(screen.getByText(warning.suggestion)).toBeVisible();
+  expect(screen.getByText(/passed validation/)).toBeVisible();
+});
+
 test("deletion requires a reviewed exact version and only runs after confirmation", async () => {
   const request = vi.fn(async (_path: string, method?: string) => method === "POST" ? { deleted_path: "/workspace/.eforge/packs/training/organization/office/1.0.0" } : removable);
   const onDeleted = vi.fn(async () => undefined);

@@ -38,6 +38,7 @@ from evidenceforge.studio.imports import _scenario_references
 from evidenceforge.studio.topology import PackTopology, project_topology
 from evidenceforge.utils import load_scenario_source_graph
 from evidenceforge.utils.files import LoadedSourceGraph
+from evidenceforge.validation.schema import ValidationIssue, legacy_firewall_routing_warning
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class PackReview(BaseModel):
     exports: dict[str, list[str]] = Field(default_factory=dict)
     dependencies: list[str] = Field(default_factory=list)
     model_contributions: dict[str, list[str]] = Field(default_factory=dict)
+    warnings: list[ValidationIssue] = Field(default_factory=list)
     error: str = ""
 
 
@@ -118,6 +120,7 @@ def review_pack(source: Path, workspace: Path) -> PackReview:
         pack, dependencies = _load_reviewed_pack(source, workspace)
         identity = pack.manifest
         kind = identity.type
+        warning = legacy_firewall_routing_warning(pack.environment.get("network"))
         return PackReview(
             valid=True,
             reference=f"draft:{kind}:{identity.name}@{identity.draft_id}"
@@ -134,6 +137,7 @@ def review_pack(source: Path, workspace: Path) -> PackReview:
                 "environment": sorted(pack.environment),
                 "baseline_activity": sorted(pack.baseline_activity),
             },
+            warnings=[warning] if warning else [],
         )
     except (OSError, ValueError, EvidenceForgeError) as exc:
         return PackReview(valid=False, error=str(exc))

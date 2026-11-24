@@ -1,11 +1,11 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import { Apple, BrickWallFire, ChevronLeft, ChevronRight, ChevronUp, Expand, Grid2X2, Maximize, Minimize, Monitor, Network, Server, X, ZoomIn, ZoomOut } from "lucide-react";
+import { useCallback, useEffect, useEffectEvent, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { Apple, BrickWallFire, ChevronLeft, ChevronRight, ChevronUp, Cloud, Expand, Grid2X2, Maximize, Minimize, Monitor, Network, Server, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { NetworkChatContext, TopologyGraph } from "./api";
 import { captureNetworkView } from "./captureNetworkView";
 import { Modal } from "./Modal";
 import {
-  chooseInitialBranches, indexDiagramHosts, indexInlineHosts, INLINE_HOST_LIMIT, layoutNetworkDiagram,
-  type Branch, type DiagramAssociation, type DiagramDevice, type DiagramEntity, type DiagramHost, type DiagramLayers, type DiagramNode, type SensorEntry,
+  chooseInitialBranches, indexDiagramHosts, indexInlineHosts, INLINE_HOST_LIMIT, layoutNetworkDiagram, MIN_READABLE_SCALE,
+  type Branch, type DiagramAssociation, type DiagramDevice, type DiagramEntity, type DiagramHost, type DiagramLayers, type DiagramLinkEntry, type DiagramLinkKind, type DiagramNode, type SensorEntry,
 } from "./networkDiagramLayout";
 
 const DEVICE_LABELS: Record<DiagramDevice["kind"], string> = {
@@ -15,15 +15,51 @@ const EXPOSURE_LABELS = { internal: "Internal", external: "External", both: "Int
 const OS_LABELS: Record<string, string> = { windows: "Windows", linux: "Linux", macos: "macOS" };
 const EQUIPMENT_LABELS = { firewall: "Firewall", network: "Network appliance", router: "Router", switch: "Switch" };
 const LAYER_LABELS = { sensors: "Sensors", firewalls: "Firewalls", hosts: "Hosts" };
+const LINK_LABELS: Record<DiagramLinkKind, string> = { network: "Network link", wan: "WAN link", vpn: "VPN link" };
+const LINK_KINDS = Object.keys(LINK_LABELS) as DiagramLinkKind[];
+const SCOPE_COLORS = ["--accent", "--info", "--ok", "--syntax-keyword", "--warn", "--diagram-scope-rose", "--diagram-scope-olive", "--err"];
+const SCOPE_DASHES = ["3 4", "8 3", "7 2 1 2", "1 3"];
 const PAGE_SIZE = 12;
 const INITIAL_SIZE = { width: 720, height: 320 };
 type Camera = { x: number; y: number; scale: number };
 type Drag = { pointer: number; x: number; y: number; camera: Camera };
+type FirewallScope = { id: string; label: string; segments: Set<string>; color: string; dash: string };
+
+function indexFirewallScopes(graph: TopologyGraph) {
+  const groups = new Map<string, Omit<FirewallScope, "color" | "dash">>();
+  for (const device of graph.devices) {
+    if (device.kind !== "firewall") continue;
+    for (const { segment_id, interface_name } of device.associations) {
+      if (interface_name === null) continue;
+      const id = JSON.stringify([device.id, interface_name]);
+      const group = groups.get(id) ?? { id, label: `${device.hostname} · ${interface_name}`, segments: new Set<string>() };
+      group.segments.add(segment_id);
+      groups.set(id, group);
+    }
+  }
+  const scopes = [...groups.values()]
+    .sort((a, b) => a.label.localeCompare(b.label, "en") || a.id.localeCompare(b.id, "en"))
+    .map((group, index) => ({
+      ...group,
+      color: `var(${SCOPE_COLORS[index % SCOPE_COLORS.length]})`,
+      dash: SCOPE_DASHES[Math.floor(index / SCOPE_COLORS.length) % SCOPE_DASHES.length],
+    }));
+  const scopesBySegment = new Map<string, FirewallScope[]>();
+  for (const scope of scopes) {
+    for (const id of scope.segments) {
+      const matches = scopesBySegment.get(id) ?? [];
+      matches.push(scope);
+      scopesBySegment.set(id, matches);
+    }
+  }
+  return { scopes, scopesBySegment };
+}
 
 function nodeLabel(entity: DiagramEntity): string {
   if (entity.kind === "segment") return entity.segment.name;
   if (entity.kind === "device") return entity.device.hostname;
   if (entity.kind === "host") return entity.host.hostname;
+  if (entity.kind === "router") return entity.device.system ?? entity.name;
   return "Unassigned hosts";
 }
 
@@ -32,6 +68,38 @@ function abbreviatedLabel(value: string, limit: number, keepSuffix = false): str
   if (characters.length <= limit) return value;
   const suffix = keepSuffix ? Math.min(4, Math.floor((limit - 1) / 2)) : 0;
   return characters.slice(0, limit - suffix - 1).join("") + "…" + characters.slice(characters.length - suffix).join("");
+}
+
+function FirewallScopeHighlight({ scopes, width, height }: { scopes: FirewallScope[]; width: number; height: number }) {
+  const bandWidth = 220 / scopes.length;
+  const gap = scopes.length > 1 ? Math.min(3, bandWidth * 0.15) : 0;
+  const caption = scopes.map(({ label }) => label).join(", ");
+  return <g aria-hidden="true">
+    {scopes.map((scope, index) => <rect key={scope.id} className="diagram-scope-highlight"
+      x={width / 2 - 110 + index * bandWidth + gap / 2} width={bandWidth - gap} height={height}
+      rx={Math.min(7, bandWidth / 3)} style={{ color: scope.color }} strokeDasharray={scope.dash}>
+      <title>{scope.label}</title>
+    </rect>)}
+    <text className="diagram-scope-caption" x={width / 2} y={-7} textAnchor="middle"
+      style={{ color: scopes.length === 1 ? scopes[0].color : undefined }}>
+      {abbreviatedLabel(caption, Math.floor((width - 18) / 7))}
+    </text>
+  </g>;
+}
+
+function FirewallScopeKey({ scopes, segments }: { scopes: FirewallScope[]; segments: TopologyGraph["segments"] }) {
+  const names = new Map(segments.map(({ id, name }) => [id, name]));
+  return <details className="diagram-sensor-key">
+    <summary>Firewall scopes ({scopes.length})</summary>
+    <ul aria-label="Firewall policy scopes">
+      {scopes.map((scope) => <li key={scope.id} className="diagram-scope-key-entry">
+        <svg width="26" height="16" viewBox="0 0 26 16" style={{ color: scope.color }} aria-hidden="true">
+          <rect className="diagram-scope-swatch" x={1} y={2} width={24} height={12} rx={3} strokeDasharray={scope.dash} />
+        </svg>
+        <div><strong>{scope.label}</strong><small>{[...scope.segments].map((id) => names.get(id) ?? id).join(", ")}</small></div>
+      </li>)}
+    </ul>
+  </details>;
 }
 
 function HostIcon({ family, size, x, y }: { family: string; size: number; x?: number; y?: number }) {
@@ -101,9 +169,10 @@ function HostGroup({ hosts }: { hosts: DiagramHost[] }) {
   </div>;
 }
 
-function DiagramInspector({ entity, graph, hosts, associations, extraSensorIds, onSelect, onClose, askAction }: {
+function DiagramInspector({ entity, graph, hosts, associations, linksBySegment, extraSensorIds, onSelect, onClose, askAction }: {
   entity: DiagramEntity; graph: TopologyGraph; hosts: DiagramHost[];
   associations: DiagramAssociation[];
+  linksBySegment: ReadonlyMap<string, DiagramLinkEntry>;
   extraSensorIds: readonly string[];
   onSelect: (id: string) => void; onClose: () => void;
   askAction?: ReactNode;
@@ -111,17 +180,26 @@ function DiagramInspector({ entity, graph, hosts, associations, extraSensorIds, 
   const { kind, id } = entity;
   const inspector = useRef<HTMLElement>(null);
   const findings = graph.findings.filter((finding) => finding.entity_id === id);
+  const segmentName = entity.kind === "segment" ? entity.segment.name : undefined;
+  const gateway = segmentName ? graph.routing?.gateways?.[segmentName] : undefined;
+  const link = linksBySegment.get(id);
+  const tap = graph.link_taps?.[id];
+  const tapTarget = tap && [...linksBySegment].find(([, entry]) => entry.name === tap.link)?.[0];
   const additional = associations.filter(({ device }) => extraSensorIds.includes(device.id));
   const otherAssociations = associations.filter(({ device }) => !extraSensorIds.includes(device.id));
   useEffect(() => {
     if (extraSensorIds.length && inspector.current) inspector.current.scrollTop = 0;
   }, [extraSensorIds]);
   const associationList = (entries: DiagramAssociation[]) => <ul className="diagram-associations">
-    {entries.map(({ device, interface_name, monitored }) => <li key={device.id}>
-      <button type="button" onClick={() => onSelect(device.id)}>{device.hostname}</button>
-      {interface_name !== null && <span>Interface {interface_name}</span>}
-      {monitored && <span>{device.kind === "firewall" ? "Monitored by firewall" : device.placement.toUpperCase()}</span>}
-    </li>)}
+    {entries.map(({ device, interface_name, monitored }) => {
+      const capture = graph.link_taps?.[device.id];
+      return <li key={device.id}>
+        <button type="button" onClick={() => onSelect(device.id)}>{device.hostname}</button>
+        {interface_name !== null && <span>Policy scope {interface_name}</span>}
+        {monitored && <span>{device.kind === "firewall" ? "Monitored by firewall" : device.placement.toUpperCase()}</span>}
+        {capture && <span>{capture.scope === "internet" ? "Internet traffic" : "All traffic"}</span>}
+      </li>;
+    })}
   </ul>;
   return <aside ref={inspector} className="diagram-inspector" aria-label="Network diagram details">
     <header className="diagram-details-heading">
@@ -136,10 +214,22 @@ function DiagramInspector({ entity, graph, hosts, associations, extraSensorIds, 
     {kind === "host" && <HostFacts host={entity.host} />}
     {kind === "segment" && <>
       <dl className="diagram-facts">
-        <dt>Address range</dt><dd><code>{entity.segment.cidr}</code></dd>
+        {entity.segment.cidr && <><dt>Address range</dt><dd><code>{entity.segment.cidr}</code></dd></>}
         <dt>Exposure</dt><dd>{EXPOSURE_LABELS[entity.segment.exposure]}</dd>
+        {gateway && <><dt>Gateway</dt><dd><button type="button"
+          onClick={() => onSelect(graph.devices.find((device) => graph.routing?.devices[gateway]?.firewall === device.name)?.id ?? "router:" + gateway)}>{gateway}</button></dd></>}
+        {link && <><dt>{LINK_LABELS[link.link.kind ?? "network"]}</dt><dd>{link.name}</dd></>}
       </dl>
       {entity.segment.description && <p>{entity.segment.description}</p>}
+      {link && <>
+        <h5>Interfaces</h5>
+        <ul className="diagram-associations">{Object.entries(link.link.interfaces).map(([device, iface]) =>
+          <li key={device}><strong>{device}</strong><span>{iface.name}</span><code>{iface.ip}</code></li>)}</ul>
+      </>}
+    </>}
+    {kind === "router" && <>
+      <p>{EQUIPMENT_LABELS[entity.device.kind]}</p>
+      {entity.host && <HostFacts host={entity.host} />}
     </>}
     {kind === "device" && <>
       <dl className="diagram-facts">
@@ -147,6 +237,10 @@ function DiagramInspector({ entity, graph, hosts, associations, extraSensorIds, 
         {entity.device.hostname !== entity.device.name && <><dt>Name</dt><dd>{entity.device.name}</dd></>}
         <dt>{entity.device.kind === "firewall" ? "Monitoring placement" : "Placement"}</dt><dd>{entity.device.placement.toUpperCase()}</dd>
         <dt>Direction</dt><dd>{entity.device.direction}</dd>
+        {tap && <>
+          <dt>Network link</dt><dd>{tapTarget ? <button type="button" onClick={() => onSelect(tapTarget)}>{tap.link}</button> : tap.link}</dd>
+          <dt>Traffic</dt><dd>{tap.scope === "internet" ? "Internet traffic" : "All traffic"}</dd>
+        </>}
         {entity.device.log_formats.length > 0 && <><dt>Log formats</dt><dd>{entity.device.log_formats.join(", ")}</dd></>}
         {entity.device.default_interface !== null && <><dt>Default interface</dt><dd>{entity.device.default_interface}</dd></>}
       </dl>
@@ -155,7 +249,7 @@ function DiagramInspector({ entity, graph, hosts, associations, extraSensorIds, 
       {entity.device.associations.length > 0 && <ul className="diagram-associations">
         {entity.device.associations.map((association) => <li key={association.segment_id}>
           <button type="button" onClick={() => onSelect(association.segment_id)}>{graph.segments.find((segment) => segment.id === association.segment_id)?.name}</button>
-          {association.interface_name !== null && <span>Interface {association.interface_name}</span>}
+          {association.interface_name !== null && <span>Policy scope {association.interface_name}</span>}
           {association.monitored && <span>Monitored</span>}
         </li>)}
       </ul>}
@@ -295,6 +389,12 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
 }) {
   const title = useId();
   const viewport = useRef<SVGSVGElement>(null);
+  const canvas = useRef<HTMLDivElement>(null);
+  const [surface, setSurface] = useState<HTMLDivElement | null>(null);
+  const trackCanvas = useCallback((element: HTMLDivElement | null) => {
+    canvas.current = element;
+    setSurface(element);
+  }, []);
   const body = useRef<HTMLDivElement>(null);
   const expandButton = useRef<HTMLButtonElement>(null);
   const restoreButton = useRef<HTMLButtonElement>(null);
@@ -303,6 +403,7 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [showScopes, setShowScopes] = useState(!graph.routing);
   const [layers, setLayers] = useState<DiagramLayers>({ sensors: true, firewalls: true, hosts: true });
   const [size, setSize] = useState(INITIAL_SIZE);
   const [layoutSize, setLayoutSize] = useState(INITIAL_SIZE);
@@ -323,8 +424,8 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     }
     return automatic;
   }, [inlineGroups, layoutSize, branchChoices]);
-  const scene = useMemo(() => layoutNetworkDiagram(graph, layers, groups, expandedBranches, hostPages),
-    [graph, layers, groups, expandedBranches, hostPages]);
+  const scene = useMemo(() => layoutNetworkDiagram(graph, layers, groups, expandedBranches, hostPages, layoutSize.width),
+    [graph, layers, groups, expandedBranches, hostPages, layoutSize.width]);
   const hasNodes = scene.nodes.length > 0 || scene.sensors.length > 0;
   const scale = Math.min(1.05, size.width / scene.width, size.height / scene.height);
   const centered = (value: number): Camera => ({
@@ -333,19 +434,32 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     scale: value,
   });
   const fit = centered(scale);
-  const readable = centered(Math.max(0.55, scale));
-  const view = camera === "fit" ? fit : camera ?? { ...readable, x: Math.max(0, readable.x), y: Math.max(0, readable.y) };
+  const readable = centered(Math.max(MIN_READABLE_SCALE, scale));
+  const initialView = { ...readable, x: Math.max(0, readable.x), y: Math.max(0, readable.y) };
+  const view = camera === "fit" ? fit : camera ?? initialView;
   const previewId = [hovered, focused].find((id) => id && scene.entities.has(id));
   const pinned = selected ? scene.entities.get(selected) : undefined;
   const preview = previewId ? scene.entities.get(previewId) : undefined;
   const active = preview?.id ?? pinned?.id;
   const hasSensors = graph.devices.some((device) => device.kind !== "firewall");
   const hasFirewalls = graph.devices.some((device) => device.kind === "firewall");
+  const { scopes, scopesBySegment } = useMemo(() => indexFirewallScopes(graph), [graph]);
   const layerAvailability: DiagramLayers = { sensors: hasSensors, firewalls: hasFirewalls, hosts: graph.hosts.length > 0 };
 
+  const previousLayout = useRef({ size, layoutSize, spineX: scene.spineX });
+  useLayoutEffect(() => {
+    const previous = previousLayout.current;
+    previousLayout.current = { size, layoutSize, spineX: scene.spineX };
+    if (previous.layoutSize === layoutSize) return;
+    setCamera((current) => current && current !== "fit" ? {
+      ...current,
+      x: current.x + (size.width - previous.size.width) / 2 + (previous.spineX - scene.spineX) * current.scale,
+      y: current.y + (size.height - previous.size.height) / 2,
+    } : current);
+  }, [size, layoutSize, scene.spineX]);
+
   useEffect(() => {
-    const svg = viewport.current;
-    if (!svg || typeof ResizeObserver === "undefined") return;
+    if (!surface || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
       if (!width || !height) return;
@@ -353,9 +467,9 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
       const fullWidth = body.current?.clientWidth || width;
       setLayoutSize((previous) => previous.width === fullWidth && previous.height === height ? previous : { width: fullWidth, height });
     });
-    observer.observe(svg);
+    observer.observe(surface);
     return () => observer.disconnect();
-  }, [hasNodes, expanded]);
+  }, [surface]);
 
   function resizeDiagram(value: boolean) {
     setHovered(null);
@@ -364,23 +478,41 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     setExpanded(value);
   }
 
-  function zoom(factor: number) {
-    const nextScale = Math.min(3, Math.max(Math.min(0.25, scale), view.scale * factor));
-    const ratio = nextScale / view.scale;
-    const centerX = size.width / 2;
-    const centerY = size.height / 2;
-    setCamera({
-      x: centerX + (view.x - centerX) * ratio,
-      y: centerY + (view.y - centerY) * ratio,
-      scale: nextScale,
+  function zoom(factor: number, x = size.width / 2, y = size.height / 2) {
+    setCamera((camera) => {
+      const current = camera === "fit" ? fit : camera ?? initialView;
+      const nextScale = Math.min(3, Math.max(Math.min(0.25, scale), current.scale * factor));
+      if (nextScale === current.scale) return camera;
+      const ratio = nextScale / current.scale;
+      return {
+        x: x + (current.x - x) * ratio,
+        y: y + (current.y - y) * ratio,
+        scale: nextScale,
+      };
     });
   }
+
+  const wheelZoom = useEffectEvent((event: WheelEvent, target: HTMLDivElement) => {
+    if (!target.contains(target.ownerDocument.activeElement) || !event.deltaY) return;
+    event.preventDefault();
+    const { left, top, height } = target.getBoundingClientRect();
+    const units = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 :
+      event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? height : 1;
+    const delta = Math.max(-360, Math.min(360, event.deltaY * units));
+    zoom(Math.exp(-delta / 360), event.clientX - left, event.clientY - top);
+  });
+  useEffect(() => {
+    if (!surface) return;
+    const handleWheel = (event: WheelEvent) => wheelZoom(event, surface);
+    surface.addEventListener("wheel", handleWheel, { capture: true, passive: false });
+    return () => surface.removeEventListener("wheel", handleWheel, true);
+  }, [surface]);
 
   function startDrag(event: PointerEvent<SVGSVGElement>) {
     if (event.button !== 0) return;
     event.preventDefault();
+    canvas.current?.focus({ preventScroll: true });
     if ((event.target as Element).closest(".diagram-node")) return;
-    event.currentTarget.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, camera: view };
     setDragging(true);
@@ -402,8 +534,8 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     setDragging(false);
   }
 
-  function panByKeyboard(event: KeyboardEvent<SVGSVGElement>) {
-    if (event.key === "Escape") {
+  function panByKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape" && !expanded) {
       setSelected(null);
       setExtraSensorIds([]);
       return;
@@ -434,7 +566,7 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     setFocused(null);
     setSelected(id);
     setExtraSensorIds([]);
-    viewport.current?.focus();
+    canvas.current?.focus({ preventScroll: true });
     const node = scene.nodesById.get(id);
     if (node) revealNode(node);
   }
@@ -451,7 +583,7 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     try {
       const image = await captureNetworkView(viewport.current).catch(() => null);
       await onAsk({
-        revision, topology: graph, image, selected_id: entity?.id, selection_label: entity && nodeLabel(entity),
+        revision, topology: graph, image, firewall_scopes_visible: showScopes && scopes.length > 0, selected_id: entity?.id, selection_label: entity && nodeLabel(entity),
         visible_layers: (Object.keys(layers) as (keyof DiagramLayers)[]).filter((layer) => layers[layer] && layerAvailability[layer]),
         expanded_subnet_ids: scene.branches.filter((branch) => branch.expanded).map(({ node }) => node.id),
         sensor_key: Object.fromEntries(scene.sensors.map(({ mark, device }) => [mark, device.id])),
@@ -478,7 +610,7 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
     </header>
     {askError && <p role="alert">{askError}</p>}
     {graph.segments.length === 0 && <p className="muted">No network segments are declared.</p>}
-    {(graph.segments.length > 0 || graph.devices.length > 0 || graph.hosts.length > 0) && <>
+    {(hasNodes || graph.segments.length > 0 || graph.devices.length > 0 || graph.hosts.length > 0) && <>
       <div className="diagram-toolbar">
         <div className="diagram-controls" role="group" aria-label="Diagram layers">
           {(Object.keys(LAYER_LABELS) as (keyof DiagramLayers)[]).map((key) => <button key={key} type="button" className="button-quiet"
@@ -490,6 +622,8 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
               setExtraSensorIds([]);
               setCamera(null);
             }}>{LAYER_LABELS[key]}</button>)}
+          {scopes.length > 0 && <button type="button" className="button-quiet"
+            aria-pressed={showScopes} onClick={() => setShowScopes(!showScopes)}>Firewall scopes</button>}
         </div>
         <div className="diagram-controls" role="group" aria-label="Diagram view">
           <button type="button" className="button-quiet" aria-label="Zoom out" disabled={!hasNodes} onClick={() => zoom(0.8)}><ZoomOut size={16} /></button>
@@ -499,49 +633,60 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
       </div>
       {hasNodes ? <>
         <div ref={body} className="diagram-body">
-          <div className="diagram-canvas">
-            <svg ref={viewport} className="diagram-viewport" data-dragging={dragging} tabIndex={0}
-              role="group" aria-label="Network map, use arrow keys to pan" onKeyDown={panByKeyboard}
+          <div ref={trackCanvas} className="diagram-canvas" role="group" tabIndex={0}
+            aria-label="Network map, use arrow keys to pan and the wheel to zoom when focused" onKeyDown={panByKeyboard}>
+            <svg ref={viewport} className="diagram-viewport" data-dragging={dragging}
               onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag}
               onPointerCancel={stopDrag} onLostPointerCapture={stopDrag}>
               <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
                 <g aria-hidden="true" className="diagram-edges">{scene.wires.map((wire) =>
-                  <path key={wire.key} d={wire.path} data-kind={wire.kind} data-highlighted={!!active && wire.entities.includes(active)} />)}
+                  <path key={wire.key} d={wire.path} data-kind={wire.kind} data-link-kind={wire.linkKind}
+                    data-highlighted={!!active && wire.entities.includes(active)} />)}
                 </g>
                 <g aria-hidden="true" className="diagram-interface-labels">
-                  {scene.labels.map((label) => <text key={label.key} x={label.x} y={label.y}>
+                  {scene.labels.map((label) => <text key={label.key} x={label.x} y={label.y} textAnchor={label.anchor}>
                     {abbreviatedLabel(label.text, Math.floor(label.width / 7))}<title>{label.text}</title>
                   </text>)}
                 </g>
                 {scene.nodes.map((node) => {
                   const { kind, id, x, y, width, height } = node;
                   const label = nodeLabel(node);
+                  const link = scene.linksBySegment.get(id)?.link;
+                  const internet = link?.internet;
+                  const linkKind = link?.kind;
+                  const linkType = linkKind && linkKind !== "network" ? linkKind : undefined;
                   const endpoint = kind === "host" && !node.equipment;
-                  const labelLimit = endpoint ? Math.floor((width - 4) / 6.7) : Math.floor((width - 12) / 9);
+                  const labelLimit = endpoint ? Math.floor((width - 4) / 6.7) : Math.floor((width - (linkType ? 48 : 12)) / 9);
                   const osFamily = kind === "host" ? node.host.os_family : "";
+                  const segmentScopes = showScopes ? scopesBySegment.get(id) : undefined;
                   const EquipmentIcon = node.equipment === "firewall" ? BrickWallFire : Network;
                   const routerSymbol = node.equipment === "router" || node.equipment === "network";
-                  const accessibleLabel = kind === "segment" ? `Segment ${label}, ${node.segment.cidr}`
+                  const accessibleLabel = kind === "segment" ? node.segment.cidr ? `Segment ${label}, ${node.segment.cidr}` : label
                     : kind === "device" ? `Firewall ${label}`
+                    : kind === "router" ? `${label} ${EQUIPMENT_LABELS[node.device.kind]}`
                     : kind === "host" ? `${label} ${node.equipment ? EQUIPMENT_LABELS[node.equipment] : OS_LABELS[osFamily] || "Other OS"}` : label;
                   return <g key={node.key} className="diagram-node" transform={`translate(${x} ${y})`} role="button"
                     tabIndex={0} aria-label={accessibleLabel} aria-pressed={selected === id}
-                    data-kind={kind} data-equipment={node.equipment} data-active={active === id} data-family={osFamily || undefined}
+                    data-kind={kind} data-equipment={node.equipment} data-link-kind={linkType} data-internet={internet || undefined}
+                    data-active={active === id} data-family={osFamily || undefined}
                     onMouseEnter={() => setHovered(id)} onMouseLeave={() => setHovered(null)}
                     onFocus={() => { setFocused(id); revealNode(node); }} onBlur={() => setFocused(null)}
                     onClick={(event) => {
                       toggleSelection(id);
                       event.currentTarget.focus({ preventScroll: true });
                     }} onKeyDown={(event) => activateByKey(event, () => toggleSelection(id))}>
+                    {segmentScopes && <FirewallScopeHighlight scopes={segmentScopes} width={width} height={height} />}
                     <rect className="diagram-node-box" width={width} height={height} />
                     {routerSymbol ? <RouterIcon x={width / 2 - 22} y={12} />
                       : node.equipment && <EquipmentIcon x={width / 2 - 22} y={12} size={44} aria-hidden="true" />}
+                    {internet && <Cloud x={width / 2 - 22} y={1} size={44} aria-hidden="true" />}
                     {endpoint && <HostIcon family={osFamily} x={width / 2 - 13} y={0} size={26} />}
-                    <text x={width / 2} y={node.equipment ? 69 : kind === "host" ? 39 : 16} textAnchor="middle"
+                    <text x={width / 2} y={internet ? height - 6 : node.equipment ? 69 : kind === "host" ? 39 : 16} textAnchor="middle"
                       className="diagram-node-label" aria-hidden="true">
-                      {abbreviatedLabel(label, labelLimit, endpoint)}
+                      {internet ? label : abbreviatedLabel(label, labelLimit, endpoint)}
+                      {linkType && <tspan className="diagram-link-type" dx={8}>{linkType.toUpperCase()}</tspan>}
                     </text>
-                    {kind === "segment" && <text x={width / 2} y={36} textAnchor="middle"
+                    {kind === "segment" && node.segment.cidr && <text x={width / 2} y={36} textAnchor="middle"
                       className="diagram-node-subtitle" aria-hidden="true">{node.segment.cidr}</text>}
                     <title>{kind === "host" ? `${label} · ${node.host.os}` : accessibleLabel}</title>
                   </g>;
@@ -567,19 +712,28 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
             </div>}
           </div>
           {pinned && <DiagramInspector entity={pinned} graph={graph}
+            linksBySegment={scene.linksBySegment}
             hosts={layers.hosts ? groups.get(pinned.id) ?? [] : []}
             associations={(scene.associations.get(pinned.id) ?? []).filter(({ device }) => scene.entities.has(device.id))}
             extraSensorIds={extraSensorIds}
             askAction={onAsk && revision && <button type="button" className="button-quiet" disabled={asking}
               onClick={() => void askAbout(pinned)}>Ask about this</button>}
-            onSelect={selectFromDetails} onClose={() => { setSelected(null); setExtraSensorIds([]); viewport.current?.focus(); }} />}
+            onSelect={selectFromDetails} onClose={() => { setSelected(null); setExtraSensorIds([]); canvas.current?.focus(); }} />}
         </div>
         <div className="diagram-legend" aria-label="Diagram key">
-          {layers.firewalls && hasFirewalls && <span><i aria-hidden="true" />Firewall interface</span>}
+          {LINK_KINDS.filter((kind) => [...scene.linksBySegment.values()].some(({ link }) => (link.kind ?? "network") === kind))
+            .map((kind) => <span key={kind}>
+              <svg className="diagram-link-key" width="36" height="10" aria-hidden="true">
+                <path d="M 1 5 H 35" data-link-kind={kind} />
+              </svg>
+              {LINK_LABELS[kind]}
+            </span>)}
+          {showScopes && scopes.length > 0 && <span><i className="diagram-scope-key" aria-hidden="true" />Firewall policy scope</span>}
           {scene.wires.some(({ kind }) => kind === "membership") && <span><i className="diagram-membership-key" aria-hidden="true" />Device subnet membership</span>}
           {scene.sensors.some(({ device }) => device.placement === "tap") && <CoverageKey placement="tap" />}
           {scene.sensors.some(({ device }) => device.placement === "span") && <CoverageKey placement="span" />}
-          <SensorKey sensors={scene.sensors} active={active} selected={selected}
+          {showScopes && scopes.length > 0 && <FirewallScopeKey scopes={scopes} segments={graph.segments} />}
+        <SensorKey sensors={scene.sensors} active={active} selected={selected}
             onPreview={setHovered} onSelect={toggleSelection} />
         </div>
       </> : <p className="muted">No diagram items in the selected layers.</p>}
@@ -591,7 +745,7 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
   </section>;
   return expanded ? <Modal title="Expanded network diagram" hideTitle size="full" className="network-diagram-dialog"
     onClose={() => resizeDiagram(false)}
-    onOpenAutoFocus={(event) => { event.preventDefault(); restoreButton.current?.focus(); }}
+    onOpenAutoFocus={(event) => { event.preventDefault(); (canvas.current ?? restoreButton.current)?.focus({ preventScroll: true }); }}
     onCloseAutoFocus={(event) => {
       event.preventDefault();
       requestAnimationFrame(() => {

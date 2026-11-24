@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
     FileContext,
+    FirewallContext,
     HttpContext,
     NetworkTransactionDraft,
     ProcessContext,
@@ -2975,7 +2976,7 @@ class NetworkTransactionPlanner:
         proxy = request.proxy
         firewall = request.firewall
         if firewall is not None and not firewall.enforcing_entities:
-            visibility = executor.dispatcher.visibility_engine
+            visibility = getattr(executor.dispatcher, "visibility_engine", None)
             enforcing = (
                 [
                     str(sensor.hostname or sensor.name)
@@ -3346,6 +3347,49 @@ class NetworkTransactionPlanner:
             )
             return ""
 
+        visibility = getattr(executor.dispatcher, "visibility_engine", None)
+        route_unreachable = False
+        if visibility is not None and visibility.routing is not None:
+            forced = (
+                firewall.enforcing_entities
+                if firewall is not None and firewall.action == "deny"
+                else None
+            )
+            flow = visibility.routed_connection(src_ip, dst_ip, dst_port, denied_entities=forced)
+            route_unreachable = not flow.reachable
+            if flow.denied_by is not None:
+                sensor = flow.denied_by
+                name = sensor.hostname or sensor.name
+                src_interface, dst_interface = visibility.forwarding_interfaces(
+                    name, src_ip, dst_ip
+                )
+                firewall = FirewallContext(
+                    action="deny",
+                    msg_id=106023,
+                    connection_id=0,
+                    src_interface=src_interface,
+                    dst_interface=dst_interface,
+                    access_group=f"{src_interface}_access_in",
+                    enforcing_entities=(name,),
+                )
+            elif forced is not None:
+                firewall = None
+            if route_unreachable:
+                rejected = flow.denied_by is not None and flow.denied_by.drop_mode == "reject"
+                conn_state = "REJ" if rejected and proto == "tcp" else "S0"
+                caller_provided_conn_state = True
+                caller_provided_payload = False
+                orig_bytes = resp_bytes = 0
+                emit_dns = False
+                force_visible_prereq_dns = False
+                suppress_application_side_effects = True
+                service = ""
+                http = dns = email = smtp = proxy = x509 = ocsp = pe = file_transfer = None
+                x509_chain = file_transfers = ()
+                ntp_timing = deferred_kerberos_duration_proto = None
+                ssh_attempted_username = None
+                responding_pid = -1
+
         is_fw_deny = firewall is not None and firewall.action == "deny"
 
         resolved_source_system = source_system
@@ -3706,6 +3750,7 @@ class NetworkTransactionPlanner:
                 stable_id=stable_id,
                 local_only=local_only,
                 http_application_layer_only=http_application_layer_only,
+                route_unreachable=route_unreachable,
                 is_fw_deny=is_fw_deny,
                 is_tcp_probe=is_tcp_probe,
                 dns_server_ips=dns_server_ips,
@@ -4689,7 +4734,9 @@ class NetworkTransactionPlanner:
 
         # Resolve destination system for dst_host
         dst_host_ctx = None
-        if hasattr(executor, "_ip_to_system") and endpoints.dst_ip in executor._ip_to_system:
+        if facts.route_unreachable:
+            pass
+        elif hasattr(executor, "_ip_to_system") and endpoints.dst_ip in executor._ip_to_system:
             dst_host_ctx = executor._build_host_context(executor._ip_to_system[endpoints.dst_ip])
         elif executor.dispatcher and executor.dispatcher.visibility_engine:
             real_dst_ip = executor.dispatcher.visibility_engine._vip_to_real_ip.get(
@@ -5747,13 +5794,17 @@ class NetworkTransactionPlanner:
             event.email = protocol_evidence.email
         if protocol_evidence.smtp is not None:
             event.smtp = protocol_evidence.smtp
-        if request.ssl is not None and not facts.http_application_layer_only:
+        if request.ssl is not None and not (
+            facts.route_unreachable or facts.http_application_layer_only
+        ):
             event.ssl = request.ssl
         if protocol_evidence.x509 is not None and not facts.http_application_layer_only:
             event.x509 = protocol_evidence.x509
         if protocol_evidence.x509_chain and not facts.http_application_layer_only:
             event.x509_chain = list(protocol_evidence.x509_chain)
-        if request.tls_presentation is not None and not facts.http_application_layer_only:
+        if request.tls_presentation is not None and not (
+            facts.route_unreachable or facts.http_application_layer_only
+        ):
             event.tls_presentation = request.tls_presentation
             if not event.x509_chain:
                 event.x509_chain = executor._tls_certificate_planner.x509_contexts(
@@ -5777,11 +5828,11 @@ class NetworkTransactionPlanner:
             event.file_transfers = list(protocol_evidence.file_transfers)
         if protocol_evidence.pe is not None:
             event.pe = protocol_evidence.pe
-        if request.pe_analyses:
+        if request.pe_analyses and not facts.route_unreachable:
             event.pe_analyses = list(request.pe_analyses)
         if protocol_evidence.ocsp is not None:
             event.ocsp = protocol_evidence.ocsp
-        if request.ocsp_transaction is not None:
+        if request.ocsp_transaction is not None and not facts.route_unreachable:
             event.ocsp_transaction = request.ocsp_transaction
         if protocol_evidence.proxy is not None:
             event.proxy = protocol_evidence.proxy

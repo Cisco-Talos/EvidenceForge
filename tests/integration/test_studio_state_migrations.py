@@ -64,7 +64,9 @@ def test_network_chat_migration_preserves_existing_drafts_and_queued_messages(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "studio.sqlite"
-    migrate_database(database, "test-runtime", migrations=MIGRATIONS[:-1])
+    migrate_database(
+        database, "test-runtime", migrations=tuple(m for m in MIGRATIONS if m.target <= 6)
+    )
     draft = '{"conversation_id":"chat-1","view":{"draft":"Existing draft"}}'
     queued = (
         '{"id":"message-1","conversation_id":"chat-1","text":"Queued question",'
@@ -77,12 +79,68 @@ def test_network_chat_migration_preserves_existing_drafts_and_queued_messages(
         )
     assert inspect_database(database) == 6
 
-    migrate_database(database, "test-runtime")
+    migrate_database(
+        database, "test-runtime", migrations=tuple(m for m in MIGRATIONS if m.target <= 7)
+    )
 
     assert inspect_database(database) == 7
     with closing(sqlite3.connect(database)) as connection:
         assert connection.execute("SELECT payload FROM chat_controls").fetchone() == (draft,)
         assert connection.execute("SELECT payload FROM chat_inputs").fetchone() == (queued,)
+
+
+def test_routing_migration_retains_v7_capture_and_dispatch_claim(tmp_path: Path) -> None:
+    from evidenceforge.studio.state_records_v8 import ChatControl, ChatInput
+
+    database = tmp_path / "studio.sqlite"
+    migrate_database(
+        database, "test-runtime", migrations=tuple(m for m in MIGRATIONS if m.target <= 7)
+    )
+    context = {
+        "revision": "legacy-diagram",
+        "topology": {"segments": [], "hosts": [], "devices": [], "findings": []},
+        "selected_id": "device:legacy",
+        "visible_layers": ["firewalls"],
+    }
+    draft = json.dumps(
+        {
+            "conversation_id": "chat-1",
+            "view": {
+                "draft": "Existing network draft",
+                "include_current_view": False,
+                "network_context": context,
+            },
+        }
+    )
+    queued = json.dumps(
+        {
+            "id": "message-1",
+            "conversation_id": "chat-1",
+            "text": "Queued message",
+            "mode": "queue",
+            "state": "queued",
+            "created_at": 12.0,
+            "network_context": context,
+        }
+    )
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute("INSERT INTO chat_controls VALUES (?, ?)", ("chat-1", draft))
+        connection.execute(
+            "INSERT INTO chat_inputs VALUES (?, ?, ?)", ("message-1", "chat-1", queued)
+        )
+    assert inspect_database(database) == 7
+
+    migrate_database(database, "test-runtime")
+    assert inspect_database(database) == 8
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT payload FROM chat_controls").fetchone() == (draft,)
+        assert connection.execute("SELECT payload FROM chat_inputs").fetchone() == (queued,)
+    view = ChatControl.model_validate_json(draft).view
+    message = ChatInput.model_validate_json(queued)
+    assert view.network_context == message.network_context
+    assert message.network_context.selected_id == "device:legacy"
+    assert message.network_context.firewall_scopes_visible is None
+    assert not view.include_current_view
 
 
 def test_consecutive_sql_and_json_transforms_preserve_ids_and_timestamps(tmp_path: Path) -> None:

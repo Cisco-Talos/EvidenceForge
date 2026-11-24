@@ -878,6 +878,97 @@ distinct interfaces to place the firewall between them.
 - `ports`: list of port numbers, or empty list / `"any"` for all ports
 - `action`: `"permit"` (default) or `"deny"`
 
+### Optional static routing, link kinds, and TAPs
+
+Use `environment.network.routing` in a scenario or organization pack to model delivery
+through declared devices. Use authored routing for new firewall models. Validation warns
+when a firewall still uses segment-based visibility, and existing scenarios can continue
+to generate. If a pack relies on its consuming scenario for routing, validate the composed
+scenario to check the complete topology.
+
+Firewall sensor `interfaces` identify policy scopes. Link attachments come from the
+interface entries under `routing.links`. A routed firewall's log coverage follows the
+traffic it handles across its interfaces. The default `complete` observation profile
+retains the records it produces for enabled formats within the capture window. Use the
+same [observation settings](#observation-profile) as for other sources to model collection gaps.
+
+```yaml
+routing:
+  devices:
+    edge: {kind: firewall, firewall: edge-asa}
+    core: {kind: router, system: HQ-CORE-01}
+  links:
+    uplink:
+      internet: true
+      interfaces: {edge: {name: outside, ip: 192.0.2.1}}
+    edge-core:
+      segment: edge-transit
+      interfaces:
+        edge: {name: inside, ip: 10.0.254.1}
+        core: {name: edge, ip: 10.0.254.2}
+    office-lan:
+      segment: office
+      interfaces: {core: {name: office, ip: 10.0.10.1}}
+  gateways: {office: core}
+  routes:
+    edge:
+      - {destination: 10.0.10.0/24, next_hop: 10.0.254.2}
+      - {destination: 0.0.0.0/0, internet_link: uplink}
+    core:
+      - {destination: 0.0.0.0/0, next_hop: 10.0.254.1}
+```
+
+Each named link attaches one or more devices to a declared segment, or one device to the
+Internet. A modeled device can attach to multiple links. The primary IP of a referenced
+system matches one of the device's interfaces. A firewall device references its firewall
+sensor by `name`. A topology supports up to one Internet boundary per address family.
+Each interface declaration carries one IPv4 or IPv6 address.
+
+Set the optional `kind` on a link to describe what it represents.
+
+| `kind` | Meaning |
+| --- | --- |
+| `network` | Ordinary network link. Used when `kind` is omitted. |
+| `wan` | WAN circuit, such as a leased link between sites. |
+| `vpn` | Abstract routed VPN tunnel between its terminations. |
+
+All three kinds use the same static routing rules. An abstract VPN link models
+reachability through the tunnel and produces no encapsulated traffic. The `internet`
+flag continues to declare an Internet boundary.
+
+A segment's gateway identifies a device attached to that segment. An attached segment adds a
+connected route. Explicit static routes specify a destination CIDR and either a directly
+attached neighbor's IP or the device's Internet link. Longest-prefix matching selects the
+route and resolves overlapping subnets for firewall policy and sensor visibility. An authored
+path to a static NAT VIP needs to cross the firewall that owns the mapping. Add return routes
+for any flow expected to establish. Validation reports invalid
+references as errors and warns when an authored connection has no complete path. Unreachable
+flows produce attempt evidence only where the traffic reached. Firewalls apply policies
+where their devices forward the flow.
+
+Set `placement: tap` on a network or IDS sensor and provide `link_tap` to capture an ordinary
+network link. Use `scope: all` (the default) for all traffic on the link or `scope: internet` for
+traffic between the modeled network and the Internet. An Internet-only TAP on the
+core-facing side of an edge firewall sees outbound attempts arriving at the firewall and
+inbound traffic that cleared it. A segment's access link represents its attachment to
+routing equipment. Unicast between ordinary hosts on the same subnet stays on the LAN.
+Supply `monitoring_segments` on a SPAN sensor to capture that traffic.
+
+Validation rejects a TAP or SPAN directly on a WAN or VPN link. This applies to both
+`link_tap` and a network or IDS sensor's `monitoring_segments` when it names the subnet
+associated with the link. Place sensors on ordinary links or subnets at one or both
+terminations. Firewall sensor policy scopes may still reference WAN and VPN subnets.
+
+```yaml
+sensors:
+  - type: network
+    name: zeek-edge-inside
+    placement: tap
+    link_tap: {link: edge-core, scope: internet}
+    log_formats: [zeek]
+```
+
+
 #### Public Address Space
 
 The `public_cidrs` field on `NetworkConfig` declares the org's public IP address blocks. External scan/probe traffic targets these ranges instead of internal IPs, and legitimate inbound connections use VIPs (static NAT `mapped_ip` values) as the wire-level destination.
