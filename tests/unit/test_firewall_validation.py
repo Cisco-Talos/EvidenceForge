@@ -78,8 +78,8 @@ def _make_scenario(sensors=None) -> Scenario:
 
 
 class TestFirewallValidation:
-    def test_valid_firewall_config_no_warnings(self):
-        """Well-configured firewall sensor should produce no firewall-specific warnings."""
+    def test_valid_legacy_firewall_config_only_reports_routing_advisory(self):
+        """A valid legacy firewall policy only needs the routing advisory."""
         scenario = _make_scenario(
             sensors=[
                 NetworkSensor(
@@ -102,7 +102,13 @@ class TestFirewallValidation:
             for issue in issues
             if "firewall" in issue.message.lower() or "policy" in issue.message.lower()
         ]
-        assert len(fw_issues) == 0
+        assert [(issue.severity, issue.field_path, issue.message) for issue in fw_issues] == [
+            (
+                "warning",
+                "environment.network.routing",
+                "Firewall sources 'fw01' use legacy segment-based visibility.",
+            )
+        ]
 
     def test_firewall_without_cisco_asa_informs_and_errors_when_asa_requested(self):
         """Optional coverage is informational; impossible requested ASA output is an error."""

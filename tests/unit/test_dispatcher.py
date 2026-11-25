@@ -2240,6 +2240,7 @@ class TestNetworkVisibilityFiltering:
 
         visibility = MagicMock()
         # Only zeek formats are visible, not snort_alert
+        visibility.routing = None
         visibility.get_log_formats_for_connection.return_value = FORMAT_GROUPS["zeek"]
 
         dispatcher = EventDispatcher(

@@ -6,9 +6,8 @@ description: >
 
 # EvidenceForge Scenario Author
 
-Default new work to Schema 3 drafts.
-Lifecycle: read `/eforge:references:artifact-lifecycle`.
-Use file Properties for metadata and exact validation provenance.
+Default new work to Schema 3 drafts. Read `/eforge:references:artifact-lifecycle` and use file
+Properties for metadata and exact validation provenance.
 Preserve Scenario 1.0/2.0 unless the user requests adoption or upgrade.
 
 In an EvidenceForge source checkout, use `uv run eforge`.
@@ -82,9 +81,7 @@ Never load every scenario reference by default. Read these direct references con
 - `/eforge:references:scenario-payloads` — only for spillage, adversarial, or encoded content.
 - `/eforge:references:scenario-briefing` — only when creating or updating `ENVIRONMENT.md`.
 
-Load focused references only for changed fields.
-
-For exact expected evidence, conditionally read only the matching compact reference:
+For exact expected evidence, read only the matching reference:
 
 - `/eforge:references:evidence-windows` — Windows Security or Sysmon.
 - `/eforge:references:evidence-network-ids` — Zeek, ASA, DHCP, DNS, TLS, or IDS.

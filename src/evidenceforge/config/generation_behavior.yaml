@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 577
+current_revision: 578
 history_start_revision: 1
-behavior_surface_sha256: adebf29ecb35842c2a056c84e33135d1474609b6e728b16848dee413a605909c
+behavior_surface_sha256: 055c8c6f73b18ed7180d091d641bf6415c883d0473bf6ca48af87c17b98e4427
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6682,3 +6682,17 @@ changes:
   formats: []
   summary: Bundle the Talus Enterprises 1.0.0 organization pack, a robotics company with an
     engineering headquarters and a manufacturing site joined by a WAN.
+- revision: 578
+  id: macos-deferred-shell-session-boundary
+  impact: localized
+  domains:
+  - macos-session-lifecycle
+  - macos-terminal-readiness
+  - ssh-session-lifecycle
+  - checkpoint-recovery
+  formats:
+  - ecar
+  - macos_endpoint_security
+  - zeek_conn
+  summary: Keep deferred Mac shell commands inside their GUI session and qualify Mac SSH
+    receivers before routing attempts. Declare the rebuilt routing and VIP maps in checkpoints.

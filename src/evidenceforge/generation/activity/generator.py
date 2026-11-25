@@ -803,6 +803,7 @@ _FOREGROUND_SHELL_INITIAL_READY_MAX_MS = (
 _LINUX_LOCAL_SESSION_SHELL_MAX_AFTER_LOGON_MS = 1_379
 _LINUX_LOCAL_SESSION_SHELL_MAX_AFTER_REQUEST_MS = 120
 _LINUX_LOCAL_SESSION_SHELL_MAX_AFTER_SCENARIO_START_MS = 2_899
+_MACOS_DEFERRED_SHELL_COMMAND_GAP = timedelta(milliseconds=50)
 _SSH_SESSION_SHELL_MAX_AFTER_SOURCE_READY_MS = 349
 _SSH_SESSION_SSHD_MAX_AFTER_LOGON_MS = 2_299
 _SSH_SESSION_BASH_MAX_AFTER_SSHD_MS = 299
@@ -17653,7 +17654,7 @@ class ActivityGenerator:
                     raise StateError("Mac command lost its completed native terminal shell")
                 parent_pid = shell_pid
                 if ensure_utc(time) <= shell.execution_started_at:
-                    time = shell.execution_started_at + timedelta(milliseconds=50)
+                    time = shell.execution_started_at + _MACOS_DEFERRED_SHELL_COMMAND_GAP
         launch_support = None
         if provider is not None and ".app/Contents/MacOS/" in process_name:
             from evidenceforge.generation.macos_launch_support import resolve_macos_launch_support
@@ -26060,6 +26061,7 @@ class ActivityGenerator:
 
         if _get_os_category(target_system.os) != "macos":
             return None
+        activity_time = ensure_utc(activity_time)
         session = self.state_manager.get_session_at(logon_id, activity_time)
         if (
             session is None
@@ -26082,10 +26084,11 @@ class ActivityGenerator:
                 execution = self.state_manager.get_process_identity(
                     target_system.hostname, shell.pid
                 )
-                if execution is not None and execution.execution_started_at > ensure_utc(
-                    activity_time
-                ):
-                    return True
+                if execution is not None and execution.execution_started_at >= activity_time:
+                    deferred_at = execution.execution_started_at + _MACOS_DEFERRED_SHELL_COMMAND_GAP
+                    return self.state_manager.get_session_at(logon_id, deferred_at) is session and (
+                        _session_active_for_activity(session, deferred_at, margin_seconds=1.5)
+                    )
             return self._is_pid_active_at(
                 target_system, shell.pid, activity_time
             ) and self._process_source_bound_visible_by(
@@ -26369,6 +26372,10 @@ class ActivityGenerator:
             times = [start]
             for delta in deltas:
                 times.append(times[-1] + delta.value)
+            if times[-1] >= ensure_utc(activity_time) and not _session_active_for_activity(
+                session, times[-1] + _MACOS_DEFERRED_SHELL_COMMAND_GAP, margin_seconds=1.5
+            ):
+                return None
             owner = self.state_manager.get_session_identity(key)
             if owner is None:
                 raise StateError("Native terminal startup lost its authenticated GUI session")

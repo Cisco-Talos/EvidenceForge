@@ -1273,6 +1273,18 @@ class ProcessExecutionService:
                     if spaced_time != time:
                         time = spaced_time
 
+        if (
+            session is not None
+            and session.session_kind == "interactive"
+            and repaired_execution is not None
+            and repaired_execution.pid == session.session_shell_pid
+            and repaired_execution.image in {"/bin/zsh", "/bin/bash"}
+            and not policy._session_active_for_activity(session, time)
+        ):
+            # Parent readiness and launch spacing may move an otherwise valid
+            # request beyond the GUI session's planned close.
+            return 0
+
         collection_end = getattr(self.dispatcher, "output_end_time", None)
         if (
             not request.from_storyline

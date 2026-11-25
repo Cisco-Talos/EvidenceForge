@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
 from evidenceforge.generation.activity.application_catalog import application_descriptor
 from evidenceforge.generation.activity.spawn_rules import get_parent_config
@@ -36,6 +37,51 @@ def _engine(
     engine = GenerationEngine(Scenario.model_validate(raw), tmp_path, generation_seed=358)
     engine._chronological_es_delivery = True
     return engine
+
+
+@pytest.mark.parametrize("shell_after_close", [False, True])
+@pytest.mark.parametrize("explicit_parent", [False, True])
+def test_deferred_shell_command_must_fit_the_session_close(
+    tmp_path: Path, shell_after_close: bool, explicit_parent: bool
+) -> None:
+    engine = _engine(tmp_path, "macos-terminal")
+    try:
+        engine._initialize()
+        generator, state = engine.activity_generator, engine.state_manager
+        user, system = engine.scenario.environment.users[0], engine.scenario.environment.systems[0]
+        login_at = engine.start_time + timedelta(minutes=1)
+        command_at = login_at + timedelta(minutes=5)
+        shell_at = command_at + timedelta(minutes=12)
+        logon = generator.generate_logon(user, system, login_at, allow_local_session_reuse=False)
+        shell_pid = generator.ensure_macos_session_shell(user, system, logon, shell_at)
+        assert shell_pid is not None
+        shell = state.get_process_identity(system.hostname, shell_pid)
+        assert shell is not None and shell.execution_started_at > command_at
+        close_at = (command_at if shell_after_close else shell_at) + timedelta(seconds=20)
+        assert state.plan_session_end(
+            logon, SessionEndPlan(canonical_end=close_at, authority="generated")
+        )
+
+        pid = generator.generate_process(
+            user,
+            system,
+            command_at,
+            logon,
+            "/usr/bin/id",
+            "/usr/bin/id",
+            parent_pid=shell_pid if explicit_parent else 0,
+        )
+
+        if shell_after_close:
+            assert pid == 0
+        else:
+            command = state.get_process_identity(system.hostname, pid)
+            assert command is not None and command.parent_pid == shell_pid
+            assert shell.execution_started_at < command.execution_started_at < close_at
+        engine._finalize_macos_process_coverage()
+        assert engine.dispatcher.macos_es_ingress.coverage.hosts[0].process_census.complete
+    finally:
+        engine._close_emitters()
 
 
 @pytest.mark.parametrize(

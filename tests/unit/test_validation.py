@@ -47,6 +47,7 @@ from evidenceforge.models import (
     TimeWindow,
     User,
 )
+from evidenceforge.models.routing import RoutingTopology
 from evidenceforge.utils import load_yaml
 from evidenceforge.validation import ScenarioValidator
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
@@ -293,14 +294,20 @@ def test_all_scenario_fixtures_pass_schema_and_semantic_validation(scenarios_dir
 class TestScenarioValidator:
     """Tests for ScenarioValidator class."""
 
-    def test_valid_scenario_no_issues(self, scenarios_dir):
-        """Valid scenario should produce no validation issues."""
+    def test_valid_legacy_scenario_only_reports_firewall_advisory(self, scenarios_dir):
+        """Legacy firewall placement is advisory for an otherwise valid scenario."""
         scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
         scenario = Scenario(**scenario_data)
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        assert len(issues) == 0
+        assert [(issue.severity, issue.field_path, issue.message) for issue in issues] == [
+            (
+                "warning",
+                "environment.network.routing",
+                "Firewall sources 'edge-fw' use legacy segment-based visibility.",
+            )
+        ]
         assert not validator.has_errors()
 
     def test_unknown_observation_profile_errors(self, scenarios_dir):
@@ -1655,6 +1662,22 @@ class TestNetworkValidation:
                         log_formats=["cisco_asa"],
                     ),
                 ],
+                routing=RoutingTopology.model_validate(
+                    {
+                        "devices": {"edge": {"kind": "firewall", "firewall": "fw"}},
+                        "links": {
+                            "workstations": {
+                                "segment": "workstations",
+                                "interfaces": {"edge": {"name": "inside", "ip": "10.10.10.254"}},
+                            },
+                            "servers": {
+                                "segment": "servers",
+                                "interfaces": {"edge": {"name": "servers", "ip": "10.10.30.254"}},
+                            },
+                        },
+                        "gateways": {"workstations": "edge", "servers": "edge"},
+                    }
+                ),
             )
         )
         validator = ScenarioValidator(scenario)

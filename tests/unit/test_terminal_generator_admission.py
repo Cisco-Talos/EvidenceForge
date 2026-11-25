@@ -4,6 +4,7 @@
 """Focused generator regressions for terminal lifecycle admission."""
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 import evidenceforge.generation.activity.generator as generator_module
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.observation import ObservationPolicy
+from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import (
     network_transaction_planner as network_planner_module,
 )
@@ -1664,7 +1666,7 @@ def test_machine_account_rejects_full_close_bound_before_rng_or_state(
     get_rng.assert_not_called()
 
 
-def test_machine_account_accepts_full_family_inside_exclusive_end() -> None:
+def test_machine_account_accepts_full_family_inside_exclusive_end(tmp_path: Path) -> None:
     """One microsecond beyond the full owner bound admits machine auth and close."""
 
     generator, state, emitters = _generator()
@@ -1711,8 +1713,7 @@ def test_machine_account_accepts_full_family_inside_exclusive_end() -> None:
     assert max(source_times) < exclusive_end
 
     asa_rows: list[dict[str, object]] = []
-    asa = object.__new__(CiscoAsaEmitter)
-    asa._sensor_hostnames = ["fw01"]
+    asa = CiscoAsaEmitter(load_format("cisco_asa"), tmp_path, sensor_hostnames=["fw01"])
     asa._segment_config = [
         {"name": "workstations", "cidr": "10.0.10.0/24"},
         {"name": "servers", "cidr": "10.0.20.0/24"},
@@ -1724,8 +1725,6 @@ def test_machine_account_accepts_full_family_inside_exclusive_end() -> None:
             "_default": "outside",
         }
     }
-    asa._sensor_security_levels = {}
-    asa._vip_to_real_ip = {}
     asa._dispatch = asa_rows.append
     for call in emitters["cisco_asa"].emit.call_args_list:
         asa.emit(call.args[0])

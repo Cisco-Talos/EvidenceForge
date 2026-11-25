@@ -8,6 +8,9 @@ from pydantic import ValidationError
 
 from evidenceforge.composition import compile_scenario
 from evidenceforge.composition.artifacts import write_resolved_scenario
+from evidenceforge.generation.checkpoints.network_visibility_head import (
+    NetworkVisibilityParticipant,
+)
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.models.routing import RoutingLink
 from evidenceforge.models.scenario import NetworkConfig
@@ -27,6 +30,27 @@ def _network() -> dict:
 
 def _observers(visibility: NetworkVisibilityEngine, source: str, destination: str) -> set[str]:
     return {sensor.name for sensor in visibility.get_observing_sensors(source, destination, 80)}
+
+
+def test_routed_checkpoint_rebuilds_topology_and_restores_pat_cursor() -> None:
+    environment = compile_scenario(FIXTURE).scenario.environment
+    source = NetworkVisibilityEngine(environment.network, environment.systems)
+    initial_nat = source.compute_nat(HQ, INTERNET, 51000, 80)
+    assert initial_nat is not None
+    head = NetworkVisibilityParticipant(source).prepare_checkpoint(1).head
+    expected_nat = source.compute_nat(HQ, INTERNET, 51001, 80)
+    assert expected_nat is not None and expected_nat.mapped_src_port != initial_nat.mapped_src_port
+
+    restored = NetworkVisibilityEngine(environment.network, environment.systems)
+    NetworkVisibilityParticipant(restored).restore_checkpoint(head.payload, ())
+
+    assert restored.compute_nat(HQ, INTERNET, 51001, 80) == expected_nat
+    vip = "192.0.2.2"
+    assert restored.routed_connection(INTERNET, vip, 80) == source.routed_connection(
+        INTERNET, vip, 80
+    )
+    assert restored._vip_firewall[vip] == "edge-asa"
+    assert _observers(restored, INTERNET, vip) == _observers(source, INTERNET, vip)
 
 
 @pytest.mark.parametrize("routed", [False, True])

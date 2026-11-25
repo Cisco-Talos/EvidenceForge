@@ -3255,6 +3255,10 @@ class SshSessionActionBundle:
     def execute_with_identity(self) -> tuple[str, str]:
         """Expand the bundle and return its transport UID and owned session LogonID."""
 
+        target = self.request.target_system
+        macos_receiver = _get_os_category(target.os) == "macos"
+        if macos_receiver and (target.architecture != "arm64" or target.type != "workstation"):
+            raise StateError("Mac SSH receivers require an explicit arm64 workstation")
         visibility = getattr(self.executor.dispatcher, "visibility_engine", None)
         if visibility is not None and visibility.routing is not None:
             flow = visibility.routed_connection(
@@ -3272,12 +3276,7 @@ class SshSessionActionBundle:
                     emit_dns=False,
                 )
                 return uid, ""
-        if _get_os_category(self.request.target_system.os) == "macos":
-            if (
-                self.request.target_system.architecture != "arm64"
-                or self.request.target_system.type != "workstation"
-            ):
-                raise StateError("Mac SSH receivers require an explicit arm64 workstation")
+        if macos_receiver:
             if not self.request.emit_session_close:
                 return replace(
                     self,

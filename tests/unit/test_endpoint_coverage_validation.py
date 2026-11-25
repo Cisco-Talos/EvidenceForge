@@ -15,6 +15,8 @@ from evidenceforge.validation.schema import ValidationIssue
 
 def _scenario(scenarios_dir: Path, os_name: str, *formats: str) -> Scenario:
     data = load_yaml(scenarios_dir / "minimal.yaml")
+    network = data["environment"]["network"]
+    network["sensors"] = [sensor for sensor in network["sensors"] if sensor["type"] == "network"]
     data["environment"]["systems"][0].update(
         os=os_name, architecture="arm64" if os_name.startswith("macOS") else "x64"
     )

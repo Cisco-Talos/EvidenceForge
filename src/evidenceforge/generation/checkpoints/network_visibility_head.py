@@ -37,7 +37,9 @@ class NetworkVisibilityParticipant:
         OwnerStateField("_real_ip_to_vip", "deterministically-rebuilt"),
         OwnerStateField("_segment_networks", "deterministically-rebuilt"),
         OwnerStateField("_sensors", "deterministically-rebuilt"),
+        OwnerStateField("_vip_firewall", "deterministically-rebuilt"),
         OwnerStateField("_vip_to_real_ip", "deterministically-rebuilt"),
+        OwnerStateField("routing", "deterministically-rebuilt"),
     )
 
     def __init__(self, visibility: NetworkVisibilityEngine) -> None:

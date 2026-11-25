@@ -391,6 +391,10 @@ class TestValidateCommand:
         scenario_data["environment"]["systems"][0]["os"] = os_name
         if os_name.startswith("macOS"):
             scenario_data["environment"]["systems"][0]["architecture"] = "arm64"
+        sensors = scenario_data["environment"]["network"]["sensors"]
+        scenario_data["environment"]["network"]["sensors"] = [
+            sensor for sensor in sensors if sensor["type"] == "network"
+        ]
         scenario_data["output"]["logs"] = [{"format": "zeek_conn"}]
         scenario_file = tmp_path / "scenario.yaml"
         scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
