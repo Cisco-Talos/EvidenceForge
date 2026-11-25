@@ -547,7 +547,11 @@ p { line-height: 1.5; }
 .chat-markdown .hljs-title { color: var(--syntax-key); }
 .chat-table-scroll { max-width: 100%; overflow-x: auto; }
 .chat-markdown table { border-collapse: collapse; margin: 12px 0; }
-.chat-markdown td, .chat-markdown th { border: 1px solid var(--border-strong); padding: 8px 8px; text-align: left; }
+/* Bubbles wrap anywhere so long paths fit; in a table that would let a column shrink to one
+   character, so cells keep whole words and only an unbreakable plain-text token scrolls. */
+.chat-markdown td, .chat-markdown th { border: 1px solid var(--border-strong); padding: 8px 8px; text-align: left; vertical-align: top; overflow-wrap: break-word; }
+/* Paths, identifiers and URLs still break anywhere, so they never widen a column. */
+.chat-markdown td code, .chat-markdown td a { overflow-wrap: anywhere; }
 .message-author { color: var(--accent); font-size: var(--text-xs); font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
 .message-row.agent .message-author { color: var(--ok); }
 .tool-activity { align-self: flex-start; margin-left: 2px; padding: 8px 8px; border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--text-2); background: var(--surface-2); font-size: var(--text-xs); }
