@@ -1,0 +1,205 @@
+destination_catalog:
+  gitlab:
+    description: Self-hosted GitLab source control and CI UI.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: git.talus.lab
+        ips:
+        - 10.40.40.20
+      services: &id001
+        secure-web:
+          protocol: https
+        backend-http:
+          protocol: http
+          port: 8069
+  registry:
+    description: GitLab container and release artifact registry.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: registry.talus.lab
+        ips:
+        - 10.40.40.23
+      services: *id001
+  mlflow-service:
+    description: MLflow tracking server and model registry.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: models.talus.lab
+        ips:
+        - 10.40.40.24
+      services: *id001
+  datasets:
+    description: Samba dataset and diagnostic storage.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: datasets.talus.lab
+        ips:
+        - 10.40.40.25
+      services:
+        smb:
+          protocol: smb
+  engineering-files:
+    description: Windows engineering and business file shares.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: files.talus.lab
+        ips:
+        - 10.40.40.12
+      services:
+        smb:
+          protocol: smb
+  mfg-files:
+    description: Manufacturing procedures and acceptance records.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: mfg-files.talus.lab
+        ips:
+        - 10.50.40.13
+      services:
+        smb:
+          protocol: smb
+  mfg-erp:
+    description: Odoo manufacturing, purchasing, inventory, and quality.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: production.talus.lab
+        ips:
+        - 10.50.40.11
+      services: *id001
+  release-stage:
+    description: Approved release copies staged at manufacturing.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: releases.talus.lab
+        ips:
+        - 10.50.40.14
+      services: *id001
+  support-internal:
+    description: Dedicated Odoo support instance; isolated from production ERP.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: support-internal.talus.lab
+        ips:
+        - 10.40.40.26
+      services: *id001
+  support-public:
+    description: Public NAT identity of DMZ support entry point.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: support.talus.lab
+        ips:
+        - 203.0.113.10
+      services: *id001
+  gpu:
+    description: GPU training worker access.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: gpu.talus.lab
+        ips:
+        - 10.40.30.10
+      services:
+        ssh:
+          protocol: ssh
+  simulation:
+    description: Gazebo and ARGO simulation worker access.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: simulation.talus.lab
+        ips:
+        - 10.40.30.12
+      services:
+        ssh:
+          protocol: ssh
+  prototype:
+    description: Internal prototype diagnostics and development access.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: tpa-lab.talus.lab
+        ips:
+        - 10.40.50.20
+      services:
+        ssh:
+          protocol: ssh
+  manufacturing-test:
+    description: Manufacturing acceptance robot diagnostics.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: tpa-test.talus.lab
+        ips:
+        - 10.50.30.20
+      services:
+        ssh:
+          protocol: ssh
+  log-service:
+    description: Central log collection and investigation.
+    data:
+      tags:
+      - talus-service
+      endpoints:
+      - domain: logs.talus.lab
+        ips:
+        - 10.40.90.11
+      services:
+        ssh:
+          protocol: ssh
+  m365:
+    description: Microsoft 365 hosted productivity; reserved simulation endpoint.
+    data:
+      tags:
+      - saas
+      endpoints:
+      - domain: outlook.office.example
+        ips:
+        - 198.51.100.20
+      services: *id001
+  package-mirrors:
+    description: External software mirror; reserved simulation endpoint.
+    data:
+      tags:
+      - software
+      endpoints:
+      - domain: packages.ubuntu.example
+        ips:
+        - 198.51.100.30
+      services: *id001
+  foxglove-web:
+    description: Foxglove browser visualization; reserved simulation identity of the real hosted web application.
+      Recordings can be opened locally.
+    data:
+      tags:
+      - saas
+      endpoints:
+      - domain: app.foxglove.example
+        ips:
+        - 198.51.100.40
+      services:
+        secure-web:
+          protocol: https

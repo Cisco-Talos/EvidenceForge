@@ -7,7 +7,8 @@
     "evidenceforge/organization/metrolink-specialty-care/1.1.0": "dcedba85c2c8b9c2bede7cdf1a42aeaa3e14539bfa2635437ed61874005d572f",
     "evidenceforge/organization/northstar-health/1.0.0": "7e969da7aaa8c008342787693be2df1c73a20cdee05a7bd50848ee6b35bf4147",
     "evidenceforge/organization/northstar-health/1.1.0": "2b5c2142e4eae824e8a4463c914c6916661ed92817e3c9d7fd1be4d2cf891db1",
-    "evidenceforge/organization/northstar-health/1.2.0": "259d80662c4616ab01e3778b8d1ab700dc6ee564306526b669abce02615bb7ef"
+    "evidenceforge/organization/northstar-health/1.2.0": "259d80662c4616ab01e3778b8d1ab700dc6ee564306526b669abce02615bb7ef",
+    "evidenceforge/organization/talus-enterprises/1.0.0": "07563356aaad234fd675ecca1cc45f3673a8140f29ca26a757f073d8d4f09746"
   },
   "schema_version": "1.0"
 }

@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 576
+current_revision: 577
 history_start_revision: 1
-behavior_surface_sha256: 9ea852965110bae9eb914cb27b839f49b83f65eb871664c97ab19dbbf49b891b
+behavior_surface_sha256: adebf29ecb35842c2a056c84e33135d1474609b6e728b16848dee413a605909c
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6673,3 +6673,12 @@ changes:
   summary: Drop the release-only configuration binding from Northstar Health 1.2.0 and
     MetroLink 1.1.0 so their drafts can be published, and rewrite a copied pack's own file set
     presets as shares already were.
+- revision: 577
+  id: bundled-talus-enterprises
+  impact: localized
+  domains:
+  - pack-composition
+  - packaged-resource-integrity
+  formats: []
+  summary: Bundle the Talus Enterprises 1.0.0 organization pack, a robotics company with an
+    engineering headquarters and a manufacturing site joined by a WAN.

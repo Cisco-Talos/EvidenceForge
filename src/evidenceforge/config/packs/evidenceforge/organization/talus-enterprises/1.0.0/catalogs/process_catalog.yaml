@@ -1,0 +1,365 @@
+process_catalog:
+  productivity:
+    description: Windows Office clients and cross-platform web productivity.
+    data:
+      builtins:
+      - chrome
+      - firefox
+      - outlook
+      - teams
+      - word
+      - excel
+      - onedrive
+      document_terms:
+      - product-roadmap
+      - supplier-quote
+      - production-plan
+      - customer-case
+      - safety-review
+  engineering-tools:
+    description: Cross-platform engineering editing and test tools.
+    data:
+      builtins:
+      - vscode
+      - git
+      - gcc
+      - make
+      - docker
+      - pytest
+      - ssh
+      document_terms:
+      - crete-runtime
+      - argo-integration
+      - tpa-release
+      - perception-training
+      - firmware-build
+  web-client:
+    description: Authenticated browser access to internal web applications.
+    data:
+      builtins:
+      - chrome
+      - firefox
+      document_terms:
+      - work-order
+      - engineering-change
+      - support-case
+  administration:
+    description: Native administration and investigation clients.
+    data:
+      builtins:
+      - ssh
+      - mstsc
+      - mmc
+      - server_manager
+      - eventvwr
+      - psql
+      - curl
+  solid-edge:
+    description: Siemens Solid Edge mechanical design.
+    data:
+      custom:
+      - id: solid-edge-client
+        display_name: Solid Edge
+        platforms:
+          windows:
+            image_path: C:\Program Files\Siemens\Solid Edge 2024\Program\Edge.exe
+            command_templates:
+            - '"C:\Program Files\Siemens\Solid Edge 2024\Program\Edge.exe" "C:\Talus\Designs\TPA\chassis.asm"'
+            - '"C:\Program Files\Siemens\Solid Edge 2024\Program\Edge.exe" "C:\Talus\Designs\TPA\actuator-bracket.par"'
+            pe_metadata:
+              file_version: 224.0.0.0
+              description: Solid Edge
+              product: Solid Edge
+              company: Siemens Digital Industries Software
+              original_filename: Edge.exe
+        categories:
+        - user_app
+        - code
+        system_types:
+        - workstation
+        selection_weight: 8
+        singleton_per_session: true
+      document_terms:
+      - chassis
+      - actuator-bracket
+      - sensor-mount
+  pads:
+    description: Siemens PADS Professional PCB design.
+    data:
+      custom:
+      - id: pads-client
+        display_name: PADS Professional Layout
+        platforms:
+          windows:
+            image_path: C:\MentorGraphics\PADSProVX.2.14\SDD_HOME\common\win64\bin\ExpeditionPCB.exe
+            command_templates:
+            - '"C:\MentorGraphics\PADSProVX.2.14\SDD_HOME\common\win64\bin\ExpeditionPCB.exe" "C:\Talus\Electronics\motor-controller.pcb"'
+            pe_metadata:
+              file_version: 2.14.0.0
+              description: PADS Professional Layout
+              product: PADS Professional
+              company: Siemens EDA
+              original_filename: ExpeditionPCB.exe
+        categories:
+        - user_app
+        - code
+        system_types:
+        - workstation
+        selection_weight: 8
+        singleton_per_session: true
+      document_terms:
+      - motor-controller
+      - power-distribution
+      - sensor-interface
+  ros2:
+    description: ROS 2 Jazzy development and diagnostics.
+    data:
+      custom:
+      - id: ros2-cli
+        display_name: ROS 2 CLI
+        platforms:
+          linux:
+            image_path: /opt/ros/jazzy/bin/ros2
+            command_templates:
+            - /opt/ros/jazzy/bin/ros2 topic list
+            - /opt/ros/jazzy/bin/ros2 launch crete_bringup lab.launch.py
+        categories:
+        - code
+        - user_app
+        system_types:
+        - workstation
+        - server
+        selection_weight: 8
+        singleton_per_session: true
+  gazebo:
+    description: Gazebo simulation of TPA environments.
+    data:
+      custom:
+      - id: gazebo-cli
+        display_name: Gazebo Sim
+        platforms:
+          linux:
+            image_path: /usr/bin/gz
+            command_templates:
+            - /usr/bin/gz sim /srv/talus/simulation/security-patrol.sdf
+            - /usr/bin/gz sim -s /srv/talus/simulation/acceptance.sdf
+        categories:
+        - code
+        - user_app
+        system_types:
+        - workstation
+        - server
+        selection_weight: 8
+        singleton_per_session: true
+  pytorch:
+    description: PyTorch training through a modeled Python virtual environment.
+    data:
+      custom:
+      - id: pytorch-train
+        display_name: Python PyTorch training
+        platforms:
+          linux:
+            image_path: /opt/talus/ml/bin/python
+            command_templates:
+            - /opt/talus/ml/bin/python -m torch.distributed.run --nproc_per_node=1 /srv/talus/training/train_perception.py
+              --config /srv/talus/training/tpa-vision.yaml
+        categories:
+        - code
+        - user_app
+        system_types:
+        - workstation
+        - server
+        selection_weight: 8
+        singleton_per_session: true
+  mlflow:
+    description: MLflow experiment and model client.
+    data:
+      custom:
+      - id: mlflow-cli
+        display_name: MLflow CLI
+        platforms:
+          linux:
+            image_path: /opt/talus/ml/bin/mlflow
+            command_templates:
+            - /opt/talus/ml/bin/mlflow experiments search
+            - /opt/talus/ml/bin/mlflow runs list --experiment-id 4
+        categories:
+        - code
+        - user_app
+        system_types:
+        - workstation
+        - server
+        selection_weight: 8
+        singleton_per_session: true
+  crete:
+    description: CRETE robot runtime, including local simulation and bench instances.
+    data:
+      custom:
+      - id: crete-runtime
+        display_name: CRETE robot runtime
+        platforms:
+          linux:
+            image_path: /opt/talus/crete/bin/crete-runtime
+            command_templates:
+            - /opt/talus/crete/bin/crete-runtime --config /etc/talus/crete/lab.yaml --mode simulation
+            - /opt/talus/crete/bin/crete-runtime --config /etc/talus/crete/robot.yaml --mode bench
+        categories:
+        - code
+        - user_app
+        system_types:
+        - workstation
+        - server
+        selection_weight: 8
+        singleton_per_session: true
+  argo:
+    description: ARGO regression and physical integration testing.
+    data:
+      custom:
+      - id: argo-tests
+        display_name: ARGO test suite
+        platforms:
+          linux:
+            image_path: /opt/talus/argo/bin/argo
+            command_templates:
+            - /opt/talus/argo/bin/argo test --suite integration --results /var/tmp/argo/integration
+            - /opt/talus/argo/bin/argo test --suite simulation --results /var/tmp/argo/simulation
+        categories:
+        - code
+        - user_app
+        system_types:
+        - workstation
+        - server
+        selection_weight: 8
+        singleton_per_session: true
+  hephaestus:
+    description: HEPHAESTUS approved programming and calibration launcher.
+    data:
+      custom:
+      - id: hephaestus-client
+        display_name: HEPHAESTUS
+        platforms:
+          windows:
+            image_path: C:\Program Files\Talus\HEPHAESTUS\Hephaestus.exe
+            command_templates:
+            - '"C:\Program Files\Talus\HEPHAESTUS\Hephaestus.exe" --station assembly-01 --workflow program'
+            - '"C:\Program Files\Talus\HEPHAESTUS\Hephaestus.exe" --station calibration-01 --workflow calibrate'
+            pe_metadata:
+              file_version: 1.0.0.0
+              description: HEPHAESTUS
+              product: HEPHAESTUS
+              company: Talus Enterprises
+              original_filename: Hephaestus.exe
+        categories:
+        - user_app
+        - code
+        system_types:
+        - workstation
+        selection_weight: 8
+        singleton_per_session: true
+  teststand:
+    description: NI TestStand sequence editor and acceptance workflow.
+    data:
+      custom:
+      - id: teststand-client
+        display_name: NI TestStand Sequence Editor
+        platforms:
+          windows:
+            image_path: C:\Program Files\National Instruments\TestStand 2024\Bin\SeqEdit.exe
+            command_templates:
+            - '"C:\Program Files\National Instruments\TestStand 2024\Bin\SeqEdit.exe" "C:\Talus\HEPHAESTUS\TPA-Acceptance.seq"'
+            pe_metadata:
+              file_version: 24.0.0.0
+              description: NI TestStand Sequence Editor
+              product: TestStand
+              company: National Instruments
+              original_filename: SeqEdit.exe
+        categories:
+        - user_app
+        - code
+        system_types:
+        - workstation
+        selection_weight: 8
+        singleton_per_session: true
+      document_terms:
+      - tpa-acceptance
+      - calibration-results
+  smb-client:
+    description: Windows file access and explicit Linux SMB client.
+    data:
+      builtins:
+      - windows-explorer
+      custom:
+      - id: smbclient-cli
+        display_name: Samba SMB client
+        platforms:
+          linux:
+            image_path: /usr/bin/smbclient
+            command_templates:
+            - /usr/bin/smbclient //files.talus.lab/Engineering -k -c ls
+            - /usr/bin/smbclient //datasets.talus.lab/Datasets -k -c ls
+        categories:
+        - code
+        - user_app
+        system_types:
+        - workstation
+        - server
+        selection_weight: 8
+        singleton_per_session: true
+      document_terms:
+      - engineering-change
+      - release-manifest
+      - acceptance-report
+  gitlab-runner:
+    description: GitLab Runner on owned Linux service hosts.
+    data:
+      custom:
+      - id: gitlab-runner-daemon
+        display_name: GitLab Runner
+        platforms:
+          linux:
+            image_path: /usr/bin/gitlab-runner
+            command_templates:
+            - /usr/bin/gitlab-runner run --config /etc/gitlab-runner/config.toml --working-directory /var/lib/gitlab-runner
+        categories:
+        - code
+        - user_app
+        system_types:
+        - server
+        selection_weight: 15
+        singleton_per_session: true
+  nginx:
+    description: nginx on owned Linux service hosts.
+    data:
+      custom:
+      - id: nginx-daemon
+        display_name: nginx
+        platforms:
+          linux:
+            image_path: /usr/sbin/nginx
+            command_templates:
+            - /usr/sbin/nginx -g "daemon off;"
+        categories:
+        - code
+        - user_app
+        system_types:
+        - server
+        selection_weight: 15
+        singleton_per_session: true
+  rsyslog:
+    description: rsyslog on owned Linux service hosts.
+    data:
+      custom:
+      - id: rsyslog-daemon
+        display_name: rsyslog
+        platforms:
+          linux:
+            image_path: /usr/sbin/rsyslogd
+            command_templates:
+            - /usr/sbin/rsyslogd -n -f /etc/rsyslog.conf
+        categories:
+        - code
+        - user_app
+        system_types:
+        - server
+        selection_weight: 15
+        singleton_per_session: true

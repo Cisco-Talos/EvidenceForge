@@ -1,0 +1,773 @@
+traffic_catalog:
+  productivity-activity:
+    description: Email, collaboration, and business documents. Normal activity.
+    data:
+      audience:
+      - executive
+      - finance
+      - product
+      - hr
+      - sales
+      - technical-lead
+      - systems-engineer
+      - robotics-engineer
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      - software-engineer
+      - firmware-engineer
+      - release-engineer
+      - hardware-lead
+      - mechanical-engineer
+      - electrical-engineer
+      - pcb-engineer
+      - hardware-integration
+      - configuration-manager
+      - manufacturing-lead
+      - production-planner
+      - assembly-supervisor
+      - manufacturing-engineer
+      - procurement
+      - materials
+      - production-technician
+      - quality-lead
+      - verification-engineer
+      - calibration-engineer
+      - safety-engineer
+      - field-service
+      - support-engineer
+      - it-lead
+      - windows-admin
+      - linux-admin
+      - ot-admin
+      - security-analyst
+      applications:
+      - application: productivity
+        connection: cloud
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 45
+        jitter_minutes: 5
+      outbound: []
+  software-development-activity:
+    description: GitLab development and approved artifact access. Normal activity.
+    data:
+      audience: &id001
+      - technical-lead
+      - systems-engineer
+      - robotics-engineer
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      - software-engineer
+      - firmware-engineer
+      - release-engineer
+      - hardware-lead
+      - mechanical-engineer
+      - electrical-engineer
+      - pcb-engineer
+      - hardware-integration
+      - configuration-manager
+      - verification-engineer
+      - safety-engineer
+      applications:
+      - application: software-development
+        connection: source
+        weight: 10
+      - application: software-development
+        connection: artifacts
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 30
+        jitter_minutes: 5
+      outbound: []
+  ml-training-activity:
+    description: PyTorch training and experiment tracking. Normal activity.
+    data:
+      audience:
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      applications:
+      - application: ml-training
+        connection: tracking
+        weight: 10
+      - application: ml-training
+        connection: worker
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 45
+        jitter_minutes: 5
+      outbound: []
+  model-review-activity:
+    description: Model and experiment review. Normal activity.
+    data:
+      audience:
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      - technical-lead
+      - verification-engineer
+      applications:
+      - application: model-review
+        connection: models
+        weight: 10
+      cadence:
+        pattern: weighted
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+      outbound: []
+  simulation-activity:
+    description: Gazebo scene development and ARGO simulation runs. Normal activity.
+    data:
+      audience:
+      - simulation-engineer
+      - robotics-engineer
+      - verification-engineer
+      applications:
+      - application: simulation
+        connection: worker
+        weight: 10
+      - application: simulation
+        connection: artifacts
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 60
+        jitter_minutes: 5
+      outbound: []
+  robot-development-activity:
+    description: ROS 2 and CRETE local bench/simulation development. Normal activity.
+    data:
+      audience:
+      - robotics-engineer
+      - firmware-engineer
+      - hardware-integration
+      - verification-engineer
+      applications:
+      - application: robot-development
+        connection: prototype
+        weight: 10
+      - application: robot-development
+        connection: source
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 45
+        jitter_minutes: 5
+      outbound: []
+  argo-validation-activity:
+    description: ARGO integration and acceptance test execution. Normal activity.
+    data:
+      audience:
+      - verification-engineer
+      - simulation-engineer
+      - release-engineer
+      - robotics-engineer
+      applications:
+      - application: argo-validation
+        connection: results
+        weight: 10
+      - application: argo-validation
+        connection: bench
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 60
+        jitter_minutes: 5
+      outbound: []
+  mechanical-design-activity:
+    description: Solid Edge assemblies and design revisions. Normal activity.
+    data:
+      audience:
+      - hardware-lead
+      - mechanical-engineer
+      applications:
+      - application: mechanical-design
+        connection: files
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 60
+        jitter_minutes: 5
+      outbound: []
+  pcb-design-activity:
+    description: PADS Professional electronics revisions. Normal activity.
+    data:
+      audience:
+      - electrical-engineer
+      - pcb-engineer
+      applications:
+      - application: pcb-design
+        connection: files
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 60
+        jitter_minutes: 5
+      outbound: []
+  design-change-control-activity:
+    description: Odoo engineering changes, BOMs, and design release. Normal activity.
+    data:
+      audience:
+      - configuration-manager
+      - systems-engineer
+      - hardware-lead
+      - manufacturing-engineer
+      - quality-lead
+      applications:
+      - application: design-change-control
+        connection: changes
+        weight: 10
+      - application: design-change-control
+        connection: designs
+        weight: 10
+      cadence:
+        pattern: weighted
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+      outbound: []
+  manufacturing-operations-activity:
+    description: Odoo production, inventory, procurement, and quality. Normal activity.
+    data:
+      audience:
+      - manufacturing-lead
+      - production-planner
+      - assembly-supervisor
+      - manufacturing-engineer
+      - procurement
+      - materials
+      - production-technician
+      - ot-admin
+      - quality-lead
+      - verification-engineer
+      - calibration-engineer
+      - safety-engineer
+      - executive
+      - finance
+      applications:
+      - application: manufacturing-operations
+        connection: erp
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 07:15
+          end: '15:45'
+        interval_minutes: 45
+        jitter_minutes: 5
+      outbound: []
+  hephaestus-programming-activity:
+    description: HEPHAESTUS programs approved releases and records calibration. Normal activity.
+    data:
+      audience:
+      - manufacturing-engineer
+      - production-technician
+      - calibration-engineer
+      - ot-admin
+      applications:
+      - application: hephaestus-programming
+        connection: release
+        weight: 10
+      - application: hephaestus-programming
+        connection: results
+        weight: 10
+      - application: hephaestus-programming
+        connection: procedures
+        weight: 10
+      cadence:
+        pattern: burst
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 07:30
+          end: 08:30
+        burst_count:
+        - 2
+        - 4
+        jitter_minutes: 5
+      outbound: []
+  hephaestus-afternoon:
+    description: Programming and calibration after the lunch break.
+    data:
+      audience:
+      - manufacturing-engineer
+      - production-technician
+      - calibration-engineer
+      - ot-admin
+      applications:
+      - application: hephaestus-programming
+        connection: release
+        weight: 8
+      - application: hephaestus-programming
+        connection: results
+        weight: 12
+      cadence:
+        pattern: burst
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: '13:15'
+          end: '14:30'
+        burst_count:
+        - 2
+        - 4
+        jitter_minutes: 5
+      outbound: []
+  support-diagnostics-activity:
+    description: Foxglove web visualization and Odoo customer support. Normal activity.
+    data:
+      audience:
+      - field-service
+      - support-engineer
+      - verification-engineer
+      applications:
+      - application: support-diagnostics
+        connection: cases
+        weight: 10
+      - application: support-diagnostics
+        connection: downloads
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 45
+        jitter_minutes: 5
+      outbound: []
+  engineering-storage-activity:
+    description: Engineering documents, datasets, and diagnostic recordings. Normal activity.
+    data:
+      audience: *id001
+      applications:
+      - application: engineering-storage
+        connection: engineering
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 90
+        jitter_minutes: 5
+      outbound: []
+  manufacturing-storage-activity:
+    description: Procedures and acceptance records. Normal activity.
+    data:
+      audience:
+      - manufacturing-lead
+      - production-planner
+      - assembly-supervisor
+      - manufacturing-engineer
+      - procurement
+      - materials
+      - production-technician
+      - ot-admin
+      - quality-lead
+      - verification-engineer
+      - calibration-engineer
+      - safety-engineer
+      applications:
+      - application: manufacturing-storage
+        connection: records
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 07:15
+          end: '15:45'
+        interval_minutes: 90
+        jitter_minutes: 5
+      outbound: []
+  administration-activity:
+    description: Infrastructure administration through approved management paths. Normal activity.
+    data:
+      audience:
+      - it-lead
+      - windows-admin
+      - linux-admin
+      - ot-admin
+      - security-analyst
+      applications:
+      - application: administration
+        connection: logs
+        weight: 10
+      - application: administration
+        connection: prototype
+        weight: 10
+      - application: administration
+        connection: packages
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 90
+        jitter_minutes: 5
+      outbound: []
+  foxglove-activity:
+    description: Browser access to Foxglove when reviewing diagnostic recordings.
+    data:
+      audience:
+      - field-service
+      - support-engineer
+      - verification-engineer
+      - robotics-engineer
+      - ai-engineer
+      - hardware-integration
+      applications:
+      - application: foxglove-visualization
+        connection: viewer
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 90
+        jitter_minutes: 5
+      outbound: []
+  dataset-storage-activity:
+    description: Authorized dataset browsing and recording retrieval.
+    data:
+      audience:
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      - robotics-engineer
+      - software-engineer
+      - verification-engineer
+      applications:
+      - application: dataset-storage
+        connection: datasets
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        windows:
+        - start: 09:15
+          end: '16:45'
+        interval_minutes: 90
+        jitter_minutes: 5
+      outbound: []
+  ci-worker-activity:
+    description: GitLab build and artifact automation workload account.
+    data:
+      audience:
+      - auto-ci
+      applications:
+      - application: ci-worker
+        connection: source
+        weight: 10
+      - application: ci-worker
+        connection: artifacts
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        - sat
+        - sun
+        windows:
+        - start: 00:15
+          end: '23:45'
+        interval_minutes: 30
+        jitter_minutes: 5
+      outbound: []
+  training-worker-activity:
+    description: GPU training and model-tracking automation workload account.
+    data:
+      audience:
+      - auto-training
+      applications:
+      - application: training-worker
+        connection: models
+        weight: 10
+      - application: training-worker
+        connection: artifacts
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        - sat
+        - sun
+        windows:
+        - start: 00:15
+          end: '23:45'
+        interval_minutes: 30
+        jitter_minutes: 5
+      outbound: []
+  simulation-worker-activity:
+    description: ARGO and Gazebo simulation automation workload account.
+    data:
+      audience:
+      - auto-simulation
+      applications:
+      - application: simulation-worker
+        connection: results
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        - sat
+        - sun
+        windows:
+        - start: 00:15
+          end: '23:45'
+        interval_minutes: 30
+        jitter_minutes: 5
+      outbound: []
+  release-cache-worker-activity:
+    description: Approved-release cache synchronization workload account.
+    data:
+      audience:
+      - auto-release
+      applications:
+      - application: release-cache-worker
+        connection: approved
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        - sat
+        - sun
+        windows:
+        - start: 00:15
+          end: '23:45'
+        interval_minutes: 30
+        jitter_minutes: 5
+      outbound: []
+  support-proxy-worker-activity:
+    description: Customer support reverse proxy workload workload account.
+    data:
+      audience:
+      - auto-proxy
+      applications:
+      - application: support-proxy-worker
+        connection: backend
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        - sat
+        - sun
+        windows:
+        - start: 00:15
+          end: '23:45'
+        interval_minutes: 30
+        jitter_minutes: 5
+      outbound: []
+  log-collector-worker-activity:
+    description: Local log collector and forwarding automation workload account.
+    data:
+      audience:
+      - auto-logging
+      applications:
+      - application: log-collector-worker
+        connection: administration
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        - sat
+        - sun
+        windows:
+        - start: 00:15
+          end: '23:45'
+        interval_minutes: 30
+        jitter_minutes: 5
+      outbound: []
+  robot-runtime-worker-activity:
+    description: Internal prototype and acceptance CRETE runtime workload account.
+    data:
+      audience:
+      - auto-runtime
+      applications:
+      - application: robot-runtime-worker
+        connection: approved-models
+        weight: 10
+      cadence:
+        pattern: periodic
+        days:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+        - sat
+        - sun
+        windows:
+        - start: 00:15
+          end: '23:45'
+        interval_minutes: 30
+        jitter_minutes: 5
+      outbound: []

@@ -1,0 +1,21 @@
+pack_schema_version: '3.0'
+type: organization
+publisher: evidenceforge
+publisher_display_name: EvidenceForge Official
+name: talus-enterprises
+version: 1.0.0
+requires_evidenceforge: '>=2.0.0,<3.0.0'
+description: Talus Enterprises is a fictional 350-person robotics company designing
+  and manufacturing the Talus Protective Automaton (TPA), a giant robot providing
+  physical security for buildings and special events. This standalone organization
+  models engineering headquarters and a manufacturing site, customer-contained robot
+  deployments, a support portal, and normal AI, software, hardware, and production
+  work.
+display_name: Talus Enterprises
+industry_dependencies:
+- source: package
+  publisher: evidenceforge
+  type: industry
+  name: technology
+  version_constraint: ==1.0.0
+status: published

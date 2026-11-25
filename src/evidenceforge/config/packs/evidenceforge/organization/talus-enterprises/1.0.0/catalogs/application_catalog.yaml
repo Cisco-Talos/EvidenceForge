@@ -1,0 +1,459 @@
+application_catalog:
+  productivity:
+    description: Email, collaboration, and business documents.
+    data:
+      personas:
+      - executive
+      - finance
+      - product
+      - hr
+      - sales
+      - technical-lead
+      - systems-engineer
+      - robotics-engineer
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      - software-engineer
+      - firmware-engineer
+      - release-engineer
+      - hardware-lead
+      - mechanical-engineer
+      - electrical-engineer
+      - pcb-engineer
+      - hardware-integration
+      - configuration-manager
+      - manufacturing-lead
+      - production-planner
+      - assembly-supervisor
+      - manufacturing-engineer
+      - procurement
+      - materials
+      - production-technician
+      - quality-lead
+      - verification-engineer
+      - calibration-engineer
+      - safety-engineer
+      - field-service
+      - support-engineer
+      - it-lead
+      - windows-admin
+      - linux-admin
+      - ot-admin
+      - security-analyst
+      processes:
+      - productivity
+      connections:
+        cloud:
+          destination: m365
+          service: secure-web
+  software-development:
+    description: GitLab development and approved artifact access.
+    data:
+      personas:
+      - technical-lead
+      - systems-engineer
+      - robotics-engineer
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      - software-engineer
+      - firmware-engineer
+      - release-engineer
+      - hardware-lead
+      - mechanical-engineer
+      - electrical-engineer
+      - pcb-engineer
+      - hardware-integration
+      - configuration-manager
+      - verification-engineer
+      - safety-engineer
+      processes:
+      - engineering-tools
+      - evidenceforge/technology:engineering-toolchain
+      connections:
+        source:
+          destination: gitlab
+          service: secure-web
+        artifacts:
+          destination: registry
+          service: secure-web
+  ml-training:
+    description: PyTorch training and experiment tracking.
+    data:
+      personas:
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      processes:
+      - pytorch
+      - mlflow
+      connections:
+        tracking:
+          destination: mlflow-service
+          service: secure-web
+        worker:
+          destination: gpu
+          service: ssh
+  model-review:
+    description: Model and experiment review.
+    data:
+      personas:
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      - technical-lead
+      - verification-engineer
+      processes:
+      - web-client
+      connections:
+        models:
+          destination: mlflow-service
+          service: secure-web
+  simulation:
+    description: Gazebo scene development and ARGO simulation runs.
+    data:
+      personas:
+      - simulation-engineer
+      - robotics-engineer
+      - verification-engineer
+      processes:
+      - gazebo
+      - argo
+      connections:
+        worker:
+          destination: simulation
+          service: ssh
+        artifacts:
+          destination: registry
+          service: secure-web
+  robot-development:
+    description: ROS 2 and CRETE local bench/simulation development.
+    data:
+      personas:
+      - robotics-engineer
+      - firmware-engineer
+      - hardware-integration
+      - verification-engineer
+      processes:
+      - ros2
+      - crete
+      connections:
+        prototype:
+          destination: prototype
+          service: ssh
+        source:
+          destination: gitlab
+          service: secure-web
+  argo-validation:
+    description: ARGO integration and acceptance test execution.
+    data:
+      personas:
+      - verification-engineer
+      - simulation-engineer
+      - release-engineer
+      - robotics-engineer
+      processes:
+      - argo
+      connections:
+        results:
+          destination: registry
+          service: secure-web
+        bench:
+          destination: manufacturing-test
+          service: ssh
+  mechanical-design:
+    description: Solid Edge assemblies and design revisions.
+    data:
+      personas:
+      - hardware-lead
+      - mechanical-engineer
+      processes:
+      - solid-edge
+      connections:
+        files:
+          destination: engineering-files
+          service: smb
+  pcb-design:
+    description: PADS Professional electronics revisions.
+    data:
+      personas:
+      - electrical-engineer
+      - pcb-engineer
+      processes:
+      - pads
+      connections:
+        files:
+          destination: engineering-files
+          service: smb
+  design-change-control:
+    description: Odoo engineering changes, BOMs, and design release.
+    data:
+      personas:
+      - configuration-manager
+      - systems-engineer
+      - hardware-lead
+      - manufacturing-engineer
+      - quality-lead
+      processes:
+      - web-client
+      connections:
+        changes:
+          destination: mfg-erp
+          service: secure-web
+        designs:
+          destination: engineering-files
+          service: smb
+  manufacturing-operations:
+    description: Odoo production, inventory, procurement, and quality.
+    data:
+      personas:
+      - manufacturing-lead
+      - production-planner
+      - assembly-supervisor
+      - manufacturing-engineer
+      - procurement
+      - materials
+      - production-technician
+      - ot-admin
+      - quality-lead
+      - verification-engineer
+      - calibration-engineer
+      - safety-engineer
+      - executive
+      - finance
+      processes:
+      - web-client
+      connections:
+        erp:
+          destination: mfg-erp
+          service: secure-web
+  hephaestus-programming:
+    description: HEPHAESTUS programs approved releases and records calibration.
+    data:
+      personas:
+      - manufacturing-engineer
+      - production-technician
+      - calibration-engineer
+      - ot-admin
+      processes:
+      - hephaestus
+      - teststand
+      connections:
+        release:
+          destination: release-stage
+          service: secure-web
+        results:
+          destination: mfg-erp
+          service: secure-web
+        procedures:
+          destination: mfg-files
+          service: smb
+  support-diagnostics:
+    description: Odoo customer tickets, diagnostic bundle retrieval, and approved
+      support releases.
+    data:
+      personas:
+      - field-service
+      - support-engineer
+      - verification-engineer
+      processes:
+      - web-client
+      connections:
+        cases:
+          destination: support-internal
+          service: secure-web
+        downloads:
+          destination: support-public
+          service: secure-web
+  engineering-storage:
+    description: Engineering documents, datasets, and diagnostic recordings.
+    data:
+      personas:
+      - technical-lead
+      - systems-engineer
+      - robotics-engineer
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      - software-engineer
+      - firmware-engineer
+      - release-engineer
+      - hardware-lead
+      - mechanical-engineer
+      - electrical-engineer
+      - pcb-engineer
+      - hardware-integration
+      - configuration-manager
+      - verification-engineer
+      - safety-engineer
+      processes:
+      - smb-client
+      connections:
+        engineering:
+          destination: engineering-files
+          service: smb
+  manufacturing-storage:
+    description: Procedures and acceptance records.
+    data:
+      personas:
+      - manufacturing-lead
+      - production-planner
+      - assembly-supervisor
+      - manufacturing-engineer
+      - procurement
+      - materials
+      - production-technician
+      - ot-admin
+      - quality-lead
+      - verification-engineer
+      - calibration-engineer
+      - safety-engineer
+      processes:
+      - smb-client
+      connections:
+        records:
+          destination: mfg-files
+          service: smb
+  administration:
+    description: Infrastructure administration through approved management paths.
+    data:
+      personas:
+      - it-lead
+      - windows-admin
+      - linux-admin
+      - ot-admin
+      - security-analyst
+      processes:
+      - administration
+      connections:
+        logs:
+          destination: log-service
+          service: ssh
+        prototype:
+          destination: prototype
+          service: ssh
+        packages:
+          destination: package-mirrors
+          service: secure-web
+  foxglove-visualization:
+    description: Foxglove in the browser for local MCAP replay and internal lab diagnostic
+      analysis.
+    data:
+      personas:
+      - field-service
+      - support-engineer
+      - verification-engineer
+      - robotics-engineer
+      - ai-engineer
+      - hardware-integration
+      processes:
+      - web-client
+      connections:
+        viewer:
+          destination: foxglove-web
+          service: secure-web
+  dataset-storage:
+    description: AI, software, and verification access to authorized datasets and
+      MCAP recordings.
+    data:
+      personas:
+      - ai-engineer
+      - ml-engineer
+      - simulation-engineer
+      - robotics-engineer
+      - software-engineer
+      - verification-engineer
+      processes:
+      - smb-client
+      connections:
+        datasets:
+          destination: datasets
+          service: smb
+  ci-worker:
+    description: GitLab build and artifact automation workload account.
+    data:
+      personas:
+      - auto-ci
+      processes:
+      - gitlab-runner
+      - engineering-tools
+      connections:
+        source:
+          destination: gitlab
+          service: secure-web
+        artifacts:
+          destination: registry
+          service: secure-web
+  training-worker:
+    description: GPU training and model-tracking automation workload account.
+    data:
+      personas:
+      - auto-training
+      processes:
+      - pytorch
+      - mlflow
+      connections:
+        models:
+          destination: mlflow-service
+          service: secure-web
+        artifacts:
+          destination: registry
+          service: secure-web
+  simulation-worker:
+    description: ARGO and Gazebo simulation automation workload account.
+    data:
+      personas:
+      - auto-simulation
+      processes:
+      - argo
+      - gazebo
+      connections:
+        results:
+          destination: registry
+          service: secure-web
+  release-cache-worker:
+    description: Approved-release cache synchronization workload account.
+    data:
+      personas:
+      - auto-release
+      processes:
+      - engineering-tools
+      connections:
+        approved:
+          destination: registry
+          service: secure-web
+  support-proxy-worker:
+    description: Customer support reverse proxy workload workload account.
+    data:
+      personas:
+      - auto-proxy
+      processes:
+      - nginx
+      connections:
+        backend:
+          destination: support-internal
+          service: backend-http
+  log-collector-worker:
+    description: Local log collector and forwarding automation workload account.
+    data:
+      personas:
+      - auto-logging
+      processes:
+      - rsyslog
+      - administration
+      connections:
+        administration:
+          destination: log-service
+          service: ssh
+  robot-runtime-worker:
+    description: Internal prototype and acceptance CRETE runtime workload account.
+    data:
+      personas:
+      - auto-runtime
+      processes:
+      - crete
+      connections:
+        approved-models:
+          destination: registry
+          service: secure-web
