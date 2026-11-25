@@ -60,6 +60,31 @@ planned close with a shell execution later than the requested command. It
 checks implicit and explicit shell parents with close times on either side of
 shell readiness and verifies native process coverage.
 
+## Local verification
+
+All 20 original failures and the five new regression cases passed on `039cad07`.
+Ruff lint and formatting and the behavior manifest check passed.
+The full default suite passed with 21,373 passed, 134 skipped, and 2,504
+deselected in 59m 38s, using loopback access and the macOS user temporary directory.
+
+The exact Juniper Vale draft generated successfully from a user-provided copy at
+seed `8801` with the default target and all eight configured format selections.
+The `KR-MAC-04` census matched 46 forks, 52 execs, and 39 known exits, with zero
+unresolved aggregate starts. The original managed draft requires cleanup from
+Studio or a process with access to the Documents workspace.
+
+Native Studio integration tests need loopback sockets. The LaunchDaemon reference
+test also compares the modeled account group with the process's primary group.
+On this Mac, directories created under `/private/tmp` inherit `wheel`, while the
+normal macOS user temporary directory inherits `staff`. The LaunchDaemon test
+passed there with the original assertions.
+
+The slow tier exercises generation from frozen releases and from drafts with
+current defaults. The frozen Lantern Works 1.1.0 bundle generated and passed
+evaluation acceptance, while the stricter example test found one Zeek
+Internet TAP source-port mismatch and two Zeek X.509 capability disagreements.
+Its scenario completeness score was 99.9723 against the test's 100 requirement.
+
 ## Follow-ups
 
 - Add parity fixtures for the evaluator's encrypted-HTTP capability rule.
