@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 575
+current_revision: 576
 history_start_revision: 1
-behavior_surface_sha256: e2740b18c03a097ba1aba607e53976477d19439c416d7ae23efe1051b9cc31bb
+behavior_surface_sha256: 9ea852965110bae9eb914cb27b839f49b83f65eb871664c97ab19dbbf49b891b
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6663,3 +6663,13 @@ changes:
   - ecar
   summary: Declare the native ASA foreign/local and translated-address fields and the eCAR
     authentication session fields that records already carry. Output is unchanged.
+- revision: 576
+  id: bundled-packs-without-release-configuration-binding
+  impact: none
+  domains:
+  - pack-composition
+  - packaged-resource-integrity
+  formats: []
+  summary: Drop the release-only configuration binding from Northstar Health 1.2.0 and
+    MetroLink 1.1.0 so their drafts can be published, and rewrite a copied pack's own file set
+    presets as shares already were.

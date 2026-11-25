@@ -610,6 +610,17 @@ def _rewrite_pack_self_references(document: Any, *, old_name: str, new_name: str
                     if item_changed:
                         share["preset"] = replacement
                         changed = True
+        file_sets = storage.get("file_sets") if isinstance(storage, dict) else None
+        if isinstance(file_sets, list):
+            for file_set in file_sets:
+                if not isinstance(file_set, dict):
+                    continue
+                replacement, item_changed = _rewrite_self_reference(
+                    file_set.get("preset"), old_name, new_name
+                )
+                if item_changed:
+                    file_set["preset"] = replacement
+                    changed = True
 
     baseline_activity = document.get("baseline_activity")
     if isinstance(baseline_activity, dict):
@@ -680,6 +691,14 @@ def _qualify_organization_environment_references(
                 continue
             share["preset"] = _qualify_organization_reference(
                 share.get("preset"),
+                owner=owner,
+                local_exports=local_storage_exports,
+                builtin_ids=builtin_storage_preset_ids,
+            )
+    for file_set in storage.get("file_sets", []):
+        if isinstance(file_set, dict) and file_set.get("preset") is not None:
+            file_set["preset"] = _qualify_organization_reference(
+                file_set.get("preset"),
                 owner=owner,
                 local_exports=local_storage_exports,
                 builtin_ids=builtin_storage_preset_ids,

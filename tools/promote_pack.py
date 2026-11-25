@@ -251,6 +251,42 @@ def _manifest_with_dependencies(
     _write_yaml(path, document)
 
 
+_COPY_PROVENANCE = "COPY_PROVENANCE.md"
+
+
+def _bundled_manifest(manifest_path: Path) -> None:
+    """Remove release-only and project-local content that cannot ship among the bundled packs.
+
+    A release binds its configuration context through a sibling ``configuration`` folder that
+    the bundle does not hold, so the binding would dangle in every draft. A project copy notes
+    its personal source in a provenance file, which must not ship with an official identity.
+    """
+    (manifest_path.parent / _COPY_PROVENANCE).unlink(missing_ok=True)
+    document = _load_yaml(manifest_path)
+    if document.pop("configuration_context", None) is not None:
+        _write_yaml(manifest_path, document)
+
+
+def _drop_personal_lineage(manifest_path: Path, publisher: str) -> None:
+    """Keep only ancestry from the official publisher in a reissued official manifest.
+
+    A promoted pack becomes a new official identity. Parents from any other publisher are
+    personal history that must not ship with it.
+    """
+    document = _load_yaml(manifest_path)
+    parents = document.get("parents")
+    if not parents:
+        return
+    official = [parent for parent in parents if parent.get("publisher") == publisher]
+    if official == parents:
+        return
+    if official:
+        document["parents"] = official
+    else:
+        document.pop("parents")
+    _write_yaml(manifest_path, document)
+
+
 def _write_lock(path: Path, dependencies: list[LoadedPack]) -> None:
     """Write an exact official lock for the staged organization pack."""
 
@@ -401,6 +437,10 @@ class PackPromoter:
                         publisher=self.target_publisher,
                         publisher_display_name=self.target_publisher_display_name,
                     )
+                    _drop_personal_lineage(
+                        candidate_path / PACK_MANIFEST_FILENAME, self.target_publisher
+                    )
+                    _bundled_manifest(candidate_path / PACK_MANIFEST_FILENAME)
                 candidate = _load_pack_at_path(staging_repo, candidate_path, "industry")
                 existing_path = _package_path(self.target_package_root, candidate)
                 key = _index_key(candidate)
@@ -463,6 +503,8 @@ class PackPromoter:
                 publisher=self.target_publisher,
                 publisher_display_name=self.target_publisher_display_name,
             )
+            _drop_personal_lineage(root_path / PACK_MANIFEST_FILENAME, self.target_publisher)
+            _bundled_manifest(root_path / PACK_MANIFEST_FILENAME)
             root = _load_pack_at_path(staging_repo, root_path, source_pack.manifest.type)
             if root.manifest.type == "organization":
                 _rewrite_dependency_yaml(root_path, dependency_namespace_rewrites)
@@ -587,6 +629,7 @@ class PackPromoter:
                     publisher=self.target_publisher,
                     dependency_source="package",
                 )
+            _bundled_manifest(staged_path / PACK_MANIFEST_FILENAME)
             source_pack = _load_pack_at_path(staging_repo, staged_path, manifest.type)
         _validate_official_closure(dependencies, source_pack)
         root_key = _index_key(source_pack)

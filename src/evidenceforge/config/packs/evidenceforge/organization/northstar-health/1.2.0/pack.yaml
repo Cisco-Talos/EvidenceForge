@@ -23,4 +23,3 @@ parents:
   draft_id: d3a08c79-d7e8-45c4-8938-6e1c997812ef
   digest: 0639833547fc7f291cb3559d16d90def50ed479ab581f3822a2d3ef35ebdca2c
 version: 1.2.0
-configuration_context: ../configuration/context.yaml

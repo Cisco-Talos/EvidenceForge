@@ -1172,3 +1172,46 @@ def test_semantic_validation_does_not_mutate_loaded_catalogs() -> None:
     _validate_semantics([pack], builtin_application_ids={"chrome"})
 
     assert pack.catalogs == original
+
+
+def test_pack_copy_rewrites_file_set_and_share_presets_to_the_new_identity() -> None:
+    from evidenceforge.composition.packs import (
+        _qualify_organization_environment_references,
+        _rewrite_pack_self_references,
+    )
+
+    document = {
+        "environment": {
+            "storage": {
+                "servers": [{"shares": [{"preset": "alice/robotics:datasets"}]}],
+                "file_sets": [
+                    {"id": "cache", "preset": "alice/robotics:datasets"},
+                    {"id": "builtin", "preset": "software"},
+                ],
+            }
+        }
+    }
+
+    assert _rewrite_pack_self_references(
+        document, old_name="alice/robotics", new_name="evidenceforge/robotics"
+    )
+    storage = document["environment"]["storage"]
+    assert storage["servers"][0]["shares"][0]["preset"] == "evidenceforge/robotics:datasets"
+    assert [item["preset"] for item in storage["file_sets"]] == [
+        "evidenceforge/robotics:datasets",
+        "software",
+    ]
+
+    shorthand = {"storage": {"file_sets": [{"preset": "datasets"}, {"preset": "software"}]}}
+    _qualify_organization_environment_references(
+        shorthand,
+        "evidenceforge/robotics",
+        local_persona_exports=set(),
+        local_storage_exports={"evidenceforge/robotics:datasets"},
+        builtin_persona_ids=set(),
+        builtin_storage_preset_ids={"software"},
+    )
+    assert [item["preset"] for item in shorthand["storage"]["file_sets"]] == [
+        "evidenceforge/robotics:datasets",
+        "software",
+    ]

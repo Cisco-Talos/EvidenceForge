@@ -327,6 +327,8 @@ def test_official_release_installs_exactly_under_its_own_identity(
     # The release located its dependency inside itself; bundled, it resolves from the package.
     [dependency] = loaded.manifest.industry_dependencies
     assert dependency.source == "package" and dependency.path is None
+    # A release's configuration binding points outside the pack and cannot ship in the bundle.
+    assert "configuration_context" not in yaml.safe_load((installed / "pack.yaml").read_text())
     assert [pack.manifest.name for pack in repository.validate_semantics(loaded)] == ["healthcare"]
     release_files = {
         path.relative_to(release.parent): path.read_bytes()
@@ -398,3 +400,38 @@ def test_personal_org_reuses_an_already_official_industry_dependency(
     result = json.loads(capsys.readouterr().out)
     assert [item["action"] for item in result["dependencies"]] == ["reuse"]
     assert result["index_updates"].keys() == {"evidenceforge/organization/northstar-official/1.0.0"}
+
+
+def test_promotion_drops_personal_lineage_but_keeps_official_ancestry(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "unused-home")
+    project = tmp_path / "personal"
+    project.mkdir()
+    set_publisher(
+        project,
+        PublisherIdentity(publisher="alice", publisher_display_name="Alice Example"),
+        scope="project",
+        force=False,
+    )
+    # A schema 3 official release records its publisher, so it is official ancestry.
+    bundled = (_BUNDLED / "evidenceforge/organization/northstar-health/1.2.0/pack.yaml").resolve()
+    draft = create_draft(bundled, project_root=project, name="alice-clinic", publisher="alice")
+    release = publish(draft, project_root=project, version="0.2.0")
+    released = yaml.safe_load(release.read_text(encoding="utf-8"))
+    assert {parent.get("publisher") for parent in released["parents"]} >= {"alice", "evidenceforge"}
+    target = _target_repo(tmp_path)
+    _bundle_healthcare(target)
+
+    assert _promote(release, project, target, "1.0.0", "--target-name", "clinic", "--apply") == 0
+    capsys.readouterr()
+
+    installed = target / "src/evidenceforge/config/packs/evidenceforge/organization/clinic/1.0.0"
+    manifest = yaml.safe_load((installed / "pack.yaml").read_text(encoding="utf-8"))
+    assert manifest["publisher"] == "evidenceforge"
+    assert [parent["publisher"] for parent in manifest["parents"]] == ["evidenceforge"]
+    assert manifest["parents"][0]["name"] == "northstar-health"
+    for path in installed.rglob("*"):
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            assert "alice" not in text.casefold(), path
