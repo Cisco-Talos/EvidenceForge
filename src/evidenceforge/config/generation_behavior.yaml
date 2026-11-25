@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 571
+current_revision: 572
 history_start_revision: 1
-behavior_surface_sha256: 5fcf1064647178674f61975b79165d2d9e18a5e2c9744ef5741c7c37c6d4ab63
+behavior_surface_sha256: 81988274c20537401dac598cd055a9377a9798caa5dd37c66ed6bf2e83b0ea33
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6621,3 +6621,16 @@ changes:
   formats: []
   summary: Accept explicit WAN and abstract VPN links and require their sensors on
     termination-side networks. Preserve forwarding and existing link serialization.
+- revision: 572
+  id: routed-bundled-organization-packs
+  impact: localized
+  domains:
+  - pack-composition
+  - packaged-resource-integrity
+  - network-reachability
+  - sensor-visibility
+  formats:
+  - cisco_asa
+  - zeek_conn
+  summary: Bundle Northstar Health 1.2.0 and MetroLink Specialty Care 1.1.0 with
+    authored routing. Earlier pack versions and their outputs are unchanged.
