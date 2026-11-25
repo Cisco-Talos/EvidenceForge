@@ -70,8 +70,8 @@ deselected in 59m 38s, using loopback access and the macOS user temporary direct
 The exact Juniper Vale draft generated successfully from a user-provided copy at
 seed `8801` with the default target and all eight configured format selections.
 The `KR-MAC-04` census matched 46 forks, 52 execs, and 39 known exits, with zero
-unresolved aggregate starts. The original managed draft requires cleanup from
-Studio or a process with access to the Documents workspace.
+unresolved aggregate starts. The user removed the original managed draft through
+the reviewed CLI deletion, and its original path was verified absent.
 
 Native Studio integration tests need loopback sockets. The LaunchDaemon reference
 test also compares the modeled account group with the process's primary group.
