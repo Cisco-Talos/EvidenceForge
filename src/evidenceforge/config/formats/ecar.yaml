@@ -215,6 +215,21 @@ fields:
     required: false
     description: "OS/source session identifier for USER_SESSION events, string in properties"
 
+  - name: auth_session_ref
+    type: string
+    required: false
+    description: "Authentication session reference shared with SMB evidence, string in properties"
+
+  - name: auth_protocol
+    type: string
+    required: false
+    description: "Authentication protocol for USER_SESSION events, string in properties"
+
+  - name: account_scope
+    type: string
+    required: false
+    description: "Whether the account is local or domain for USER_SESSION events"
+
   - name: logon_guid
     type: string
     required: false

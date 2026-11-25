@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 572
+current_revision: 575
 history_start_revision: 1
-behavior_surface_sha256: 81988274c20537401dac598cd055a9377a9798caa5dd37c66ed6bf2e83b0ea33
+behavior_surface_sha256: e2740b18c03a097ba1aba607e53976477d19439c416d7ae23efe1051b9cc31bb
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6634,3 +6634,32 @@ changes:
   - zeek_conn
   summary: Bundle Northstar Health 1.2.0 and MetroLink Specialty Care 1.1.0 with
     authored routing. Earlier pack versions and their outputs are unchanged.
+- revision: 573
+  id: unsuccessful-imaps-mailbox-session
+  impact: localized
+  domains:
+  - email-access-transport-links
+  - dovecot-native-fetch-summary
+  formats:
+  - syslog
+  summary: Omit the Dovecot login and session for a mailbox read whose IMAPS connection was
+    denied or failed, instead of failing generation. The attempt stays as network evidence.
+- revision: 574
+  id: standard-http-reason-phrases
+  impact: localized
+  domains:
+  - http-response-metadata
+  formats:
+  - zeek_http
+  summary: Use the standard reason phrase for HTTP status codes outside the built-in table,
+    such as 201 Created and 429 Too Many Requests, instead of OK.
+- revision: 575
+  id: declared-native-asa-and-ecar-session-fields
+  impact: none
+  domains:
+  - record-validation
+  formats:
+  - cisco_asa
+  - ecar
+  summary: Declare the native ASA foreign/local and translated-address fields and the eCAR
+    authentication session fields that records already carry. Output is unchanged.

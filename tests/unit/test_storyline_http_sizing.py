@@ -164,3 +164,12 @@ def test_beacon_zip_404_uses_error_page_size_not_asset_size() -> None:
 
     assert body_len == response_size_for_status(404, "halcyon-grants.org", "/backup.zip")
     assert 420 <= body_len <= 1800
+
+
+def test_http_status_message_uses_standard_phrases_beyond_the_table() -> None:
+    from evidenceforge.generation.activity.http_content import http_status_message
+
+    assert http_status_message(200) == "OK"
+    assert http_status_message(201) == "Created"
+    assert http_status_message(429) == "Too Many Requests"
+    assert http_status_message(799) == ""

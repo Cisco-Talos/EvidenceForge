@@ -21219,6 +21219,10 @@ class ActivityGenerator:
             transport = capture.transaction
             if transport is None or (uid and transport.zeek_uid != uid):
                 raise StateError("IMAPS transport did not publish its exact canonical identity")
+            # A firewall may deny or a server may refuse the connection. That attempt is already
+            # recorded as network evidence; without a session there is no Dovecot login to log.
+            if transport.outcome != "success":
+                return uid
             self._emit_dovecot_imap_syslog(
                 user=request.user,
                 client_system=request.system,
