@@ -1,0 +1,266 @@
+baseline_activity:
+  description: Ordinary Talus business, engineering, and production activity. HQ staff generally work 09:00-17:00
+    and manufacturing 07:00-16:00 weekdays. Interactive workload follows personas and application cadences; service-worker
+    connections are modeled separately. Portal access is customer initiated. No attack storyline. The staff inventory
+    is representative, with restrained ambient volume; authored application cadences retain the normal workflow
+    pattern. Twelve explicit functional accounts represent automation workloads through the public active-account
+    scheduler, rather than adding executable hooks or an engine-internal job plan.
+  intensity: low
+  variation: medium
+  suspicious_noise: low
+  traffic_affinities:
+  - name: ci-artifact-publication
+    kind: connection
+    direction: internal
+    destination:
+      system: HQ-REG-01
+      port: 443
+      service: ssl
+    audience:
+      systems:
+      - HQ-CI-01
+      - HQ-CI-02
+    participation: 1
+    per_client_sessions:
+    - 24
+    - 48
+    cadence: diffuse
+    connection_profile:
+      durations:
+      - 5
+      - 90
+      orig_bytes:
+      - 200000
+      - 3000000
+      resp_bytes:
+      - 4000
+      - 30000
+  - name: gpu-model-tracking
+    kind: connection
+    direction: internal
+    destination:
+      system: HQ-MLFLOW-01
+      port: 443
+      service: ssl
+    audience:
+      systems:
+      - HQ-GPU-01
+      - HQ-GPU-02
+    participation: 1
+    per_client_sessions:
+    - 120
+    - 240
+    cadence: diffuse
+    connection_profile:
+      durations:
+      - 5
+      - 90
+      orig_bytes:
+      - 50000
+      - 1000000
+      resp_bytes:
+      - 3000
+      - 30000
+  - name: simulation-result-upload
+    kind: connection
+    direction: internal
+    destination:
+      system: HQ-REG-01
+      port: 443
+      service: ssl
+    audience:
+      systems:
+      - HQ-SIM-01
+    participation: 1
+    per_client_sessions:
+    - 24
+    - 48
+    cadence: diffuse
+    connection_profile:
+      durations:
+      - 5
+      - 90
+      orig_bytes:
+      - 50000
+      - 1000000
+      resp_bytes:
+      - 3000
+      - 30000
+  - name: manufacturing-release-sync
+    kind: connection
+    direction: internal
+    destination:
+      system: HQ-REG-01
+      port: 443
+      service: ssl
+    audience:
+      systems:
+      - MFG-STAGE-01
+    participation: 1
+    per_client_sessions:
+    - 24
+    - 48
+    cadence: diffuse
+    connection_profile:
+      durations:
+      - 5
+      - 90
+      orig_bytes:
+      - 3000
+      - 12000
+      resp_bytes:
+      - 1000000
+      - 20000000
+  - name: manufacturing-log-forwarding
+    kind: connection
+    direction: internal
+    destination:
+      system: HQ-LOG-01
+      port: 6514
+      service: ssl
+    audience:
+      systems:
+      - MFG-LOG-01
+    participation: 1
+    per_client_sessions:
+    - 288
+    - 576
+    cadence: diffuse
+    connection_profile:
+      durations:
+      - 5
+      - 90
+      orig_bytes:
+      - 10000
+      - 100000
+      resp_bytes:
+      - 1000
+      - 4000
+  - name: customer-support-portal
+    kind: web
+    direction: inbound
+    target:
+      system: HQ-PORTAL-01
+      host: support.talus.lab
+      ip: 203.0.113.10
+      port: 443
+      service: ssl
+    audience:
+      external_client_classes:
+      - human
+    participation: 0.7
+    per_client_sessions:
+    - 2
+    - 4
+    cadence: business_hours
+    request_profile:
+      routes:
+      - path: /my/tickets
+        weight: 4
+        methods:
+          GET:
+            statuses:
+              '200': 1
+            response_body_bytes:
+            - 4000
+            - 20000
+            content_type: text/html
+      - path: /web/content/approved-release.zip
+        weight: 1
+        methods:
+          GET:
+            statuses:
+              '200': 1
+            response_body_bytes:
+            - 1000000
+            - 5000000
+            content_type: application/zip
+      - path: /my/tickets/new
+        weight: 1
+        methods:
+          POST:
+            statuses:
+              '200': 1
+            request_body_bytes:
+            - 10000
+            - 2000000
+            request_content_type: application/octet-stream
+            response_body_bytes:
+            - 1000
+            - 4000
+  - name: support-proxy-backend
+    kind: connection
+    direction: internal
+    destination:
+      system: HQ-SUPPORT-01
+      host: support-internal.talus.lab
+      port: 8069
+      service: http
+    audience:
+      systems:
+      - HQ-PORTAL-01
+    participation: 1
+    per_client_sessions:
+    - 120
+    - 240
+    cadence: diffuse
+    connection_profile:
+      durations:
+      - 0
+      - 3
+      orig_bytes:
+      - 500
+      - 3000
+      resp_bytes:
+      - 4000
+      - 20000
+  - name: prototype-robot-dds
+    kind: connection
+    direction: internal
+    destination:
+      system: HQ-LAB-01
+      port: 7400
+      proto: udp
+      service: '-'
+    audience:
+      systems:
+      - HQ-TPA-01
+      - HQ-TPA-02
+    participation: 1
+    per_client_sessions:
+    - 120
+    - 240
+    cadence: diffuse
+    connection_profile:
+      durations:
+      - 10
+      - 120
+      orig_bytes:
+      - 50000
+      - 500000
+      resp_bytes:
+      - 10000
+      - 50000
+  traffic_suppression:
+  - kind: web
+    direction: outbound
+    audience:
+      systems:
+      - HQ-TPA-01
+      - HQ-TPA-02
+      - MFG-TPA-01
+      - MFG-TPA-02
+    factor: 0
+  - kind: connection
+    direction: internal
+    audience:
+      systems:
+      - HQ-CI-01
+      - HQ-CI-02
+      - HQ-GPU-01
+      - HQ-GPU-02
+      - HQ-SIM-01
+      - MFG-STAGE-01
+      - MFG-LOG-01
+      - HQ-PORTAL-01
+    factor: 0

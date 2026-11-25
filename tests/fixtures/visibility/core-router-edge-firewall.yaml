@@ -1,0 +1,62 @@
+# A core router joins two LANs; an edge firewall publishes the mail server through static NAT.
+# Each case lists, by hand, the sensors the documented routing rules place on the flow.
+description: Core router behind an edge firewall, with a LAN SPAN and transit-link TAPs
+systems:
+  - {hostname: WS-01, ip: 10.1.10.21, os: Windows 11, type: workstation}
+  - {hostname: WS-02, ip: 10.1.10.22, os: Windows 11, type: workstation}
+  - {hostname: MAIL-01, ip: 10.1.20.20, os: Linux Ubuntu 24.04, type: server}
+network:
+  segments:
+    - {name: office, cidr: 10.1.10.0/24, exposure: internal}
+    - {name: servers, cidr: 10.1.20.0/24, exposure: internal}
+    - {name: transit, cidr: 10.1.254.0/30, exposure: internal}
+  public_cidrs: [203.0.113.16/28]
+  routing:
+    devices:
+      core: {kind: router}
+      edge: {kind: firewall, firewall: edge-fw}
+    links:
+      internet: {internet: true, interfaces: {edge: {name: outside, ip: 203.0.113.18}}}
+      transit: {segment: transit, interfaces: {edge: {name: inside, ip: 10.1.254.1}, core: {name: edge, ip: 10.1.254.2}}}
+      office: {segment: office, interfaces: {core: {name: office, ip: 10.1.10.1}}}
+      servers: {segment: servers, interfaces: {core: {name: servers, ip: 10.1.20.1}}}
+    gateways: {office: core, servers: core}
+    routes:
+      edge:
+        - {destination: 10.1.0.0/16, next_hop: 10.1.254.2}
+        - {destination: 0.0.0.0/0, internet_link: internet}
+      core:
+        - {destination: 0.0.0.0/0, next_hop: 10.1.254.1}
+  sensors:
+    - {type: network, name: office-span, monitoring_segments: [office], placement: span, log_formats: [zeek]}
+    - {type: network, name: transit-zeek, placement: tap, link_tap: {link: transit}, log_formats: [zeek]}
+    - {type: ids, name: transit-ids, placement: tap, link_tap: {link: transit, scope: internet}, log_formats: [snort_alert]}
+    - type: firewall
+      name: edge-fw
+      monitoring_segments: [office, servers, transit]
+      placement: tap
+      log_formats: [cisco_asa]
+      interfaces: {office: inside, servers: inside, transit: inside}
+      nat_rules:
+        - {type: static, src: [servers], real_ip: 10.1.20.20, mapped_ip: 203.0.113.20}
+        - {type: dynamic_pat, src: [office, servers], mapped_ip: 203.0.113.18}
+cases:
+  - {name: within the office LAN, src: 10.1.10.21, dst: 10.1.10.22, observers: [office-span]}
+  - {name: office to servers through the core router, src: 10.1.10.21, dst: 10.1.20.20, observers: [office-span]}
+  - name: office to the Internet
+    src: 10.1.10.21
+    dst: 198.51.100.7
+    observers: [office-span, transit-zeek, transit-ids, edge-fw]
+  - name: Internet to the published mail server
+    src: 198.51.100.7
+    dst: 203.0.113.20
+    observers: [transit-zeek, transit-ids, edge-fw]
+  - name: office to the Internet, denied at the firewall
+    src: 10.1.10.21
+    dst: 198.51.100.7
+    denied: true
+    observers: [office-span, transit-zeek, transit-ids, edge-fw]
+  - name: office to the mail server's public address stops before the translating firewall
+    src: 10.1.10.21
+    dst: 203.0.113.20
+    observers: [office-span, transit-zeek]

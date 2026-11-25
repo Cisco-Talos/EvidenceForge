@@ -696,6 +696,15 @@ When adding or significantly modifying event types, emitters, or the event schem
 6. **Causal expansion** — `src/evidenceforge/generation/causal/rules.py` (if the new event type needs auto-generated prerequisites), `src/evidenceforge/generation/causal/registry.py` (register new rules)
 7. **Coverage test prompt** — `scenarios/COVERAGE-TEST-PROMPT.md` (event type count, storyline steps, format-specific verification sections)
 
+**Evaluator independence:** Ground-truth agreement deliberately keeps its own implementation of
+sensor placement (`evaluation/routed_placement.py` and the segment rules in
+`evaluation/ground_truth_agreement.py`) and of source-capability decisions, so it can catch
+generator defects. Do not import the generator's routing or visibility code there. When engine
+routing, sensor placement, NAT, firewall forwarding or capability rules change, update the
+evaluator counterpart in the same change and add a case to the hand-written fixtures in
+`tests/fixtures/visibility/`. `tests/unit/test_visibility_parity.py` holds both implementations
+to those expectations.
+
 ## CLI Design Patterns
 
 - Use Typer with `Annotated` type hints for all options/arguments

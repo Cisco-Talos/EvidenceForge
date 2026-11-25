@@ -8,6 +8,10 @@ This is intentionally a developer-maintainer utility rather than an ``eforge``
 command.  It creates a new publisher-qualified identity, optionally promotes
 the exact industry dependencies locked by an organization pack, and updates
 the immutable package digest index only when ``apply`` is requested.
+
+A published release that already belongs to the official publisher, such as a
+new version drafted from a bundled pack, is installed as-is under its own
+identity instead: every dependency must already be bundled.
 """
 
 from __future__ import annotations
@@ -247,6 +251,42 @@ def _manifest_with_dependencies(
     _write_yaml(path, document)
 
 
+_COPY_PROVENANCE = "COPY_PROVENANCE.md"
+
+
+def _bundled_manifest(manifest_path: Path) -> None:
+    """Remove release-only and project-local content that cannot ship among the bundled packs.
+
+    A release binds its configuration context through a sibling ``configuration`` folder that
+    the bundle does not hold, so the binding would dangle in every draft. A project copy notes
+    its personal source in a provenance file, which must not ship with an official identity.
+    """
+    (manifest_path.parent / _COPY_PROVENANCE).unlink(missing_ok=True)
+    document = _load_yaml(manifest_path)
+    if document.pop("configuration_context", None) is not None:
+        _write_yaml(manifest_path, document)
+
+
+def _drop_personal_lineage(manifest_path: Path, publisher: str) -> None:
+    """Keep only ancestry from the official publisher in a reissued official manifest.
+
+    A promoted pack becomes a new official identity. Parents from any other publisher are
+    personal history that must not ship with it.
+    """
+    document = _load_yaml(manifest_path)
+    parents = document.get("parents")
+    if not parents:
+        return
+    official = [parent for parent in parents if parent.get("publisher") == publisher]
+    if official == parents:
+        return
+    if official:
+        document["parents"] = official
+    else:
+        document.pop("parents")
+    _write_yaml(manifest_path, document)
+
+
 def _write_lock(path: Path, dependencies: list[LoadedPack]) -> None:
     """Write an exact official lock for the staged organization pack."""
 
@@ -334,15 +374,19 @@ class PackPromoter:
         """Resolve, reissue, validate, and describe a promotion without writing the target."""
 
         source_pack = _load_source_pack(self.source_repo, source, expected_type=None)
-        if source_pack.manifest.publisher == self.target_publisher:
+        if source_pack.manifest.status == "draft":
             raise PromotionError(
-                "source pack already uses the target publisher; promotion requires a new identity"
+                "drafts are not promoted directly; publish the draft with "
+                "`eforge pack publish`, then promote the published release"
+            )
+        index_document = _load_index(self.index_path)
+        pack_index = index_document["packs"]
+        if source_pack.manifest.publisher == self.target_publisher:
+            return self._prepare_official_release(
+                source, source_pack, target_name, target_version, index_document
             )
         if target_name is None:
             target_name = source_pack.manifest.name
-
-        index_document = _load_index(self.index_path)
-        pack_index = index_document["packs"]
 
         with tempfile.TemporaryDirectory(prefix="eforge-pack-promotion-") as temporary_root:
             staging_repo = PackRepository(Path(temporary_root))
@@ -356,26 +400,47 @@ class PackPromoter:
                 # ``PackRepository.copy`` validates an organization immediately after
                 # publishing it.  Keep a private copy of the original dependency in
                 # the disposable staging project so that validation can pass before
-                # the manifest is reissued under the official namespace below.
-                staging_repo.copy(
-                    dependency,
-                    name=dependency.manifest.name,
-                    version=dependency.manifest.version,
-                    publisher=dependency.manifest.publisher,
-                    publisher_display_name=dependency.manifest.publisher_display_name,
-                )
+                # the manifest is reissued under the official namespace below. A
+                # dependency that is already official needs no private copy: the
+                # official copy below is the same identity and would collide with it.
+                if dependency.manifest.publisher != self.target_publisher:
+                    staging_repo.copy(
+                        dependency,
+                        name=dependency.manifest.name,
+                        version=dependency.manifest.version,
+                        publisher=dependency.manifest.publisher,
+                        publisher_display_name=dependency.manifest.publisher_display_name,
+                    )
                 old_namespace = pack_namespace(
                     dependency.manifest.publisher, dependency.manifest.name
                 )
                 new_namespace = pack_namespace(self.target_publisher, dependency.manifest.name)
                 dependency_namespace_rewrites[old_namespace] = new_namespace
-                candidate_path = staging_repo.copy(
-                    dependency,
-                    name=dependency.manifest.name,
-                    version=dependency.manifest.version,
-                    publisher=self.target_publisher,
-                    publisher_display_name=self.target_publisher_display_name,
-                )
+                if dependency.manifest.publisher == self.target_publisher:
+                    # Stage an already-official dependency byte for byte, so its digest is
+                    # compared with the indexed payload rather than with a reissued copy.
+                    manifest = dependency.manifest
+                    candidate_path = (
+                        staging_repo.project_pack_root
+                        / manifest.publisher
+                        / manifest.type
+                        / manifest.name
+                        / manifest.version
+                    )
+                    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(dependency.root, candidate_path)
+                else:
+                    candidate_path = staging_repo.copy(
+                        dependency,
+                        name=dependency.manifest.name,
+                        version=dependency.manifest.version,
+                        publisher=self.target_publisher,
+                        publisher_display_name=self.target_publisher_display_name,
+                    )
+                    _drop_personal_lineage(
+                        candidate_path / PACK_MANIFEST_FILENAME, self.target_publisher
+                    )
+                    _bundled_manifest(candidate_path / PACK_MANIFEST_FILENAME)
                 candidate = _load_pack_at_path(staging_repo, candidate_path, "industry")
                 existing_path = _package_path(self.target_package_root, candidate)
                 key = _index_key(candidate)
@@ -438,6 +503,8 @@ class PackPromoter:
                 publisher=self.target_publisher,
                 publisher_display_name=self.target_publisher_display_name,
             )
+            _drop_personal_lineage(root_path / PACK_MANIFEST_FILENAME, self.target_publisher)
+            _bundled_manifest(root_path / PACK_MANIFEST_FILENAME)
             root = _load_pack_at_path(staging_repo, root_path, source_pack.manifest.type)
             if root.manifest.type == "organization":
                 _rewrite_dependency_yaml(root_path, dependency_namespace_rewrites)
@@ -501,6 +568,94 @@ class PackPromoter:
                 index_updates=index_updates,
             )
             return PreparedPromotion(plan=plan, payloads=payloads, index_document=updated_index)
+
+    def _prepare_official_release(
+        self,
+        source: str,
+        source_pack: LoadedPack,
+        target_name: str | None,
+        target_version: str,
+        index_document: dict[str, Any],
+    ) -> PreparedPromotion:
+        """Plan installing a published official release exactly as it was released."""
+
+        manifest = source_pack.manifest
+        identity = f"{manifest.publisher}/{manifest.name}"
+        if manifest.status != "published":
+            raise PromotionError(
+                f"{identity} already uses the target publisher, so only a published release "
+                "of it can be installed; publish it with `eforge pack publish` first"
+            )
+        if target_name not in (None, manifest.name) or target_version != manifest.version:
+            raise PromotionError(
+                f"an official release keeps its published identity; use --target-version "
+                f"{manifest.version} without --target-name"
+            )
+        pack_index = index_document["packs"]
+        dependency_items: list[PromotionItem] = []
+        dependencies = self.source_repo.validate_semantics(source_pack)
+        for dependency in dependencies:
+            key = _index_key(dependency)
+            existing_path = _package_path(self.target_package_root, dependency)
+            if (
+                dependency.manifest.publisher != self.target_publisher
+                or pack_index.get(key) != dependency.digest
+                or not existing_path.is_dir()
+                or existing_path.is_symlink()
+            ):
+                raise PromotionError(
+                    f"official release {identity}@{manifest.version} depends on {key}, which is "
+                    "not bundled with a matching digest; release that dependency first"
+                )
+            dependency_items.append(_item("reuse", self.target_package_root, dependency))
+        # A release is self-contained, so its manifest locates dependencies inside the release.
+        # Installed among the bundled packs, it must resolve them from the package root instead.
+        # The rewritten manifest is the payload, so its digest is computed from those bytes.
+        with tempfile.TemporaryDirectory(prefix="eforge-pack-release-") as temporary_root:
+            staging_root = Path(temporary_root).resolve()
+            staging_repo = PackRepository(staging_root)
+            staged_path = _package_path(staging_root / "packs", source_pack)
+            staged_path.mkdir(parents=True)
+            for relative, content in (
+                *source_pack.semantic_file_bytes,
+                *source_pack.companion_file_bytes,
+            ):
+                (staged_path / relative).parent.mkdir(parents=True, exist_ok=True)
+                (staged_path / relative).write_bytes(content)
+            if manifest.type == "organization":
+                _manifest_with_dependencies(
+                    staged_path / PACK_MANIFEST_FILENAME,
+                    source_pack,
+                    publisher=self.target_publisher,
+                    dependency_source="package",
+                )
+            _bundled_manifest(staged_path / PACK_MANIFEST_FILENAME)
+            source_pack = _load_pack_at_path(staging_repo, staged_path, manifest.type)
+        _validate_official_closure(dependencies, source_pack)
+        root_key = _index_key(source_pack)
+        if _package_path(self.target_package_root, source_pack).exists() or root_key in pack_index:
+            raise PromotionError(
+                f"refusing to overwrite existing official pack {root_key}; "
+                "publish a new version instead"
+            )
+        updated_index = dict(index_document)
+        updated_index["packs"] = {**pack_index, root_key: source_pack.digest}
+        plan = PromotionPlan(
+            source=source,
+            target_publisher=self.target_publisher,
+            target_publisher_display_name=manifest.publisher_display_name,
+            target_repo_root=str(self.target_repo_root),
+            target_package_root=str(self.target_package_root),
+            root=_item("create", self.target_package_root, source_pack),
+            dependencies=dependency_items,
+            namespace_rewrites={},
+            index_updates={root_key: source_pack.digest},
+        )
+        return PreparedPromotion(
+            plan=plan,
+            payloads={(manifest.type, manifest.name, manifest.version): source_pack},
+            index_document=updated_index,
+        )
 
     def apply(self, prepared: PreparedPromotion) -> None:
         """Atomically publish the prepared pack directories and digest index."""

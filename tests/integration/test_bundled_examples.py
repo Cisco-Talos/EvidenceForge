@@ -42,19 +42,37 @@ def test_shipping_collection_is_complete_and_valid(tmp_path: Path) -> None:
         "alderbrook-insider-exfiltration",
         "juniper-vale-macos-dns",
     }
+    releases = {(example.receipt.name, example.root.name) for example in examples}
+    assert releases == set(_EXPECTED_WARNINGS), "update the expected findings for every release"
     for example in examples:
         findings = validation_findings(
             example.root / example.receipt.entrypoint, project_root=tmp_path
         )
-        expected_tls_gaps = example.receipt.name in {
-            "alderbrook-insider-exfiltration",
-            "juniper-vale-macos-dns",
-        }
-        assert len(findings) == int(expected_tls_gaps), findings
-        for finding in findings:
-            assert finding["severity"] == "warning"
-            assert "http result" in finding["message"]
-            assert "encrypted application" in finding["message"]
+        warnings = [finding for finding in findings if finding["severity"] != "info"]
+        expected = _EXPECTED_WARNINGS[(example.receipt.name, example.root.name)]
+        assert len(warnings) == len(expected), (example.root, warnings)
+        for finding, phrase in zip(warnings, expected, strict=True):
+            assert finding["severity"] == "warning", finding
+            assert phrase in finding["message"], finding
+
+
+_OPAQUE_HTTPS = "cannot record important typed fact 'http result'"
+# Every shipped release and its intentional, documented validation warnings. Superseded
+# versions stay in the collection for scenarios that depend on them.
+_EXPECTED_WARNINGS: dict[tuple[str, str], list[str]] = {
+    ("alderbrook-insider-exfiltration", "1.0.0"): [_OPAQUE_HTTPS],
+    ("alderbrook-insider-exfiltration", "1.1.0"): [_OPAQUE_HTTPS],
+    ("cedar-vale-invoice-phishing", "1.0.0"): [],
+    ("cedar-vale-invoice-phishing", "1.1.0"): [],
+    ("juniper-vale-macos-dns", "1.0.2"): [_OPAQUE_HTTPS],
+    ("juniper-vale-macos-dns", "1.1.0"): [_OPAQUE_HTTPS],
+    ("lantern-works-web-compromise", "1.0.0"): [],
+    # The support portal is HTTPS; web access logs carry its request results.
+    ("lantern-works-web-compromise", "1.1.0"): [_OPAQUE_HTTPS] * 3,
+    # Superseded by 1.1.0, which uses Northstar Health 1.2.0's authored routing.
+    ("northstar-stolen-credentials", "1.0.0"): ["use legacy segment-based visibility"],
+    ("northstar-stolen-credentials", "1.1.0"): [],
+}
 
 
 def test_shipping_examples_import_and_fork_in_an_unrelated_workspace(

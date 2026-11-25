@@ -1,0 +1,2945 @@
+environment:
+  description: 'Fictional Talus Enterprises: 350 employees represented by 44 named
+    staff and 12 functional workload accounts, engineering HQ and manufacturing site
+    linked by a private leased line with IPsec. A single HQ Internet edge serves both
+    sites. Customer robots and local fleet servers are outside Talus ownership. The
+    routed topology defines subnet gateways, the leased-line path, guest firewall
+    boundaries, and sensor attachment points.'
+  domain: talus.lab
+  timezone:
+    default: America/New_York
+  users:
+  - username: atlas.mercer
+    full_name: Atlas Mercer
+    email: atlas.mercer@talus.lab
+    persona: evidenceforge/talus-enterprises:executive
+    primary_system: ATLAS-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Business
+  - username: hera.ward
+    full_name: Hera Ward
+    email: hera.ward@talus.lab
+    persona: evidenceforge/talus-enterprises:executive
+    primary_system: HERA-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Business
+  - username: rhea.brooks
+    full_name: Rhea Brooks
+    email: rhea.brooks@talus.lab
+    persona: evidenceforge/talus-enterprises:finance
+    primary_system: RHEA-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Business
+  - username: ariadne.bell
+    full_name: Ariadne Bell
+    email: ariadne.bell@talus.lab
+    persona: evidenceforge/talus-enterprises:product
+    primary_system: ARIADNE-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Business
+  - username: hannah.price
+    full_name: Hannah Price
+    email: hannah.price@talus.lab
+    persona: evidenceforge/talus-enterprises:hr
+    primary_system: HQ-BIZ-01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Business
+  - username: marcus.bell
+    full_name: Marcus Bell
+    email: marcus.bell@talus.lab
+    persona: evidenceforge/talus-enterprises:sales
+    primary_system: HQ-BIZ-02
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Business
+  - username: athena.chen
+    full_name: Athena Chen
+    email: athena.chen@talus.lab
+    persona: evidenceforge/talus-enterprises:technical-lead
+    primary_system: ATHENA-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Business
+    - Release-Approvers
+  - username: hector.morgan
+    full_name: Hector Morgan
+    email: hector.morgan@talus.lab
+    persona: evidenceforge/talus-enterprises:systems-engineer
+    primary_system: HECTOR-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Business
+  - username: iris.patel
+    full_name: Iris Patel
+    email: iris.patel@talus.lab
+    persona: evidenceforge/talus-enterprises:robotics-engineer
+    primary_system: IRIS-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Software
+    - Lab-Operators
+  - username: phoebe.marin
+    full_name: Phoebe Marin
+    email: phoebe.marin@talus.lab
+    persona: evidenceforge/talus-enterprises:ai-engineer
+    primary_system: PHOEBE-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - AI
+  - username: elias.reed
+    full_name: Elias Reed
+    email: elias.reed@talus.lab
+    persona: evidenceforge/talus-enterprises:ai-engineer
+    primary_system: HQ-AI-01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - AI
+  - username: priya.shah
+    full_name: Priya Shah
+    email: priya.shah@talus.lab
+    persona: evidenceforge/talus-enterprises:robotics-engineer
+    primary_system: HQ-AI-02
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Software
+    - Lab-Operators
+  - username: jonah.park
+    full_name: Jonah Park
+    email: jonah.park@talus.lab
+    persona: evidenceforge/talus-enterprises:ml-engineer
+    primary_system: HQ-AI-03
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - AI
+  - username: sofia.vega
+    full_name: Sofia Vega
+    email: sofia.vega@talus.lab
+    persona: evidenceforge/talus-enterprises:simulation-engineer
+    primary_system: HQ-AI-04
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - AI
+    - Lab-Operators
+  - username: perseus.clarke
+    full_name: Perseus Clarke
+    email: perseus.clarke@talus.lab
+    persona: evidenceforge/talus-enterprises:software-engineer
+    primary_system: PERSEUS-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Software
+    - Release-Approvers
+  - username: leila.haddad
+    full_name: Leila Haddad
+    email: leila.haddad@talus.lab
+    persona: evidenceforge/talus-enterprises:robotics-engineer
+    primary_system: HQ-SWE-01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Software
+    - Lab-Operators
+  - username: daniel.kim
+    full_name: Daniel Kim
+    email: daniel.kim@talus.lab
+    persona: evidenceforge/talus-enterprises:firmware-engineer
+    primary_system: HQ-SWE-02
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Software
+  - username: clara.jensen
+    full_name: Clara Jensen
+    email: clara.jensen@talus.lab
+    persona: evidenceforge/talus-enterprises:software-engineer
+    primary_system: HQ-SWE-03
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Software
+  - username: ravi.mehta
+    full_name: Ravi Mehta
+    email: ravi.mehta@talus.lab
+    persona: evidenceforge/talus-enterprises:release-engineer
+    primary_system: HQ-SWE-04
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Software
+    - Release-Publishers
+  - username: daedalus.voss
+    full_name: Daedalus Voss
+    email: daedalus.voss@talus.lab
+    persona: evidenceforge/talus-enterprises:hardware-lead
+    primary_system: DAEDALUS-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Hardware
+  - username: amara.okafor
+    full_name: Amara Okafor
+    email: amara.okafor@talus.lab
+    persona: evidenceforge/talus-enterprises:mechanical-engineer
+    primary_system: HQ-HW-01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Hardware
+  - username: lucas.silva
+    full_name: Lucas Silva
+    email: lucas.silva@talus.lab
+    persona: evidenceforge/talus-enterprises:electrical-engineer
+    primary_system: HQ-HW-02
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Hardware
+  - username: nina.patel
+    full_name: Nina Patel
+    email: nina.patel@talus.lab
+    persona: evidenceforge/talus-enterprises:pcb-engineer
+    primary_system: HQ-HW-03
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Hardware
+  - username: grace.liu
+    full_name: Grace Liu
+    email: grace.liu@talus.lab
+    persona: evidenceforge/talus-enterprises:hardware-integration
+    primary_system: HQ-HW-04
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Hardware
+    - Lab-Operators
+  - username: felix.hart
+    full_name: Felix Hart
+    email: felix.hart@talus.lab
+    persona: evidenceforge/talus-enterprises:configuration-manager
+    primary_system: HQ-HW-05
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Hardware
+    - Release-Publishers
+  - username: hephaestus.hayes
+    full_name: Hephaestus Hayes
+    email: hephaestus.hayes@talus.lab
+    persona: evidenceforge/talus-enterprises:manufacturing-lead
+    primary_system: HEPHAESTUS-WS01
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Production
+  - username: rosa.delgado
+    full_name: Rosa Delgado
+    email: rosa.delgado@talus.lab
+    persona: evidenceforge/talus-enterprises:production-planner
+    primary_system: MFG-OPS-01
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Production
+  - username: ben.carter
+    full_name: Ben Carter
+    email: ben.carter@talus.lab
+    persona: evidenceforge/talus-enterprises:assembly-supervisor
+    primary_system: MFG-PROD-01
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Production
+  - username: aisha.rahman
+    full_name: Aisha Rahman
+    email: aisha.rahman@talus.lab
+    persona: evidenceforge/talus-enterprises:manufacturing-engineer
+    primary_system: MFG-PROD-02
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Production
+  - username: mateo.ruiz
+    full_name: Mateo Ruiz
+    email: mateo.ruiz@talus.lab
+    persona: evidenceforge/talus-enterprises:procurement
+    primary_system: MFG-OPS-02
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Production
+  - username: erin.walsh
+    full_name: Erin Walsh
+    email: erin.walsh@talus.lab
+    persona: evidenceforge/talus-enterprises:materials
+    primary_system: MFG-OPS-03
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Production
+  - username: owen.park
+    full_name: Owen Park
+    email: owen.park@talus.lab
+    persona: evidenceforge/talus-enterprises:production-technician
+    primary_system: MFG-PROD-03
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Production
+  - username: themis.scott
+    full_name: Themis Scott
+    email: themis.scott@talus.lab
+    persona: evidenceforge/talus-enterprises:quality-lead
+    primary_system: THEMIS-WS01
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Quality
+    - Release-Approvers
+  - username: noah.evans
+    full_name: Noah Evans
+    email: noah.evans@talus.lab
+    persona: evidenceforge/talus-enterprises:verification-engineer
+    primary_system: MFG-QA-01
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Quality
+    - Lab-Operators
+  - username: tara.singh
+    full_name: Tara Singh
+    email: tara.singh@talus.lab
+    persona: evidenceforge/talus-enterprises:calibration-engineer
+    primary_system: MFG-QA-02
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - Quality
+  - username: leo.fischer
+    full_name: Leo Fischer
+    email: leo.fischer@talus.lab
+    persona: evidenceforge/talus-enterprises:safety-engineer
+    primary_system: HQ-QA-01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Quality
+  - username: hermes.ross
+    full_name: Hermes Ross
+    email: hermes.ross@talus.lab
+    persona: evidenceforge/talus-enterprises:field-service
+    primary_system: HERMES-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Support
+    - Support-Publishers
+  - username: keira.adams
+    full_name: Keira Adams
+    email: keira.adams@talus.lab
+    persona: evidenceforge/talus-enterprises:field-service
+    primary_system: HQ-FIELD-01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Support
+  - username: samir.nasser
+    full_name: Samir Nasser
+    email: samir.nasser@talus.lab
+    persona: evidenceforge/talus-enterprises:support-engineer
+    primary_system: HQ-FIELD-02
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - Support
+    - Support-Publishers
+  - username: argus.blake
+    full_name: Argus Blake
+    email: argus.blake@talus.lab
+    persona: evidenceforge/talus-enterprises:it-lead
+    primary_system: ARGUS-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - IT
+  - username: olivia.grant
+    full_name: Olivia Grant
+    email: olivia.grant@talus.lab
+    persona: evidenceforge/talus-enterprises:windows-admin
+    primary_system: HQ-IT-01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - IT
+  - username: ethan.cole
+    full_name: Ethan Cole
+    email: ethan.cole@talus.lab
+    persona: evidenceforge/talus-enterprises:linux-admin
+    primary_system: HQ-IT-02
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - IT
+  - username: chloe.martin
+    full_name: Chloe Martin
+    email: chloe.martin@talus.lab
+    persona: evidenceforge/talus-enterprises:ot-admin
+    primary_system: MFG-IT-01
+    enabled: true
+    groups:
+    - Employees
+    - Manufacturing
+    - IT
+  - username: cassandra.hale
+    full_name: Cassandra Hale
+    email: cassandra.hale@talus.lab
+    persona: evidenceforge/talus-enterprises:security-analyst
+    primary_system: CASSANDRA-WS01
+    enabled: true
+    groups:
+    - Employees
+    - HQ-Staff
+    - IT
+  - username: build.runner01
+    full_name: GitLab Runner 01 account
+    email: build.runner01@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-ci
+    primary_system: HQ-CI-01
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: build.runner02
+    full_name: GitLab Runner 02 account
+    email: build.runner02@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-ci
+    primary_system: HQ-CI-02
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: training.worker01
+    full_name: GPU Training 01 account
+    email: training.worker01@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-training
+    primary_system: HQ-GPU-01
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: training.worker02
+    full_name: GPU Training 02 account
+    email: training.worker02@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-training
+    primary_system: HQ-GPU-02
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: argo.runner
+    full_name: ARGO Simulation account
+    email: argo.runner@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-simulation
+    primary_system: HQ-SIM-01
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: release.sync
+    full_name: Release Cache account
+    email: release.sync@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-release
+    primary_system: MFG-STAGE-01
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: logs.forwarder
+    full_name: Manufacturing Log Collector account
+    email: logs.forwarder@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-logging
+    primary_system: MFG-LOG-01
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: support.proxy
+    full_name: Customer Support Proxy account
+    email: support.proxy@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-proxy
+    primary_system: HQ-PORTAL-01
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: crete.prototype01
+    full_name: CRETE Prototype 01 account
+    email: crete.prototype01@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-runtime
+    primary_system: HQ-TPA-01
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: crete.prototype02
+    full_name: CRETE Prototype 02 account
+    email: crete.prototype02@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-runtime
+    primary_system: HQ-TPA-02
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: crete.acceptance01
+    full_name: CRETE Acceptance 01 account
+    email: crete.acceptance01@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-runtime
+    primary_system: MFG-TPA-01
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  - username: crete.acceptance02
+    full_name: CRETE Acceptance 02 account
+    email: crete.acceptance02@talus.lab
+    persona: evidenceforge/talus-enterprises:auto-runtime
+    primary_system: MFG-TPA-02
+    enabled: true
+    groups:
+    - Automation-Workers
+    browsing_intensity: light
+  systems:
+  - hostname: ATLAS-WS01
+    ip: 10.40.10.30
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: atlas.mercer
+  - hostname: HERA-WS01
+    ip: 10.40.10.31
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: hera.ward
+  - hostname: RHEA-WS01
+    ip: 10.40.10.32
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: rhea.brooks
+  - hostname: ARIADNE-WS01
+    ip: 10.40.10.33
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: ariadne.bell
+  - hostname: HQ-BIZ-01
+    ip: 10.40.10.34
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: hannah.price
+  - hostname: HQ-BIZ-02
+    ip: 10.40.10.35
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: marcus.bell
+  - hostname: ATHENA-WS01
+    ip: 10.40.20.30
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: athena.chen
+  - hostname: HECTOR-WS01
+    ip: 10.40.20.31
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: hector.morgan
+  - hostname: IRIS-WS01
+    ip: 10.40.20.32
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: iris.patel
+  - hostname: PHOEBE-WS01
+    ip: 10.40.20.33
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: phoebe.marin
+  - hostname: HQ-AI-01
+    ip: 10.40.20.34
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: elias.reed
+  - hostname: HQ-AI-02
+    ip: 10.40.20.35
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: priya.shah
+  - hostname: HQ-AI-03
+    ip: 10.40.20.36
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: jonah.park
+  - hostname: HQ-AI-04
+    ip: 10.40.20.37
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: sofia.vega
+  - hostname: PERSEUS-WS01
+    ip: 10.40.20.38
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: perseus.clarke
+  - hostname: HQ-SWE-01
+    ip: 10.40.20.39
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: leila.haddad
+  - hostname: HQ-SWE-02
+    ip: 10.40.20.40
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: daniel.kim
+  - hostname: HQ-SWE-03
+    ip: 10.40.20.41
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: clara.jensen
+  - hostname: HQ-SWE-04
+    ip: 10.40.20.42
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: ravi.mehta
+  - hostname: DAEDALUS-WS01
+    ip: 10.40.20.43
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: daedalus.voss
+  - hostname: HQ-HW-01
+    ip: 10.40.20.44
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: amara.okafor
+  - hostname: HQ-HW-02
+    ip: 10.40.20.45
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: lucas.silva
+  - hostname: HQ-HW-03
+    ip: 10.40.20.46
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: nina.patel
+  - hostname: HQ-HW-04
+    ip: 10.40.20.47
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: grace.liu
+  - hostname: HQ-HW-05
+    ip: 10.40.20.48
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: felix.hart
+  - hostname: HEPHAESTUS-WS01
+    ip: 10.50.10.30
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: hephaestus.hayes
+  - hostname: MFG-OPS-01
+    ip: 10.50.10.31
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: rosa.delgado
+  - hostname: MFG-PROD-01
+    ip: 10.50.20.30
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: ben.carter
+  - hostname: MFG-PROD-02
+    ip: 10.50.20.31
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: aisha.rahman
+  - hostname: MFG-OPS-02
+    ip: 10.50.10.32
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: mateo.ruiz
+  - hostname: MFG-OPS-03
+    ip: 10.50.10.33
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: erin.walsh
+  - hostname: MFG-PROD-03
+    ip: 10.50.20.32
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: owen.park
+  - hostname: THEMIS-WS01
+    ip: 10.50.30.30
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: themis.scott
+  - hostname: MFG-QA-01
+    ip: 10.50.30.31
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: noah.evans
+  - hostname: MFG-QA-02
+    ip: 10.50.30.32
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: tara.singh
+  - hostname: HQ-QA-01
+    ip: 10.40.20.49
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: leo.fischer
+  - hostname: HERMES-WS01
+    ip: 10.40.10.36
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: hermes.ross
+  - hostname: HQ-FIELD-01
+    ip: 10.40.10.37
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: keira.adams
+  - hostname: HQ-FIELD-02
+    ip: 10.40.10.38
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: samir.nasser
+  - hostname: ARGUS-WS01
+    ip: 10.40.90.30
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: argus.blake
+  - hostname: HQ-IT-01
+    ip: 10.40.90.31
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: olivia.grant
+  - hostname: HQ-IT-02
+    ip: 10.40.90.32
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: ethan.cole
+  - hostname: MFG-IT-01
+    ip: 10.50.90.30
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+    assigned_user: chloe.martin
+  - hostname: CASSANDRA-WS01
+    ip: 10.40.90.33
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    os_build: 24.04.2 LTS
+    assigned_user: cassandra.hale
+  - hostname: HQ-DC-01
+    ip: 10.40.40.10
+    os: Windows Server 2022
+    type: domain_controller
+    architecture: x64
+    roles:
+    - domain_controller
+    - dns_server
+    services:
+    - AD DS
+    - DNS
+    os_build: 10.0.20348.2849
+  - hostname: HQ-DC-02
+    ip: 10.40.40.11
+    os: Windows Server 2022
+    type: domain_controller
+    architecture: x64
+    roles:
+    - domain_controller
+    - dns_server
+    services:
+    - AD DS
+    - DNS
+    os_build: 10.0.20348.2849
+  - hostname: HQ-FS-01
+    ip: 10.40.40.12
+    os: Windows Server 2022
+    type: server
+    architecture: x64
+    roles:
+    - file_server
+    services:
+    - SMB
+    os_build: 10.0.20348.2849
+  - hostname: HQ-GIT-01
+    ip: 10.40.40.20
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - web_server
+    - app_server
+    services:
+    - gitlab-runsvdir
+    - nginx
+    - ssh
+    os_build: 24.04.2 LTS
+  - hostname: HQ-CI-01
+    ip: 10.40.40.21
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - gitlab-runner
+    - docker
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: build.runner01
+  - hostname: HQ-CI-02
+    ip: 10.40.40.22
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - gitlab-runner
+    - docker
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: build.runner02
+  - hostname: HQ-REG-01
+    ip: 10.40.40.23
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - web_server
+    - app_server
+    services:
+    - registry
+    - nginx
+    os_build: 24.04.2 LTS
+  - hostname: HQ-MLFLOW-01
+    ip: 10.40.40.24
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - web_server
+    - app_server
+    services:
+    - mlflow
+    - nginx
+    os_build: 24.04.2 LTS
+  - hostname: HQ-DATA-01
+    ip: 10.40.40.25
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - file_server
+    services:
+    - smbd
+    - ssh
+    os_build: 24.04.2 LTS
+  - hostname: HQ-SUPPORT-01
+    ip: 10.40.40.26
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - web_server
+    - app_server
+    services:
+    - odoo-support
+    - nginx
+    os_build: 24.04.2 LTS
+  - hostname: HQ-DB-01
+    ip: 10.40.40.27
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - database
+    services:
+    - postgresql
+    - ssh
+    os_build: 24.04.2 LTS
+  - hostname: HQ-BACKUP-01
+    ip: 10.40.40.28
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - file_server
+    services:
+    - smbd
+    - ssh
+    os_build: 24.04.2 LTS
+  - hostname: HQ-GPU-01
+    ip: 10.40.30.10
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - gitlab-runner
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: training.worker01
+  - hostname: HQ-GPU-02
+    ip: 10.40.30.11
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - gitlab-runner
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: training.worker02
+  - hostname: HQ-SIM-01
+    ip: 10.40.30.12
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - gitlab-runner
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: argo.runner
+  - hostname: HQ-LAB-01
+    ip: 10.40.50.10
+    os: Ubuntu 24.04 LTS
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services:
+    - cifs-utils
+    - ssh
+    os_build: 24.04.2 LTS
+  - hostname: HQ-LAB-02
+    ip: 10.40.50.11
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+  - hostname: HQ-TPA-01
+    ip: 10.40.50.20
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: arm64
+    roles: []
+    services:
+    - crete
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: crete.prototype01
+  - hostname: HQ-TPA-02
+    ip: 10.40.50.21
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: arm64
+    roles: []
+    services:
+    - crete
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: crete.prototype02
+  - hostname: HQ-PORTAL-01
+    ip: 10.40.60.10
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - web_server
+    services:
+    - nginx
+    os_build: 24.04.2 LTS
+    public_hostnames:
+    - support.talus.lab
+    assigned_user: support.proxy
+  - hostname: HQ-JUMP-01
+    ip: 10.40.90.10
+    os: Windows Server 2022
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - RDP
+    os_build: 10.0.20348.2849
+  - hostname: HQ-LOG-01
+    ip: 10.40.90.11
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - log_server
+    - monitoring
+    services:
+    - rsyslog
+    - ssh
+    os_build: 24.04.2 LTS
+  - hostname: MFG-DC-01
+    ip: 10.50.40.10
+    os: Windows Server 2022
+    type: domain_controller
+    architecture: x64
+    roles:
+    - domain_controller
+    - dns_server
+    services:
+    - AD DS
+    - DNS
+    os_build: 10.0.20348.2849
+  - hostname: MFG-ERP-01
+    ip: 10.50.40.11
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - web_server
+    - app_server
+    services:
+    - odoo-mfg
+    - nginx
+    os_build: 24.04.2 LTS
+  - hostname: MFG-DB-01
+    ip: 10.50.40.12
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - database
+    services:
+    - postgresql
+    os_build: 24.04.2 LTS
+  - hostname: MFG-FS-01
+    ip: 10.50.40.13
+    os: Windows Server 2022
+    type: server
+    architecture: x64
+    roles:
+    - file_server
+    services:
+    - SMB
+    os_build: 10.0.20348.2849
+  - hostname: MFG-STAGE-01
+    ip: 10.50.40.14
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - web_server
+    - app_server
+    services:
+    - nginx
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: release.sync
+  - hostname: MFG-BENCH-01
+    ip: 10.50.20.10
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+  - hostname: MFG-BENCH-02
+    ip: 10.50.30.10
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+  - hostname: MFG-TPA-01
+    ip: 10.50.30.20
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: arm64
+    roles: []
+    services:
+    - crete
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: crete.acceptance01
+  - hostname: MFG-TPA-02
+    ip: 10.50.30.21
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: arm64
+    roles: []
+    services:
+    - crete
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: crete.acceptance02
+  - hostname: MFG-JUMP-01
+    ip: 10.50.90.10
+    os: Windows Server 2022
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - RDP
+    os_build: 10.0.20348.2849
+  - hostname: MFG-LOG-01
+    ip: 10.50.90.11
+    os: Ubuntu 24.04 LTS
+    type: server
+    architecture: x64
+    roles:
+    - log_server
+    - monitoring
+    services:
+    - rsyslog
+    - ssh
+    os_build: 24.04.2 LTS
+    assigned_user: logs.forwarder
+  - hostname: HQ-GUEST-01
+    ip: 10.40.100.30
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+  - hostname: MFG-GUEST-01
+    ip: 10.50.100.30
+    os: Windows 11 Enterprise
+    type: workstation
+    architecture: x64
+    roles:
+    - workstation
+    services: []
+    os_build: 10.0.26100.2605
+  - hostname: HQ-CORE-01
+    ip: 10.40.254.2
+    os: Cisco IOS XE
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - routing
+  - hostname: HQ-EDGE-01
+    ip: 10.40.254.1
+    os: Cisco ASA
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - firewall
+    - NAT
+  - hostname: HQ-VPN-01
+    ip: 10.60.0.1
+    os: Cisco IOS XE
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - IPsec
+  - hostname: MFG-VPN-01
+    ip: 10.60.0.2
+    os: Cisco IOS XE
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - IPsec
+  - hostname: MFG-CORE-01
+    ip: 10.50.90.1
+    os: Cisco IOS XE
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - routing
+  - hostname: MFG-GUEST-FW-01
+    ip: 10.50.100.1
+    os: Cisco ASA
+    type: server
+    architecture: x64
+    roles: []
+    services:
+    - firewall
+  groups:
+  - name: AI
+    description: Talus AI access group
+    members:
+    - phoebe.marin
+    - elias.reed
+    - jonah.park
+    - sofia.vega
+  - name: Business
+    description: Talus Business access group
+    members:
+    - atlas.mercer
+    - hera.ward
+    - rhea.brooks
+    - ariadne.bell
+    - hannah.price
+    - marcus.bell
+    - athena.chen
+    - hector.morgan
+  - name: Employees
+    description: Talus Employees access group
+    members:
+    - atlas.mercer
+    - hera.ward
+    - rhea.brooks
+    - ariadne.bell
+    - hannah.price
+    - marcus.bell
+    - athena.chen
+    - hector.morgan
+    - iris.patel
+    - phoebe.marin
+    - elias.reed
+    - priya.shah
+    - jonah.park
+    - sofia.vega
+    - perseus.clarke
+    - leila.haddad
+    - daniel.kim
+    - clara.jensen
+    - ravi.mehta
+    - daedalus.voss
+    - amara.okafor
+    - lucas.silva
+    - nina.patel
+    - grace.liu
+    - felix.hart
+    - hephaestus.hayes
+    - rosa.delgado
+    - ben.carter
+    - aisha.rahman
+    - mateo.ruiz
+    - erin.walsh
+    - owen.park
+    - themis.scott
+    - noah.evans
+    - tara.singh
+    - leo.fischer
+    - hermes.ross
+    - keira.adams
+    - samir.nasser
+    - argus.blake
+    - olivia.grant
+    - ethan.cole
+    - chloe.martin
+    - cassandra.hale
+  - name: HQ-Staff
+    description: Talus HQ-Staff access group
+    members:
+    - atlas.mercer
+    - hera.ward
+    - rhea.brooks
+    - ariadne.bell
+    - hannah.price
+    - marcus.bell
+    - athena.chen
+    - hector.morgan
+    - iris.patel
+    - phoebe.marin
+    - elias.reed
+    - priya.shah
+    - jonah.park
+    - sofia.vega
+    - perseus.clarke
+    - leila.haddad
+    - daniel.kim
+    - clara.jensen
+    - ravi.mehta
+    - daedalus.voss
+    - amara.okafor
+    - lucas.silva
+    - nina.patel
+    - grace.liu
+    - felix.hart
+    - leo.fischer
+    - hermes.ross
+    - keira.adams
+    - samir.nasser
+    - argus.blake
+    - olivia.grant
+    - ethan.cole
+    - cassandra.hale
+  - name: Hardware
+    description: Talus Hardware access group
+    members:
+    - daedalus.voss
+    - amara.okafor
+    - lucas.silva
+    - nina.patel
+    - grace.liu
+    - felix.hart
+  - name: IT
+    description: Talus IT access group
+    members:
+    - argus.blake
+    - olivia.grant
+    - ethan.cole
+    - chloe.martin
+    - cassandra.hale
+  - name: Manufacturing
+    description: Talus Manufacturing access group
+    members:
+    - hephaestus.hayes
+    - rosa.delgado
+    - ben.carter
+    - aisha.rahman
+    - mateo.ruiz
+    - erin.walsh
+    - owen.park
+    - themis.scott
+    - noah.evans
+    - tara.singh
+    - chloe.martin
+  - name: Production
+    description: Talus Production access group
+    members:
+    - hephaestus.hayes
+    - rosa.delgado
+    - ben.carter
+    - aisha.rahman
+    - mateo.ruiz
+    - erin.walsh
+    - owen.park
+  - name: Quality
+    description: Talus Quality access group
+    members:
+    - themis.scott
+    - noah.evans
+    - tara.singh
+    - leo.fischer
+  - name: Software
+    description: Talus Software access group
+    members:
+    - iris.patel
+    - priya.shah
+    - perseus.clarke
+    - leila.haddad
+    - daniel.kim
+    - clara.jensen
+    - ravi.mehta
+  - name: Support
+    description: Talus Support access group
+    members:
+    - hermes.ross
+    - keira.adams
+    - samir.nasser
+  - name: Release-Approvers
+    description: Approve robot software, model, and manufacturing releases
+    members:
+    - athena.chen
+    - perseus.clarke
+    - themis.scott
+  - name: Release-Publishers
+    description: Publish approved release copies and design configurations
+    members:
+    - ravi.mehta
+    - felix.hart
+  - name: Lab-Operators
+    description: Prototype and acceptance-test access
+    members:
+    - iris.patel
+    - priya.shah
+    - leila.haddad
+    - grace.liu
+    - noah.evans
+    - sofia.vega
+  - name: Support-Publishers
+    description: Publish approved customer downloads
+    members:
+    - hermes.ross
+    - samir.nasser
+  - name: Domain Admins
+    description: Privileged administrative operations use separately declared named
+      administrative principals
+    members: []
+  - name: Automation-Workers
+    description: Functional workload accounts, separate from the 44 human staff.
+    members:
+    - build.runner01
+    - build.runner02
+    - training.worker01
+    - training.worker02
+    - argo.runner
+    - release.sync
+    - logs.forwarder
+    - support.proxy
+    - crete.prototype01
+    - crete.prototype02
+    - crete.acceptance01
+    - crete.acceptance02
+  service_accounts:
+  - svc-gitlab
+  - svc-ci
+  - svc-mlflow
+  - svc-crete
+  - svc-argo
+  - svc-hephaestus
+  - svc-odoo-support
+  - svc-odoo-mfg
+  - svc-backup
+  - svc-monitoring
+  - adm-olivia.grant
+  - adm-ethan.cole
+  - adm-chloe.martin
+  network:
+    segments:
+    - name: hq-corporate
+      cidr: 10.40.10.0/24
+      exposure: internal
+      description: Corporate workstations
+      systems:
+      - ATLAS-WS01
+      - HERA-WS01
+      - RHEA-WS01
+      - ARIADNE-WS01
+      - HQ-BIZ-01
+      - HQ-BIZ-02
+      - HERMES-WS01
+      - HQ-FIELD-01
+      - HQ-FIELD-02
+    - name: hq-engineering
+      cidr: 10.40.20.0/24
+      exposure: internal
+      description: Engineering access subnet across several switches
+      systems:
+      - ATHENA-WS01
+      - HECTOR-WS01
+      - IRIS-WS01
+      - PHOEBE-WS01
+      - HQ-AI-01
+      - HQ-AI-02
+      - HQ-AI-03
+      - HQ-AI-04
+      - PERSEUS-WS01
+      - HQ-SWE-01
+      - HQ-SWE-02
+      - HQ-SWE-03
+      - HQ-SWE-04
+      - DAEDALUS-WS01
+      - HQ-HW-01
+      - HQ-HW-02
+      - HQ-HW-03
+      - HQ-HW-04
+      - HQ-HW-05
+      - HQ-QA-01
+    - name: hq-ai-compute
+      cidr: 10.40.30.0/24
+      exposure: internal
+      description: GPU training and simulation workers
+      systems:
+      - HQ-GPU-01
+      - HQ-GPU-02
+      - HQ-SIM-01
+    - name: hq-shared-services
+      cidr: 10.40.40.0/24
+      exposure: internal
+      description: Identity, source control, model tracking, and engineering services
+      systems:
+      - HQ-DC-01
+      - HQ-DC-02
+      - HQ-FS-01
+      - HQ-GIT-01
+      - HQ-CI-01
+      - HQ-CI-02
+      - HQ-REG-01
+      - HQ-MLFLOW-01
+      - HQ-DATA-01
+      - HQ-SUPPORT-01
+      - HQ-DB-01
+      - HQ-BACKUP-01
+    - name: hq-prototype
+      cidr: 10.40.50.0/24
+      exposure: internal
+      description: Prototype robots and lab benches
+      systems:
+      - HQ-LAB-01
+      - HQ-LAB-02
+      - HQ-TPA-01
+      - HQ-TPA-02
+    - name: hq-dmz
+      cidr: 10.40.60.0/24
+      exposure: internal
+      description: Customer support HTTPS entry point
+      systems:
+      - HQ-PORTAL-01
+    - name: hq-management
+      cidr: 10.40.90.0/24
+      exposure: internal
+      description: Administrative workstations, jump host, and infrastructure management
+      systems:
+      - ARGUS-WS01
+      - HQ-IT-01
+      - HQ-IT-02
+      - CASSANDRA-WS01
+      - HQ-JUMP-01
+      - HQ-LOG-01
+    - name: hq-guest
+      cidr: 10.40.100.0/24
+      exposure: internal
+      description: Guest access
+      systems:
+      - HQ-GUEST-01
+    - name: hq-edge-transit
+      cidr: 10.40.254.0/30
+      exposure: internal
+      description: HQ central router to Internet firewall, routed link
+      systems:
+      - HQ-CORE-01
+      - HQ-EDGE-01
+    - name: mfg-operations
+      cidr: 10.50.10.0/24
+      exposure: internal
+      description: Planning, procurement, materials, and supervision
+      systems:
+      - HEPHAESTUS-WS01
+      - MFG-OPS-01
+      - MFG-OPS-02
+      - MFG-OPS-03
+    - name: mfg-production
+      cidr: 10.50.20.0/24
+      exposure: internal
+      description: Assembly and programming
+      systems:
+      - MFG-PROD-01
+      - MFG-PROD-02
+      - MFG-PROD-03
+      - MFG-BENCH-01
+    - name: mfg-quality
+      cidr: 10.50.30.0/24
+      exposure: internal
+      description: Calibration and robot acceptance testing
+      systems:
+      - THEMIS-WS01
+      - MFG-QA-01
+      - MFG-QA-02
+      - MFG-BENCH-02
+      - MFG-TPA-01
+      - MFG-TPA-02
+    - name: mfg-local-services
+      cidr: 10.50.40.0/24
+      exposure: internal
+      description: Production ERP and approved release staging
+      systems:
+      - MFG-DC-01
+      - MFG-ERP-01
+      - MFG-DB-01
+      - MFG-FS-01
+      - MFG-STAGE-01
+    - name: mfg-management
+      cidr: 10.50.90.0/24
+      exposure: internal
+      description: Manufacturing management and jump host
+      systems:
+      - MFG-IT-01
+      - MFG-JUMP-01
+      - MFG-LOG-01
+      - MFG-CORE-01
+    - name: mfg-guest
+      cidr: 10.50.100.0/24
+      exposure: internal
+      description: Manufacturing guest access
+      systems:
+      - MFG-GUEST-01
+      - MFG-GUEST-FW-01
+    - name: site-transit
+      cidr: 10.60.0.0/30
+      exposure: internal
+      description: Private leased line joining the two VPN concentrators; WAN interface
+        addresses
+      systems:
+      - HQ-VPN-01
+      - MFG-VPN-01
+    - name: hq-vpn-lan
+      cidr: 10.40.253.0/30
+      exposure: internal
+      description: Routed link between HQ core and VPN concentrator
+    - name: mfg-vpn-lan
+      cidr: 10.50.254.0/30
+      exposure: internal
+      description: Routed link between manufacturing core and VPN concentrator
+    - name: mfg-guest-transit
+      cidr: 10.50.253.0/30
+      exposure: internal
+      description: Routed link between manufacturing core and guest firewall
+    routing:
+      devices:
+        HQ-CORE-01:
+          kind: router
+          system: HQ-CORE-01
+        HQ-EDGE-01:
+          kind: firewall
+          system: HQ-EDGE-01
+          firewall: hq-internet-firewall
+        HQ-VPN-01:
+          kind: router
+          system: HQ-VPN-01
+        MFG-VPN-01:
+          kind: router
+          system: MFG-VPN-01
+        MFG-CORE-01:
+          kind: router
+          system: MFG-CORE-01
+        MFG-GUEST-FW-01:
+          kind: firewall
+          system: MFG-GUEST-FW-01
+          firewall: mfg-guest-firewall
+      links:
+        internet:
+          internet: true
+          interfaces:
+            HQ-EDGE-01:
+              name: outside
+              ip: 203.0.113.14
+        hq-edge-transit:
+          segment: hq-edge-transit
+          interfaces:
+            HQ-EDGE-01:
+              name: inside
+              ip: 10.40.254.1
+            HQ-CORE-01:
+              name: edge
+              ip: 10.40.254.2
+        hq-vpn-lan:
+          segment: hq-vpn-lan
+          interfaces:
+            HQ-CORE-01:
+              name: vpn
+              ip: 10.40.253.1
+            HQ-VPN-01:
+              name: lan
+              ip: 10.40.253.2
+        site-transit:
+          segment: site-transit
+          interfaces:
+            HQ-VPN-01:
+              name: wan
+              ip: 10.60.0.1
+            MFG-VPN-01:
+              name: wan
+              ip: 10.60.0.2
+          kind: wan
+        mfg-vpn-lan:
+          segment: mfg-vpn-lan
+          interfaces:
+            MFG-CORE-01:
+              name: vpn
+              ip: 10.50.254.1
+            MFG-VPN-01:
+              name: lan
+              ip: 10.50.254.2
+        mfg-guest-transit:
+          segment: mfg-guest-transit
+          interfaces:
+            MFG-CORE-01:
+              name: guest-firewall
+              ip: 10.50.253.1
+            MFG-GUEST-FW-01:
+              name: uplink
+              ip: 10.50.253.2
+        hq-corporate:
+          segment: hq-corporate
+          interfaces:
+            HQ-CORE-01:
+              name: hq-corporate
+              ip: 10.40.10.1
+        hq-engineering:
+          segment: hq-engineering
+          interfaces:
+            HQ-CORE-01:
+              name: hq-engineering
+              ip: 10.40.20.1
+        hq-ai-compute:
+          segment: hq-ai-compute
+          interfaces:
+            HQ-CORE-01:
+              name: hq-ai-compute
+              ip: 10.40.30.1
+        hq-shared-services:
+          segment: hq-shared-services
+          interfaces:
+            HQ-CORE-01:
+              name: hq-shared-services
+              ip: 10.40.40.1
+        hq-prototype:
+          segment: hq-prototype
+          interfaces:
+            HQ-CORE-01:
+              name: hq-prototype
+              ip: 10.40.50.1
+        hq-dmz:
+          segment: hq-dmz
+          interfaces:
+            HQ-EDGE-01:
+              name: dmz
+              ip: 10.40.60.1
+        hq-management:
+          segment: hq-management
+          interfaces:
+            HQ-CORE-01:
+              name: hq-management
+              ip: 10.40.90.1
+        hq-guest:
+          segment: hq-guest
+          interfaces:
+            HQ-EDGE-01:
+              name: guest
+              ip: 10.40.100.1
+        mfg-operations:
+          segment: mfg-operations
+          interfaces:
+            MFG-CORE-01:
+              name: mfg-operations
+              ip: 10.50.10.1
+        mfg-production:
+          segment: mfg-production
+          interfaces:
+            MFG-CORE-01:
+              name: mfg-production
+              ip: 10.50.20.1
+        mfg-quality:
+          segment: mfg-quality
+          interfaces:
+            MFG-CORE-01:
+              name: mfg-quality
+              ip: 10.50.30.1
+        mfg-local-services:
+          segment: mfg-local-services
+          interfaces:
+            MFG-CORE-01:
+              name: mfg-local-services
+              ip: 10.50.40.1
+        mfg-management:
+          segment: mfg-management
+          interfaces:
+            MFG-CORE-01:
+              name: mfg-management
+              ip: 10.50.90.1
+        mfg-guest:
+          segment: mfg-guest
+          interfaces:
+            MFG-GUEST-FW-01:
+              name: guest
+              ip: 10.50.100.1
+      gateways:
+        hq-corporate: HQ-CORE-01
+        hq-engineering: HQ-CORE-01
+        hq-ai-compute: HQ-CORE-01
+        hq-shared-services: HQ-CORE-01
+        hq-prototype: HQ-CORE-01
+        hq-dmz: HQ-EDGE-01
+        hq-management: HQ-CORE-01
+        hq-guest: HQ-EDGE-01
+        mfg-operations: MFG-CORE-01
+        mfg-production: MFG-CORE-01
+        mfg-quality: MFG-CORE-01
+        mfg-local-services: MFG-CORE-01
+        mfg-management: MFG-CORE-01
+        mfg-guest: MFG-GUEST-FW-01
+      routes:
+        HQ-EDGE-01:
+        - destination: 10.40.0.0/16
+          next_hop: 10.40.254.2
+        - destination: 10.50.0.0/16
+          next_hop: 10.40.254.2
+        - destination: 10.60.0.0/30
+          next_hop: 10.40.254.2
+        - destination: 0.0.0.0/0
+          internet_link: internet
+        HQ-CORE-01:
+        - destination: 10.50.0.0/16
+          next_hop: 10.40.253.2
+        - destination: 10.60.0.0/30
+          next_hop: 10.40.253.2
+        - destination: 0.0.0.0/0
+          next_hop: 10.40.254.1
+        HQ-VPN-01:
+        - destination: 10.50.0.0/16
+          next_hop: 10.60.0.2
+        - destination: 0.0.0.0/0
+          next_hop: 10.40.253.1
+        MFG-VPN-01:
+        - destination: 10.50.0.0/16
+          next_hop: 10.50.254.1
+        - destination: 0.0.0.0/0
+          next_hop: 10.60.0.1
+        MFG-CORE-01:
+        - destination: 10.50.100.0/24
+          next_hop: 10.50.253.2
+        - destination: 0.0.0.0/0
+          next_hop: 10.50.254.2
+        MFG-GUEST-FW-01:
+        - destination: 0.0.0.0/0
+          next_hop: 10.50.253.1
+    sensors:
+    - name: zeek-hq-edge
+      hostname: ZEEK-HQ-EDGE
+      type: network
+      link_tap:
+        link: hq-edge-transit
+      log_formats:
+      - zeek
+      placement: tap
+      direction: bidirectional
+      description: TAP between the HQ core and Internet firewall.
+    - name: ids-hq-edge
+      hostname: IDS-HQ-EDGE
+      type: ids
+      link_tap:
+        link: hq-edge-transit
+      log_formats:
+      - snort_alert
+      placement: tap
+      direction: bidirectional
+      description: TAP between the HQ core and Internet firewall.
+    - name: zeek-hq-wan
+      hostname: ZEEK-HQ-WAN
+      type: network
+      link_tap:
+        link: hq-vpn-lan
+      log_formats:
+      - zeek
+      placement: tap
+      direction: bidirectional
+      description: TAP on the HQ VPN concentrator LAN side after decryption.
+    - name: ids-hq-wan
+      hostname: IDS-HQ-WAN
+      type: ids
+      link_tap:
+        link: hq-vpn-lan
+      log_formats:
+      - snort_alert
+      placement: tap
+      direction: bidirectional
+      description: TAP on the HQ VPN concentrator LAN side after decryption.
+    - name: zeek-hq-engineering
+      hostname: ZEEK-HQ-ENGINEERING
+      type: network
+      monitoring_segments:
+      - hq-engineering
+      log_formats:
+      - zeek
+      placement: tap
+      direction: bidirectional
+      description: Engineering aggregation uplink; same-subnet traffic is conservatively
+        missed.
+    - name: ids-hq-engineering
+      hostname: IDS-HQ-ENGINEERING
+      type: ids
+      monitoring_segments:
+      - hq-engineering
+      log_formats:
+      - snort_alert
+      placement: tap
+      direction: bidirectional
+      description: Engineering aggregation uplink; same-subnet traffic is conservatively
+        missed.
+    - name: zeek-hq-prototype
+      hostname: ZEEK-HQ-PROTOTYPE
+      type: network
+      monitoring_segments:
+      - hq-prototype
+      log_formats:
+      - zeek
+      placement: tap
+      direction: bidirectional
+      description: Prototype lab aggregation uplink; same-subnet traffic is conservatively
+        missed.
+    - name: ids-hq-prototype
+      hostname: IDS-HQ-PROTOTYPE
+      type: ids
+      monitoring_segments:
+      - hq-prototype
+      log_formats:
+      - snort_alert
+      placement: tap
+      direction: bidirectional
+      description: Prototype lab aggregation uplink; same-subnet traffic is conservatively
+        missed.
+    - name: zeek-hq-dmz
+      hostname: ZEEK-HQ-DMZ
+      type: network
+      monitoring_segments:
+      - hq-dmz
+      log_formats:
+      - zeek
+      placement: span
+      direction: bidirectional
+      description: Dedicated DMZ switch SPAN, including eligible intra-DMZ traffic.
+    - name: ids-hq-dmz
+      hostname: IDS-HQ-DMZ
+      type: ids
+      monitoring_segments:
+      - hq-dmz
+      log_formats:
+      - snort_alert
+      placement: span
+      direction: bidirectional
+      description: Dedicated DMZ switch SPAN, including eligible intra-DMZ traffic.
+    - name: zeek-hq-corporate
+      hostname: ZEEK-HQ-CORPORATE
+      type: network
+      monitoring_segments:
+      - hq-corporate
+      log_formats:
+      - zeek_conn
+      placement: tap
+      direction: bidirectional
+      description: Connection-only logging at subnet uplink. Same-subnet traffic is
+        not captured by this coarse boundary model.
+    - name: zeek-hq-ai-compute
+      hostname: ZEEK-HQ-AI-COMPUTE
+      type: network
+      monitoring_segments:
+      - hq-ai-compute
+      log_formats:
+      - zeek_conn
+      placement: tap
+      direction: bidirectional
+      description: Connection-only logging at subnet uplink. Same-subnet traffic is
+        not captured by this coarse boundary model.
+    - name: zeek-hq-shared-services
+      hostname: ZEEK-HQ-SHARED-SERVICES
+      type: network
+      monitoring_segments:
+      - hq-shared-services
+      log_formats:
+      - zeek_conn
+      placement: tap
+      direction: bidirectional
+      description: Connection-only logging at subnet uplink. Same-subnet traffic is
+        not captured by this coarse boundary model.
+    - name: zeek-hq-management
+      hostname: ZEEK-HQ-MANAGEMENT
+      type: network
+      monitoring_segments:
+      - hq-management
+      log_formats:
+      - zeek_conn
+      placement: tap
+      direction: bidirectional
+      description: Connection-only logging at subnet uplink. Same-subnet traffic is
+        not captured by this coarse boundary model.
+    - name: zeek-hq-guest
+      hostname: ZEEK-HQ-GUEST
+      type: network
+      link_tap:
+        link: hq-guest
+      log_formats:
+      - zeek
+      placement: tap
+      direction: bidirectional
+      description: Zeek TAP between the HQ guest subnet and its firewall gateway.
+    - name: zeek-mfg-operations
+      hostname: ZEEK-MFG-OPERATIONS
+      type: network
+      monitoring_segments:
+      - mfg-operations
+      log_formats:
+      - zeek_conn
+      placement: tap
+      direction: bidirectional
+      description: Connection-only logging at subnet uplink. Same-subnet traffic is
+        not captured by this coarse boundary model.
+    - name: zeek-mfg-production
+      hostname: ZEEK-MFG-PRODUCTION
+      type: network
+      monitoring_segments:
+      - mfg-production
+      log_formats:
+      - zeek_conn
+      placement: tap
+      direction: bidirectional
+      description: Connection-only logging at subnet uplink. Same-subnet traffic is
+        not captured by this coarse boundary model.
+    - name: zeek-mfg-quality
+      hostname: ZEEK-MFG-QUALITY
+      type: network
+      monitoring_segments:
+      - mfg-quality
+      log_formats:
+      - zeek_conn
+      placement: tap
+      direction: bidirectional
+      description: Connection-only logging at subnet uplink. Same-subnet traffic is
+        not captured by this coarse boundary model.
+    - name: zeek-mfg-local-services
+      hostname: ZEEK-MFG-LOCAL-SERVICES
+      type: network
+      monitoring_segments:
+      - mfg-local-services
+      log_formats:
+      - zeek_conn
+      placement: tap
+      direction: bidirectional
+      description: Connection-only logging at subnet uplink. Same-subnet traffic is
+        not captured by this coarse boundary model.
+    - name: zeek-mfg-management
+      hostname: ZEEK-MFG-MANAGEMENT
+      type: network
+      monitoring_segments:
+      - mfg-management
+      log_formats:
+      - zeek_conn
+      placement: tap
+      direction: bidirectional
+      description: Connection-only logging at subnet uplink. Same-subnet traffic is
+        not captured by this coarse boundary model.
+    - name: zeek-mfg-guest
+      hostname: ZEEK-MFG-GUEST
+      type: network
+      link_tap:
+        link: mfg-guest
+      log_formats:
+      - zeek
+      placement: tap
+      direction: bidirectional
+      description: Zeek TAP between the manufacturing guest subnet and its firewall
+        gateway.
+    - name: hq-internet-firewall
+      hostname: HQ-EDGE-01
+      type: firewall
+      monitoring_segments:
+      - hq-corporate
+      - hq-engineering
+      - hq-ai-compute
+      - hq-shared-services
+      - hq-prototype
+      - hq-management
+      - hq-guest
+      - mfg-operations
+      - mfg-production
+      - mfg-quality
+      - mfg-local-services
+      - mfg-management
+      - mfg-guest
+      - hq-dmz
+      - hq-edge-transit
+      placement: tap
+      direction: bidirectional
+      log_formats:
+      - cisco_asa
+      description: Internet edge for both sites, with separate HQ guest and DMZ interfaces.
+      interfaces:
+        hq-corporate: inside
+        hq-engineering: inside
+        hq-ai-compute: inside
+        hq-shared-services: inside
+        hq-prototype: inside
+        hq-management: inside
+        hq-guest: guest
+        mfg-operations: inside
+        mfg-production: inside
+        mfg-quality: inside
+        mfg-local-services: inside
+        mfg-management: inside
+        mfg-guest: inside
+        hq-dmz: dmz
+        hq-edge-transit: inside
+      interface_security_levels:
+        inside: 100
+        dmz: 50
+        guest: 10
+        outside: 0
+      default_action: deny
+      deny_ratio: 0.15
+      threat_detection_rate: 0
+      policy:
+      - src: external
+        dst: 10.40.60.10
+        ports:
+        - 443
+        action: permit
+      - src: 10.40.60.10
+        dst: 10.40.40.26
+        ports:
+        - 8069
+        action: permit
+      - src: hq-guest
+        dst: hq-dmz
+        ports:
+        - 443
+        action: permit
+      - src: mfg-guest
+        dst: hq-dmz
+        ports:
+        - 443
+        action: permit
+      - src: hq-corporate
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: hq-engineering
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: hq-ai-compute
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: hq-shared-services
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: hq-prototype
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: hq-dmz
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: hq-management
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: hq-guest
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: mfg-operations
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: mfg-production
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: mfg-quality
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: mfg-local-services
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: mfg-management
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: mfg-guest
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+      - src: hq-guest
+        dst: any
+        action: deny
+      - src: mfg-guest
+        dst: any
+        action: deny
+      - src: 10.40.0.0/16
+        dst: hq-dmz
+        action: permit
+      - src: 10.50.0.0/16
+        dst: hq-dmz
+        action: permit
+      nat_rules:
+      - type: static
+        src:
+        - hq-dmz
+        real_ip: 10.40.60.10
+        mapped_ip: 203.0.113.10
+      - type: dynamic_pat
+        src:
+        - hq-corporate
+        - hq-engineering
+        - hq-ai-compute
+        - hq-shared-services
+        - hq-prototype
+        - hq-management
+        - hq-guest
+        - mfg-operations
+        - mfg-production
+        - mfg-quality
+        - mfg-local-services
+        - mfg-management
+        - mfg-guest
+        - hq-dmz
+        mapped_ip: 203.0.113.9
+    - name: mfg-guest-firewall
+      hostname: MFG-GUEST-FW-01
+      type: firewall
+      monitoring_segments:
+      - mfg-guest
+      - mfg-guest-transit
+      placement: tap
+      direction: bidirectional
+      log_formats:
+      - cisco_asa
+      description: Enforces manufacturing guest isolation before traffic reaches the
+        manufacturing core.
+      interfaces:
+        mfg-guest: guest
+        mfg-guest-transit: uplink
+        _default: uplink
+      interface_security_levels:
+        guest: 10
+        uplink: 0
+      default_action: deny
+      deny_ratio: 0
+      threat_detection_rate: 0
+      policy:
+      - src: mfg-guest
+        dst: hq-dmz
+        ports:
+        - 443
+        action: permit
+      - src: mfg-guest
+        dst: external
+        ports:
+        - 53
+        - 80
+        - 443
+        - 123
+        action: permit
+    public_cidrs:
+    - 203.0.113.8/29
+  network_identities:
+  - id: microsoft365
+    hosts:
+    - outlook.office.example
+    - teams.office.example
+    - sharepoint.office.example
+    ips:
+    - 198.51.100.20
+    - 198.51.100.21
+    - 198.51.100.22
+    tags:
+    - saas
+    - business
+    dns: true
+  - id: software-mirrors
+    hosts:
+    - packages.ubuntu.example
+    - pypi.python.example
+    - packages.ros.example
+    ips:
+    - 198.51.100.30
+    - 198.51.100.31
+    - 198.51.100.32
+    tags:
+    - software
+    - updates
+    dns: true
+  - id: customer-support-client
+    hosts:
+    - support-client.customer.example
+    ips:
+    - 192.0.2.40
+    tags:
+    - customer
+    dns: false
+  - id: foxglove
+    hosts:
+    - app.foxglove.example
+    ips:
+    - 198.51.100.40
+    tags:
+    - saas
+    dns: true
+  storage:
+    population: small
+    activity: normal
+    file_sets:
+    - id: mfg-release-cache
+      system: MFG-STAGE-01
+      root: /srv/releases
+      preset: evidenceforge/talus-enterprises:approved-releases
+      population: small
+    - id: prototype-recordings
+      system: HQ-TPA-01
+      root: /var/lib/crete
+      preset: evidenceforge/talus-enterprises:ai-datasets
+      population: small
+    - id: acceptance-recordings
+      system: MFG-TPA-01
+      root: /var/lib/crete
+      preset: evidenceforge/talus-enterprises:ai-datasets
+      population: small
+    - id: simulation-results
+      system: HQ-SIM-01
+      root: /srv/argo/results
+      preset: evidenceforge/talus-enterprises:manufacturing-records
+      population: small
+    servers:
+    - system: HQ-FS-01
+      presets: []
+      audit: standard
+      default_volume: data
+      volumes:
+      - id: data
+        mount: D:\
+        filesystem: ntfs
+        label: TalusData
+      shares:
+      - id: engineering
+        name: Engineering
+        volume: data
+        root: engineering
+        preset: evidenceforge/technology:engineering-share
+        population: small
+        activity: normal
+        encryption: not_required
+        access:
+          read:
+          - Software
+          - AI
+          - Hardware
+          - Quality
+          - Production
+          modify:
+          - Software
+          - Hardware
+          - Release-Publishers
+          admin:
+          - Domain Admins
+      - id: hardware
+        name: Hardware
+        volume: data
+        root: hardware
+        preset: evidenceforge/talus-enterprises:hardware-design
+        population: small
+        activity: normal
+        encryption: not_required
+        access:
+          read:
+          - Hardware
+          - Quality
+          - Production
+          modify:
+          - Hardware
+          admin:
+          - Domain Admins
+      - id: business
+        name: Business
+        volume: data
+        root: business
+        preset: evidenceforge/talus-enterprises:business-documents
+        population: small
+        activity: normal
+        encryption: not_required
+        access:
+          read:
+          - Business
+          modify:
+          - Business
+          admin:
+          - Domain Admins
+      - id: approved
+        name: Approved
+        volume: data
+        root: approved
+        preset: evidenceforge/talus-enterprises:approved-releases
+        population: small
+        activity: normal
+        encryption: not_required
+        access:
+          read:
+          - Employees
+          modify:
+          - Release-Publishers
+          admin:
+          - Domain Admins
+    - system: HQ-DATA-01
+      presets: []
+      audit: standard
+      default_volume: data
+      volumes:
+      - id: data
+        mount: /srv/samba
+        filesystem: ext4
+        label: TalusData
+      shares:
+      - id: datasets
+        name: Datasets
+        volume: data
+        root: datasets
+        preset: evidenceforge/talus-enterprises:ai-datasets
+        population: small
+        activity: normal
+        encryption: not_required
+        access:
+          read:
+          - AI
+          - Software
+          - Quality
+          modify:
+          - AI
+          admin:
+          - Domain Admins
+        smb_native_filesystem: NTFS
+    - system: MFG-FS-01
+      presets: []
+      audit: standard
+      default_volume: data
+      volumes:
+      - id: data
+        mount: D:\
+        filesystem: ntfs
+        label: TalusData
+      shares:
+      - id: manufacturing
+        name: Manufacturing
+        volume: data
+        root: manufacturing
+        preset: evidenceforge/talus-enterprises:manufacturing-records
+        population: small
+        activity: normal
+        encryption: not_required
+        access:
+          read:
+          - Production
+          - Quality
+          - Support
+          - IT
+          modify:
+          - Production
+          - Quality
+          admin:
+          - Domain Admins
+    - system: HQ-BACKUP-01
+      presets: []
+      audit: standard
+      default_volume: data
+      volumes:
+      - id: data
+        mount: /srv/samba
+        filesystem: ext4
+        label: TalusData
+      shares:
+      - id: backups
+        name: Backups
+        volume: data
+        root: backups
+        preset: backup
+        population: small
+        activity: normal
+        encryption: not_required
+        access:
+          read:
+          - IT
+          modify:
+          - IT
+          admin:
+          - Domain Admins
+        smb_native_filesystem: NTFS
+    mappings:
+    - id: engineering
+      share: HQ-FS-01.engineering
+      audience:
+        groups:
+        - Software
+        - AI
+        - Hardware
+        - Quality
+      drive: 'E:'
+      mount: /mnt/engineering
+      credential_mode: per_user
+      lifecycle: persistent
+    - id: hardware
+      share: HQ-FS-01.hardware
+      audience:
+        groups:
+        - Hardware
+      drive: 'H:'
+      mount: /mnt/hardware
+      credential_mode: per_user
+      lifecycle: persistent
+    - id: business
+      share: HQ-FS-01.business
+      audience:
+        groups:
+        - Business
+      drive: 'G:'
+      mount: /mnt/business
+      credential_mode: per_user
+      lifecycle: persistent
+    - id: approved
+      share: HQ-FS-01.approved
+      audience:
+        groups:
+        - Employees
+      drive: 'R:'
+      mount: /mnt/releases
+      credential_mode: per_user
+      lifecycle: persistent
+    - id: datasets
+      share: HQ-DATA-01.datasets
+      audience:
+        groups:
+        - AI
+        - Software
+        - Quality
+      drive: 'T:'
+      mount: /mnt/datasets
+      credential_mode: per_user
+      lifecycle: persistent
+    - id: manufacturing
+      share: MFG-FS-01.manufacturing
+      audience:
+        groups:
+        - Production
+        - Quality
+        - Support
+        - IT
+      drive: 'M:'
+      mount: /mnt/manufacturing
+      credential_mode: per_user
+      lifecycle: persistent
+  identity:
+    users:
+      build.runner01:
+        linux:
+          scope: local
+          account_name: build-runner01
+          uid: 4000
+          gid: 4000
+          home: /var/lib/talus/build-runner01
+          shell: /bin/bash
+      build.runner02:
+        linux:
+          scope: local
+          account_name: build-runner02
+          uid: 4001
+          gid: 4001
+          home: /var/lib/talus/build-runner02
+          shell: /bin/bash
+      training.worker01:
+        linux:
+          scope: local
+          account_name: training-worker01
+          uid: 4002
+          gid: 4002
+          home: /var/lib/talus/training-worker01
+          shell: /bin/bash
+      training.worker02:
+        linux:
+          scope: local
+          account_name: training-worker02
+          uid: 4003
+          gid: 4003
+          home: /var/lib/talus/training-worker02
+          shell: /bin/bash
+      argo.runner:
+        linux:
+          scope: local
+          account_name: argo-runner
+          uid: 4004
+          gid: 4004
+          home: /var/lib/talus/argo-runner
+          shell: /bin/bash
+      release.sync:
+        linux:
+          scope: local
+          account_name: release-sync
+          uid: 4005
+          gid: 4005
+          home: /var/lib/talus/release-sync
+          shell: /bin/bash
+      logs.forwarder:
+        linux:
+          scope: local
+          account_name: logs-forwarder
+          uid: 4006
+          gid: 4006
+          home: /var/lib/talus/logs-forwarder
+          shell: /bin/bash
+      support.proxy:
+        linux:
+          scope: local
+          account_name: support-proxy
+          uid: 4007
+          gid: 4007
+          home: /var/lib/talus/support-proxy
+          shell: /bin/bash
+      crete.prototype01:
+        linux:
+          scope: local
+          account_name: crete-prototype01
+          uid: 4008
+          gid: 4008
+          home: /var/lib/talus/crete-prototype01
+          shell: /bin/bash
+      crete.prototype02:
+        linux:
+          scope: local
+          account_name: crete-prototype02
+          uid: 4009
+          gid: 4009
+          home: /var/lib/talus/crete-prototype02
+          shell: /bin/bash
+      crete.acceptance01:
+        linux:
+          scope: local
+          account_name: crete-acceptance01
+          uid: 4010
+          gid: 4010
+          home: /var/lib/talus/crete-acceptance01
+          shell: /bin/bash
+      crete.acceptance02:
+        linux:
+          scope: local
+          account_name: crete-acceptance02
+          uid: 4011
+          gid: 4011
+          home: /var/lib/talus/crete-acceptance02
+          shell: /bin/bash

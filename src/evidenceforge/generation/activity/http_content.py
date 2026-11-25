@@ -4,6 +4,7 @@
 """HTTP content helpers shared by web, proxy, and Zeek HTTP generation."""
 
 import random
+from http import HTTPStatus
 from pathlib import PurePosixPath
 
 from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
@@ -184,8 +185,16 @@ def response_size_for_transfer_variant(
 
 
 def http_status_message(status_code: int) -> str:
-    """Return a conventional HTTP reason phrase for a status code."""
-    return _HTTP_STATUS_MESSAGES.get(status_code, "OK")
+    """Return a conventional HTTP reason phrase for a status code.
+
+    Codes outside the table use the standard phrase; a nonstandard code has none.
+    """
+    if status_code in _HTTP_STATUS_MESSAGES:
+        return _HTTP_STATUS_MESSAGES[status_code]
+    try:
+        return HTTPStatus(status_code).phrase
+    except ValueError:
+        return ""
 
 
 def response_mime_types_for_status(

@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 571
+current_revision: 577
 history_start_revision: 1
-behavior_surface_sha256: 5fcf1064647178674f61975b79165d2d9e18a5e2c9744ef5741c7c37c6d4ab63
+behavior_surface_sha256: adebf29ecb35842c2a056c84e33135d1474609b6e728b16848dee413a605909c
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6621,3 +6621,64 @@ changes:
   formats: []
   summary: Accept explicit WAN and abstract VPN links and require their sensors on
     termination-side networks. Preserve forwarding and existing link serialization.
+- revision: 572
+  id: routed-bundled-organization-packs
+  impact: localized
+  domains:
+  - pack-composition
+  - packaged-resource-integrity
+  - network-reachability
+  - sensor-visibility
+  formats:
+  - cisco_asa
+  - zeek_conn
+  summary: Bundle Northstar Health 1.2.0 and MetroLink Specialty Care 1.1.0 with
+    authored routing. Earlier pack versions and their outputs are unchanged.
+- revision: 573
+  id: unsuccessful-imaps-mailbox-session
+  impact: localized
+  domains:
+  - email-access-transport-links
+  - dovecot-native-fetch-summary
+  formats:
+  - syslog
+  summary: Omit the Dovecot login and session for a mailbox read whose IMAPS connection was
+    denied or failed, instead of failing generation. The attempt stays as network evidence.
+- revision: 574
+  id: standard-http-reason-phrases
+  impact: localized
+  domains:
+  - http-response-metadata
+  formats:
+  - zeek_http
+  summary: Use the standard reason phrase for HTTP status codes outside the built-in table,
+    such as 201 Created and 429 Too Many Requests, instead of OK.
+- revision: 575
+  id: declared-native-asa-and-ecar-session-fields
+  impact: none
+  domains:
+  - record-validation
+  formats:
+  - cisco_asa
+  - ecar
+  summary: Declare the native ASA foreign/local and translated-address fields and the eCAR
+    authentication session fields that records already carry. Output is unchanged.
+- revision: 576
+  id: bundled-packs-without-release-configuration-binding
+  impact: none
+  domains:
+  - pack-composition
+  - packaged-resource-integrity
+  formats: []
+  summary: Drop the release-only configuration binding from Northstar Health 1.2.0 and
+    MetroLink 1.1.0 so their drafts can be published, and rewrite a copied pack's own file set
+    presets as shares already were.
+- revision: 577
+  id: bundled-talus-enterprises
+  impact: localized
+  domains:
+  - pack-composition
+  - packaged-resource-integrity
+  formats: []
+  summary: Bundle the Talus Enterprises 1.0.0 organization pack, a robotics company with an
+    engineering headquarters and a manufacturing site joined by a WAN.

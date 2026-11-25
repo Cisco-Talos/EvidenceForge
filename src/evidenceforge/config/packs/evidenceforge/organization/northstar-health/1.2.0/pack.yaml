@@ -1,0 +1,25 @@
+pack_schema_version: '3.0'
+type: organization
+publisher: evidenceforge
+publisher_display_name: EvidenceForge Official
+name: northstar-health
+requires_evidenceforge: '>=2.0.0,<3.0.0'
+description: Fictional regional healthcare organization with cross-platform SMB storage.
+industry_dependencies:
+- source: package
+  publisher: evidenceforge
+  type: industry
+  name: healthcare
+  version_constraint: '>=1.0.0,<2.0.0'
+status: published
+parents:
+- kind: organization
+  name: northstar-health
+  source_schema_version: '2.0'
+  digest: 1a55fc01b6b9420662e3d3deded2bb45bd16380b471830f0c8260c038b729f69
+- kind: organization
+  publisher: evidenceforge
+  name: northstar-health
+  draft_id: d3a08c79-d7e8-45c4-8938-6e1c997812ef
+  digest: 0639833547fc7f291cb3559d16d90def50ed479ab581f3822a2d3ef35ebdca2c
+version: 1.2.0

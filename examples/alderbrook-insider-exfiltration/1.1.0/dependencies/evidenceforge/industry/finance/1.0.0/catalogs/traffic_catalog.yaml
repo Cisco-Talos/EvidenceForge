@@ -1,0 +1,16 @@
+traffic_catalog:
+  settlement-window:
+    description: "Weekday settlement and reporting traffic shape."
+    data:
+      audience: [finance_operations]
+      applications:
+        - application: treasury-portal
+          connection: payment-portal
+          weight: 20
+      outbound: []
+      cadence:
+        pattern: weighted
+        days: [mon, tue, wed, thu, fri]
+        windows:
+          - start: "15:00"
+            end: "18:00"

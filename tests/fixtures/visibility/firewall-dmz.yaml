@@ -1,0 +1,48 @@
+# One firewall routes three subnets and publishes a DMZ web server through static NAT.
+description: Single routed firewall with a DMZ, an Internet-link TAP and a DMZ SPAN
+systems:
+  - {hostname: ENG-01, ip: 10.2.10.24, os: Linux Ubuntu 24.04, type: workstation}
+  - {hostname: DB-01, ip: 10.2.20.20, os: Linux Ubuntu 24.04, type: server}
+  - {hostname: WEB-01, ip: 10.2.30.10, os: Linux Ubuntu 24.04, type: server}
+network:
+  segments:
+    - {name: engineering, cidr: 10.2.10.0/24, exposure: internal}
+    - {name: database, cidr: 10.2.20.0/24, exposure: internal}
+    - {name: dmz, cidr: 10.2.30.0/24, exposure: both}
+  public_cidrs: [203.0.113.32/27]
+  routing:
+    devices:
+      edge: {kind: firewall, firewall: edge-fw}
+    links:
+      internet: {internet: true, interfaces: {edge: {name: outside, ip: 203.0.113.34}}}
+      engineering: {segment: engineering, interfaces: {edge: {name: engineering, ip: 10.2.10.1}}}
+      database: {segment: database, interfaces: {edge: {name: database, ip: 10.2.20.1}}}
+      dmz: {segment: dmz, interfaces: {edge: {name: dmz, ip: 10.2.30.1}}}
+    gateways: {engineering: edge, database: edge, dmz: edge}
+    routes:
+      edge:
+        - {destination: 0.0.0.0/0, internet_link: internet}
+  sensors:
+    - {type: network, name: internet-tap, placement: tap, link_tap: {link: internet}, log_formats: [zeek]}
+    - {type: network, name: dmz-span, monitoring_segments: [dmz], placement: span, log_formats: [zeek]}
+    - type: firewall
+      name: edge-fw
+      monitoring_segments: [engineering, database, dmz]
+      placement: tap
+      log_formats: [cisco_asa]
+      interfaces: {engineering: inside, database: inside, dmz: dmz}
+      nat_rules:
+        - {type: static, src: [dmz], real_ip: 10.2.30.10, mapped_ip: 203.0.113.44}
+        - {type: dynamic_pat, src: [engineering, database, dmz], mapped_ip: 203.0.113.34}
+cases:
+  - name: Internet to the published web server
+    src: 198.51.100.77
+    dst: 203.0.113.44
+    observers: [internet-tap, dmz-span, edge-fw]
+  - {name: web server to the database, src: 10.2.30.10, dst: 10.2.20.20, observers: [dmz-span, edge-fw]}
+  - name: engineering to the web server's public address, translated by the firewall
+    src: 10.2.10.24
+    dst: 203.0.113.44
+    observers: [dmz-span, edge-fw]
+  - {name: engineering to the Internet, src: 10.2.10.24, dst: 198.51.100.9, observers: [internet-tap, edge-fw]}
+  - {name: engineering to the database, src: 10.2.10.24, dst: 10.2.20.20, observers: [edge-fw]}

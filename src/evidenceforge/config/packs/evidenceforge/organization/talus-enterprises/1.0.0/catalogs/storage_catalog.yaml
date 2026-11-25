@@ -1,0 +1,128 @@
+storage_catalog:
+  hardware-design:
+    description: Talus hardware-design vocabulary.
+    data:
+      directories:
+      - Mechanical
+      - Electronics
+      - BOM
+      - Approved
+      subjects:
+      - chassis
+      - actuator-bracket
+      - motor-controller
+      - sensor-interface
+      files:
+      - extension: .asm
+        mime: application/octet-stream
+        weight: 3
+      - extension: .par
+        mime: application/octet-stream
+        weight: 3
+      - extension: .pcb
+        mime: application/octet-stream
+        weight: 2
+      - extension: .pdf
+        mime: application/pdf
+        weight: 2
+      - extension: .csv
+        mime: text/csv
+        weight: 2
+  ai-datasets:
+    description: Talus ai-datasets vocabulary.
+    data:
+      directories:
+      - Perception
+      - Evaluation
+      - Recordings
+      - Models
+      subjects:
+      - patrol-sequence
+      - obstacle-labels
+      - perception-checkpoint
+      - evaluation-summary
+      files:
+      - extension: .mcap
+        mime: application/octet-stream
+        weight: 4
+      - extension: .pt
+        mime: application/octet-stream
+        weight: 3
+      - extension: .json
+        mime: application/json
+        weight: 3
+      - extension: .csv
+        mime: text/csv
+        weight: 2
+  manufacturing-records:
+    description: Talus manufacturing-records vocabulary.
+    data:
+      directories:
+      - Procedures
+      - Calibration
+      - Acceptance
+      - Traceability
+      subjects:
+      - assembly-procedure
+      - calibration-results
+      - acceptance-report
+      - component-trace
+      files:
+      - extension: .pdf
+        mime: application/pdf
+        weight: 4
+      - extension: .csv
+        mime: text/csv
+        weight: 3
+      - extension: .xlsx
+        mime: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+        weight: 2
+      - extension: .seq
+        mime: application/octet-stream
+        weight: 1
+  approved-releases:
+    description: Talus approved-releases vocabulary.
+    data:
+      directories:
+      - CRETE
+      - HEPHAESTUS
+      - ARGO
+      - Manifests
+      subjects:
+      - crete-release
+      - model-release
+      - argo-report
+      - release-manifest
+      files:
+      - extension: .zip
+        mime: application/zip
+        weight: 4
+      - extension: .json
+        mime: application/json
+        weight: 3
+      - extension: .pdf
+        mime: application/pdf
+        weight: 2
+  business-documents:
+    description: Talus business-documents vocabulary.
+    data:
+      directories:
+      - Finance
+      - HR
+      - Product
+      - Customers
+      subjects:
+      - annual-plan
+      - supplier-quote
+      - product-roadmap
+      - customer-contract
+      files:
+      - extension: .docx
+        mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+        weight: 4
+      - extension: .xlsx
+        mime: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+        weight: 3
+      - extension: .pdf
+        mime: application/pdf
+        weight: 3

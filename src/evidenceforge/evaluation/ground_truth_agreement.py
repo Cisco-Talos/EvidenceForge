@@ -53,6 +53,7 @@ from .dns_answers import dns_answer_values
 from .finding_samples import FindingSamples
 from .parsers import ParsedRecord, RecordCorpus
 from .process_commands import process_commands_agree
+from .routed_placement import RoutedPlacement
 from .storage import (
     SpillGroups,
     SpillSequence,
@@ -495,8 +496,29 @@ def _timing_details(value: object) -> dict:
     return result
 
 
+_ROUTED_PLACEMENTS: dict[int, tuple[Scenario, RoutedPlacement]] = {}
+
+
+def _routed_placement(scenario: Scenario) -> RoutedPlacement:
+    """Build the independent routed placement model once per evaluated scenario."""
+    cached = _ROUTED_PLACEMENTS.get(id(scenario))
+    if cached is None or cached[0] is not scenario:
+        assert scenario.environment.network is not None
+        placement = RoutedPlacement(
+            scenario.environment.network, list(scenario.environment.systems)
+        )
+        _ROUTED_PLACEMENTS.clear()
+        _ROUTED_PLACEMENTS[id(scenario)] = (scenario, placement)
+        return placement
+    return cached[1]
+
+
 def _sensor_visible(scenario: Scenario, source_host: str, facts: dict, *, denied: bool) -> bool:
-    """Verify the declared segment/path rules without invoking runtime routing."""
+    """Verify placement without invoking the generator's runtime routing.
+
+    Authored routing uses the evaluator's own routed model; other networks use the declared
+    segment rules below.
+    """
     config = scenario.environment.network
     network = facts.get("network") or {}
     if config is None or not network or facts.get("local_only"):
@@ -511,6 +533,11 @@ def _sensor_visible(scenario: Scenario, source_host: str, facts: dict, *, denied
     )
     if sensor is None:
         return False
+    if config.routing is not None and not (facts.get("dhcp") and network.get("link_local")):
+        placement = _routed_placement(scenario)
+        return sensor.name in placement.observing(
+            str(network["src_ip"]), str(network["dst_ip"]), denied=denied
+        )
 
     def segments(ip: str) -> set[str]:
         for item in config.sensors:

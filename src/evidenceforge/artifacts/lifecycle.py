@@ -782,6 +782,27 @@ def _bind_configuration(staging: Path, entry: str) -> None:
     )
 
 
+def _verified_bundled_pack(source: Path, document: dict[str, Any]) -> bool:
+    """Accept a bundled official pack, which the packaged digest index seals instead of a receipt."""
+    from evidenceforge.composition.models import PackReference
+    from evidenceforge.composition.packs import PackRepository
+    from evidenceforge.config import get_config_directory
+
+    package_root = (get_config_directory() / "packs").resolve()
+    try:
+        source.resolve().relative_to(package_root)
+        reference = PackReference(
+            source="package",
+            publisher=document["publisher"],
+            name=document["name"],
+            version=document["version"],
+        )
+        loaded = PackRepository(package_root).resolve(reference, expected_type=document["type"])
+    except (ValueError, KeyError, EvidenceForgeError):
+        return False
+    return loaded.root.resolve() == source.resolve().parent
+
+
 def _parent(path: Path, *, recover: bool = False) -> ParentReference | None:
     root = _receipt_root(path)
     if root is not None:
@@ -856,7 +877,12 @@ def create_draft(
         raise ArtifactError(f"cannot draft a {contract.family} document")
     if upgrade and not contract.upgrade_available:
         raise ArtifactError("this document has no supported upgrade to a newer schema")
-    if contract.lifecycle and contract.lifecycle.status == "published" and root is None:
+    if (
+        contract.lifecycle
+        and contract.lifecycle.status == "published"
+        and root is None
+        and not _verified_bundled_pack(source, graph.data)
+    ):
         raise ArtifactError(
             "published source has no integrity receipt; import its portable release"
         )

@@ -1,0 +1,25 @@
+pack_schema_version: '3.0'
+type: organization
+publisher: evidenceforge
+publisher_display_name: EvidenceForge Official
+name: metrolink-specialty-care
+requires_evidenceforge: '>=2.0.0,<3.0.0'
+description: Fictional multi-office regional specialty practice organization.
+industry_dependencies:
+- source: package
+  publisher: evidenceforge
+  type: industry
+  name: healthcare
+  version_constraint: '>=1.0.0,<2.0.0'
+status: published
+parents:
+- kind: organization
+  name: metrolink-specialty-care
+  source_schema_version: '2.0'
+  digest: b460d50e26087d62fe94c038703d470f2b8309f56ff4a3ecd0cb435a885dd565
+- kind: organization
+  publisher: evidenceforge
+  name: metrolink-specialty-care
+  draft_id: 4866f8ce-d7ba-4788-8a18-fbcfe8fc599f
+  digest: b3b6b9df43aaa78b74894daafe7ea6e141b66ea57f148368f73cd7ca2e94021e
+version: 1.1.0

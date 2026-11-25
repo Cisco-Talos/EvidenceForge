@@ -1,0 +1,137 @@
+name: northstar-stolen-credentials
+description: Investigate a credential spray and blocked RDP attempt from a clinical workstation,
+  then compare them with routine SMB access and authorized WinRM traffic.
+status: published
+
+publisher: evidenceforge
+parents:
+- kind: scenario
+  publisher: evidenceforge
+  name: northstar-stolen-credentials
+  version: 1.0.0
+  digest: e759fa28c752a2ce9f40dad21992d23065938594203b61303814af5bfe3e99f7
+- kind: scenario
+  publisher: evidenceforge
+  name: northstar-stolen-credentials
+  draft_id: 84f8cc43-ce14-4cc7-a951-e4b8973284b0
+  digest: 12132d55d4970ac58da319c94b0be81025b1ae0647201d3c34470538fb41d06e
+display_name: Northstar Health - Stolen Credentials
+schema_version: '3.0'
+composition:
+  organization:
+    source: path
+    publisher: evidenceforge
+    name: northstar-health
+    version: 1.2.0
+    path: ../dependencies/evidenceforge/organization/northstar-health/1.2.0
+time_window:
+  start: '2026-11-09T15:00:00Z'
+  duration: 8h
+  warmup: 1h
+output:
+  logs:
+  - format: windows
+  - format: zeek
+  - format: ecar
+  - format: syslog
+  - format: cisco_asa
+  destination: ./output
+  compression: false
+release_notes: Model a blocked RDP attempt and routine WinRM administration under
+  the Northstar Health 1.2.0 firewall policy.
+generation_seed: 4201
+observation_profile: complete
+storyline:
+- id: existing-foothold
+  time: +1h
+  actor: maya.patel
+  system: NSH-CLIN-01
+  activity: An existing clinical-workstation foothold enumerates domain users; initial entry is outside
+    scope.
+  events:
+  - type: logon
+    logon_type: 2
+    description: Existing user-session context for the source foothold.
+  - type: process
+    process_name: C:\Windows\System32\net.exe
+    command_line: net.exe user /domain
+- id: credential-spray
+  time: +1h5m
+  actor: maya.patel
+  system: NSH-DC-01
+  activity: The clinical workstation generates failed authentication attempts against several domain accounts.
+  events:
+  - type: credential_spray
+    source_ip: 10.42.10.21
+    pattern: spray
+    target_accounts:
+    - daniel.kim
+    - ethan.brooks
+    - sofia.martinez
+    - jordan.lee
+    logon_type: 3
+    interval: 17s
+    count: 16
+    jitter: 0.4
+- id: explicit-it-credentials
+  time: +1h14m
+  actor: maya.patel
+  system: NSH-CLIN-01
+  activity: The intruder supplies Daniel's previously stolen IT credentials to the Remote Desktop client.
+  events:
+  - type: explicit_credentials
+    target_username: daniel.kim
+    target_server: NSH-FILE-01
+    process_name: C:\Windows\System32\mstsc.exe
+    source_ip: 10.42.10.21
+- id: blocked-rdp-file-server
+  time: +1h16m
+  actor: maya.patel
+  system: NSH-CLIN-01
+  activity: The firewall blocks a Remote Desktop connection from the clinical workstation to the file server.
+  events:
+  - type: connection
+    dst_ip: 10.42.20.20
+    dst_port: 3389
+    conn_state: S0
+    technique: T1021.001
+red_herrings:
+- id: approved-linux-access
+  time: +35m
+  actor: jordan.lee
+  system: NSH-CLIN-LNX-01
+  activity: A clinical coordinator reads the ordinary mounted clinical share.
+  events:
+  - type: smb_activity
+    operation: read
+    purpose: interactive
+    target:
+      type: share
+      share: NSH-FILE-01.clinical_ops
+      selector:
+        extensions:
+        - .xlsx
+        - .csv
+        - .docx
+    batch:
+      count: 1
+    mapping: clinical_ops_drive
+    path_style: mounted
+    client_access: cifs_mount
+  explanation: Expected Linux-to-Windows clinical access, with the coordinator's assigned endpoint and
+    own credential.
+- id: approved-admin-winrm
+  time: +4h
+  actor: ethan.brooks-admin
+  system: NSH-ADMIN-01
+  activity: Ethan uses his separate administrator account for routine file-server administration.
+  events:
+  - type: connection
+    dst_ip: 10.42.20.20
+    dst_port: 5986
+    service: ssl
+  explanation: The management workstation uses the permitted WinRM over HTTPS path to the file server.
+    The connection provides a network comparison for the blocked clinical RDP attempt.
+
+configuration_context: ../configuration/context.yaml
+scenario_version: 1.1.0

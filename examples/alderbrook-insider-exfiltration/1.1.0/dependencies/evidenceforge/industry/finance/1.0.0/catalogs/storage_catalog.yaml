@@ -1,0 +1,9 @@
+storage_catalog:
+  finance-department:
+    description: "Finance share vocabulary and bounded file subjects."
+    data:
+      directories: ["Close", "Reconciliation", "Treasury", "Audit"]
+      subjects: ["variance-report", "settlement-summary", "cash-position"]
+      files:
+        - {extension: .xlsx, mime: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, weight: 5}
+        - {extension: .pdf, mime: application/pdf, weight: 3}

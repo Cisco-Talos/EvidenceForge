@@ -132,6 +132,62 @@ fields:
     required: false
     description: "Post-NAT destination port from Built message parentheses"
 
+  # Native foreign/local roles, kept independent of which side initiated
+  - name: direction
+    type: string
+    required: false
+    description: "Built-message direction (inbound or outbound) from the native row"
+
+  - name: foreign_interface
+    type: string
+    required: false
+    description: "Interface of the foreign address as written on the wire"
+
+  - name: foreign_ip
+    type: ip_address
+    required: false
+    description: "Foreign address as written on the wire, independent of initiation"
+
+  - name: foreign_port
+    type: port
+    required: false
+    description: "Foreign port as written on the wire"
+
+  - name: local_interface
+    type: string
+    required: false
+    description: "Interface of the local address as written on the wire"
+
+  - name: local_ip
+    type: ip_address
+    required: false
+    description: "Local address as written on the wire, independent of initiation"
+
+  - name: local_port
+    type: port
+    required: false
+    description: "Local port as written on the wire"
+
+  - name: mapped_foreign_ip
+    type: ip_address
+    required: false
+    description: "Translated view of the foreign address from Built parentheses"
+
+  - name: mapped_foreign_port
+    type: port
+    required: false
+    description: "Translated view of the foreign port from Built parentheses"
+
+  - name: mapped_local_ip
+    type: ip_address
+    required: false
+    description: "Translated view of the local address from Built parentheses"
+
+  - name: mapped_local_port
+    type: port
+    required: false
+    description: "Translated view of the local port from Built parentheses"
+
   - name: nat_type
     type: string
     required: false

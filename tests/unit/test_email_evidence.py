@@ -2511,6 +2511,124 @@ def test_linux_imaps_read_emits_dovecot_session_syslog(tmp_path: Path) -> None:
     assert syslog_text.index("imap-login: Login") < syslog_text.index("Disconnected: Logged out")
 
 
+@pytest.mark.slow
+def test_denied_imaps_read_leaves_no_dovecot_session(tmp_path: Path) -> None:
+    """A firewall that denies the mailbox connection leaves only the attempt as evidence."""
+    scenario = _email_scenario()
+    systems = [
+        system.model_copy(update={"os": "Ubuntu 22.04"})
+        if system.hostname == "MAIL-FIN"
+        else system
+        for system in scenario.environment.systems
+    ]
+    subnet = {"10.10.0": "infra", "10.10.1": "users", "10.10.2": "servers"}
+    network = NetworkConfig.model_validate(
+        {
+            "segments": [
+                {
+                    "name": name,
+                    "cidr": f"{prefix}.0/24",
+                    "exposure": "internal",
+                    "systems": [s.hostname for s in systems if s.ip.startswith(prefix + ".")],
+                }
+                for prefix, name in subnet.items()
+            ],
+            "routing": {
+                "devices": {"fw": {"kind": "firewall", "firewall": "core-fw"}},
+                "links": {
+                    "internet": {
+                        "internet": True,
+                        "interfaces": {"fw": {"name": "outside", "ip": "203.0.113.2"}},
+                    },
+                    **{
+                        name: {
+                            "segment": name,
+                            "interfaces": {"fw": {"name": name, "ip": f"{prefix}.1"}},
+                        }
+                        for prefix, name in subnet.items()
+                    },
+                },
+                "gateways": {name: "fw" for name in subnet.values()},
+                "routes": {"fw": [{"destination": "0.0.0.0/0", "internet_link": "internet"}]},
+            },
+            "sensors": [
+                {
+                    "type": "network",
+                    "name": "core-zeek",
+                    "hostname": "zeek-core",
+                    "monitoring_segments": list(subnet.values()),
+                    "log_formats": ["zeek"],
+                    "capture_profile": "well_synced",
+                },
+                {
+                    "type": "firewall",
+                    "name": "core-fw",
+                    "monitoring_segments": list(subnet.values()),
+                    "placement": "tap",
+                    "log_formats": ["cisco_asa"],
+                    "interfaces": {name: name for name in subnet.values()},
+                    "policy": [
+                        {"src": "users", "dst": "servers", "ports": [993], "action": "deny"}
+                    ],
+                    "default_action": "permit",
+                },
+            ],
+        }
+    )
+    scenario = scenario.model_copy(
+        update={
+            "environment": scenario.environment.model_copy(
+                update={"systems": systems, "network": network}
+            ),
+            "output": OutputSpec(
+                logs=[{"format": "zeek"}, {"format": "syslog"}, {"format": "cisco_asa"}],
+                destination="./data",
+            ),
+            "storyline": [
+                StorylineEvent(
+                    id="read-imaps",
+                    time="+15m",
+                    actor="bob",
+                    system="WS-BOB",
+                    activity="Bob tries to read his mailbox over IMAPS",
+                    events=[
+                        EmailReadEventSpec(
+                            mailbox="bob@corp.example",
+                            server="fin",
+                            protocol="imaps",
+                            message_ids=["<message@example>"],
+                            count=1,
+                            duration=38.0,
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    conn_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "conn.json")
+    attempts = [
+        row
+        for row in conn_records
+        if row["id.orig_h"] == "10.10.1.11"
+        and row["id.resp_h"] == "10.10.2.26"
+        and row["id.resp_p"] == 993
+    ]
+    syslog_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "data").rglob("syslog.log")
+    )
+    assert attempts and all(row["conn_state"] != "SF" for row in attempts)
+    assert "imap-login: Login: user=<bob>" not in syslog_text
+
+
 @pytest.mark.soak
 def test_email_storyline_events_count_as_causality_traces(tmp_path: Path) -> None:
     scenario = _email_scenario()

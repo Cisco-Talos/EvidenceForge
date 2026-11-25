@@ -1,0 +1,856 @@
+persona_catalog:
+  executive:
+    name: executive
+    description: CEO at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    risk_profile: medium
+    browsing_intensity: normal
+  finance:
+    name: finance
+    description: CFO at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    risk_profile: medium
+    browsing_intensity: normal
+  product:
+    name: product
+    description: Product director at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    risk_profile: medium
+    browsing_intensity: normal
+  hr:
+    name: hr
+    description: HR and business administration at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    risk_profile: medium
+    browsing_intensity: normal
+  sales:
+    name: sales
+    description: Sales and customer accounts at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    risk_profile: medium
+    browsing_intensity: normal
+  technical-lead:
+    name: technical-lead
+    description: CTO at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - Model and experiment review.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - model-review
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  systems-engineer:
+    name: systems-engineer
+    description: Lead systems engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - Odoo engineering changes, BOMs, and design release.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - design-change-control
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  robotics-engineer:
+    name: robotics-engineer
+    description: Lead controls engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - Gazebo scene development and ARGO simulation runs.
+    - ROS 2 and CRETE local bench/simulation development.
+    - ARGO integration and acceptance test execution.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - simulation
+    - robot-development
+    - argo-validation
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  ai-engineer:
+    name: ai-engineer
+    description: Head of AI and autonomy at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - PyTorch training and experiment tracking.
+    - Model and experiment review.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - ml-training
+    - model-review
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  ml-engineer:
+    name: ml-engineer
+    description: ML infrastructure engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - PyTorch training and experiment tracking.
+    - Model and experiment review.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - ml-training
+    - model-review
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  simulation-engineer:
+    name: simulation-engineer
+    description: Simulation and data engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - PyTorch training and experiment tracking.
+    - Model and experiment review.
+    - Gazebo scene development and ARGO simulation runs.
+    - ARGO integration and acceptance test execution.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - ml-training
+    - model-review
+    - simulation
+    - argo-validation
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  software-engineer:
+    name: software-engineer
+    description: Head of software at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  firmware-engineer:
+    name: firmware-engineer
+    description: Embedded software engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - ROS 2 and CRETE local bench/simulation development.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - robot-development
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  release-engineer:
+    name: release-engineer
+    description: Build and release engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - ARGO integration and acceptance test execution.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - argo-validation
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  hardware-lead:
+    name: hardware-lead
+    description: Head of hardware engineering at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - Solid Edge assemblies and design revisions.
+    - Odoo engineering changes, BOMs, and design release.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - mechanical-design
+    - design-change-control
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  mechanical-engineer:
+    name: mechanical-engineer
+    description: Mechanical engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - Solid Edge assemblies and design revisions.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - mechanical-design
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  electrical-engineer:
+    name: electrical-engineer
+    description: Electrical engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - PADS Professional electronics revisions.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - pcb-design
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  pcb-engineer:
+    name: pcb-engineer
+    description: PCB engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - PADS Professional electronics revisions.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - pcb-design
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  hardware-integration:
+    name: hardware-integration
+    description: Hardware bring-up engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - ROS 2 and CRETE local bench/simulation development.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - robot-development
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  configuration-manager:
+    name: configuration-manager
+    description: Engineering configuration specialist at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - Odoo engineering changes, BOMs, and design release.
+    - Engineering documents, datasets, and diagnostic recordings.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - design-change-control
+    - engineering-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  manufacturing-lead:
+    name: manufacturing-lead
+    description: Manufacturing director at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    - Procedures and acceptance records.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  production-planner:
+    name: production-planner
+    description: Production planner at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    - Procedures and acceptance records.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  assembly-supervisor:
+    name: assembly-supervisor
+    description: Assembly supervisor at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    - Procedures and acceptance records.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  manufacturing-engineer:
+    name: manufacturing-engineer
+    description: Manufacturing engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo engineering changes, BOMs, and design release.
+    - Odoo production, inventory, procurement, and quality.
+    - HEPHAESTUS programs approved releases and records calibration.
+    - Procedures and acceptance records.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - design-change-control
+    - manufacturing-operations
+    - hephaestus-programming
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  procurement:
+    name: procurement
+    description: Procurement specialist at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    - Procedures and acceptance records.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  materials:
+    name: materials
+    description: Materials coordinator at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    - Procedures and acceptance records.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: light
+  production-technician:
+    name: production-technician
+    description: Production technician at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    - HEPHAESTUS programs approved releases and records calibration.
+    - Procedures and acceptance records.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    - hephaestus-programming
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: light
+  quality-lead:
+    name: quality-lead
+    description: Head of quality and safety at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo engineering changes, BOMs, and design release.
+    - Odoo production, inventory, procurement, and quality.
+    - Procedures and acceptance records.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - design-change-control
+    - manufacturing-operations
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  verification-engineer:
+    name: verification-engineer
+    description: System verification engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - Model and experiment review.
+    - Gazebo scene development and ARGO simulation runs.
+    - ROS 2 and CRETE local bench/simulation development.
+    - ARGO integration and acceptance test execution.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - model-review
+    - simulation
+    - robot-development
+    - argo-validation
+    - manufacturing-operations
+    - support-diagnostics
+    - engineering-storage
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  calibration-engineer:
+    name: calibration-engineer
+    description: Calibration and quality engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    - HEPHAESTUS programs approved releases and records calibration.
+    - Procedures and acceptance records.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    - hephaestus-programming
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: light
+  safety-engineer:
+    name: safety-engineer
+    description: Functional safety engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - GitLab development and approved artifact access.
+    - Odoo production, inventory, procurement, and quality.
+    - Engineering documents, datasets, and diagnostic recordings.
+    - Procedures and acceptance records.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - software-development
+    - manufacturing-operations
+    - engineering-storage
+    - manufacturing-storage
+    risk_profile: medium
+    browsing_intensity: normal
+  field-service:
+    name: field-service
+    description: Field service manager at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Foxglove web visualization and Odoo customer support.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - support-diagnostics
+    risk_profile: medium
+    browsing_intensity: normal
+  support-engineer:
+    name: support-engineer
+    description: Technical support engineer at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Foxglove web visualization and Odoo customer support.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - support-diagnostics
+    risk_profile: medium
+    browsing_intensity: normal
+  it-lead:
+    name: it-lead
+    description: IT and security manager at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Infrastructure administration through approved management paths.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - administration
+    risk_profile: medium
+    browsing_intensity: normal
+  windows-admin:
+    name: windows-admin
+    description: Identity and endpoint administrator at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Infrastructure administration through approved management paths.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - administration
+    risk_profile: medium
+    browsing_intensity: normal
+  linux-admin:
+    name: linux-admin
+    description: Linux and network administrator at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Infrastructure administration through approved management paths.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - administration
+    risk_profile: medium
+    browsing_intensity: normal
+  ot-admin:
+    name: ot-admin
+    description: OT systems administrator at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Odoo production, inventory, procurement, and quality.
+    - HEPHAESTUS programs approved releases and records calibration.
+    - Procedures and acceptance records.
+    - Infrastructure administration through approved management paths.
+    work_hours: 7am-4pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - manufacturing-operations
+    - hephaestus-programming
+    - manufacturing-storage
+    - administration
+    risk_profile: medium
+    browsing_intensity: normal
+  security-analyst:
+    name: security-analyst
+    description: Security analyst at Talus Enterprises.
+    typical_activities:
+    - Email, collaboration, and business documents.
+    - Infrastructure administration through approved management paths.
+    work_hours: 9am-5pm (lunch 12pm-1pm)
+    application_usage:
+    - productivity
+    - administration
+    risk_profile: medium
+    browsing_intensity: normal
+  auto-ci:
+    name: auto-ci
+    description: GitLab build and artifact automation workload account.
+    typical_activities:
+    - GitLab build and artifact automation
+    work_hours: 24/7
+    application_usage:
+    - GitLab build and artifact automation
+    risk_profile: low
+    browsing_intensity: light
+    work_hours_parsed:
+      start: 0
+      end: 24
+      hours:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 13
+      - 14
+      - 15
+      - 16
+      - 17
+      - 18
+      - 19
+      - 20
+      - 21
+      - 22
+      - 23
+      lunch: null
+      peak_hours: []
+  auto-training:
+    name: auto-training
+    description: GPU training and model-tracking automation workload account.
+    typical_activities:
+    - GPU training and model-tracking automation
+    work_hours: 24/7
+    application_usage:
+    - GPU training and model-tracking automation
+    risk_profile: low
+    browsing_intensity: light
+    work_hours_parsed:
+      start: 0
+      end: 24
+      hours:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 13
+      - 14
+      - 15
+      - 16
+      - 17
+      - 18
+      - 19
+      - 20
+      - 21
+      - 22
+      - 23
+      lunch: null
+      peak_hours: []
+  auto-simulation:
+    name: auto-simulation
+    description: ARGO and Gazebo simulation automation workload account.
+    typical_activities:
+    - ARGO and Gazebo simulation automation
+    work_hours: 24/7
+    application_usage:
+    - ARGO and Gazebo simulation automation
+    risk_profile: low
+    browsing_intensity: light
+    work_hours_parsed:
+      start: 0
+      end: 24
+      hours:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 13
+      - 14
+      - 15
+      - 16
+      - 17
+      - 18
+      - 19
+      - 20
+      - 21
+      - 22
+      - 23
+      lunch: null
+      peak_hours: []
+  auto-release:
+    name: auto-release
+    description: Approved-release cache synchronization workload account.
+    typical_activities:
+    - Approved-release cache synchronization
+    work_hours: 24/7
+    application_usage:
+    - Approved-release cache synchronization
+    risk_profile: low
+    browsing_intensity: light
+    work_hours_parsed:
+      start: 0
+      end: 24
+      hours:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 13
+      - 14
+      - 15
+      - 16
+      - 17
+      - 18
+      - 19
+      - 20
+      - 21
+      - 22
+      - 23
+      lunch: null
+      peak_hours: []
+  auto-logging:
+    name: auto-logging
+    description: Local log collector and forwarding automation workload account.
+    typical_activities:
+    - Local log collector and forwarding automation
+    work_hours: 24/7
+    application_usage:
+    - Local log collector and forwarding automation
+    risk_profile: low
+    browsing_intensity: light
+    work_hours_parsed:
+      start: 0
+      end: 24
+      hours:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 13
+      - 14
+      - 15
+      - 16
+      - 17
+      - 18
+      - 19
+      - 20
+      - 21
+      - 22
+      - 23
+      lunch: null
+      peak_hours: []
+  auto-proxy:
+    name: auto-proxy
+    description: Customer support reverse proxy workload workload account.
+    typical_activities:
+    - Customer support reverse proxy workload
+    work_hours: 24/7
+    application_usage:
+    - Customer support reverse proxy workload
+    risk_profile: low
+    browsing_intensity: light
+    work_hours_parsed:
+      start: 0
+      end: 24
+      hours:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 13
+      - 14
+      - 15
+      - 16
+      - 17
+      - 18
+      - 19
+      - 20
+      - 21
+      - 22
+      - 23
+      lunch: null
+      peak_hours: []
+  auto-runtime:
+    name: auto-runtime
+    description: Internal prototype and acceptance CRETE runtime workload account.
+    typical_activities:
+    - Internal prototype and acceptance CRETE runtime
+    work_hours: 24/7
+    application_usage:
+    - Internal prototype and acceptance CRETE runtime
+    risk_profile: low
+    browsing_intensity: light
+    work_hours_parsed:
+      start: 0
+      end: 24
+      hours:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 13
+      - 14
+      - 15
+      - 16
+      - 17
+      - 18
+      - 19
+      - 20
+      - 21
+      - 22
+      - 23
+      lunch: null
+      peak_hours: []
