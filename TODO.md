@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 3.0.0rc3 is the candidate for the Studio and macOS simulation milestone. The rc1 and rc2 snapshots were internal releases. The stable target is 3.0.0.
+**Status:** 3.0.0rc4 is the candidate for Studio and macOS simulation. Qualification and installer review precede publication. 3.0.0rc3 is the current published candidate. The stable target is 3.0.0.
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-21
 

@@ -4,6 +4,47 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v3.0.0rc4 (2026-11-26)
+
+**Studio**
+
+- Inspect authored routing, network coverage, firewall policy and NAT in interactive network
+  diagrams. Search and focus on devices, inspect findings, and save or copy the current view
+  (`70aab625`, `e2864953`, `4b11a673`, `27425d8e`, `ed472cf7`).
+- Review and apply exact scenario pack changes, including locked organization dependencies,
+  authored overrides and validation findings. Duplicate scenarios across projects and review
+  the destination's default pack after moving or copying a scenario. Studio chat accepts
+  explicit pack changes on editable drafts (`99d1c3ee`).
+- Keep chat table columns readable and correct packaged-path handling for bundled pack drafts
+  on Windows (`4660db4a`, `99d1c3ee`).
+
+**Bundled content**
+
+- Ship routed 1.1.0 editions of all five bundled scenarios. Add Northstar Health 1.2.0,
+  MetroLink Specialty Care 1.1.0 and Talus Enterprises 1.0.0 as official organization packs
+  (`05f28a36`, `087bc7c1`, `8c33c3e4`).
+- Promote official packs with their dependency identities and ancestry intact. Keep them
+  draftable and remap their storage presets when copied (`74a39457`, `c3f11599`).
+
+**Generation and evaluation**
+
+- Evaluate authored network paths independently and retain routed visibility across checkpoint
+  resume. Ground-truth Zeek expectations use the sensor's translated ports and require a
+  completed TCP connection for X.509 coverage
+  (`73212f1e`, `5a270787`, `039cad07`, `b28d3986`).
+- Keep deferred macOS shell commands within the owning GUI session and qualify macOS SSH
+  receivers before routing. Preserve observed network attempts on denied mailbox reads and
+  render standard HTTP reason phrases (`039cad07`, `bcc97830`).
+
+**Qualification and installers**
+
+- Qualify prospective prerelease commits before tagging. A qualification-only run completes
+  fresh release CI and extended tests before producing installers for review
+  (`3ef654e9`, `874b4f89`).
+- The Apple Silicon macOS installer is ad-hoc signed and ships without Developer ID signing or
+  notarization. The Windows 11 x86_64 installer is unsigned. Linux AppImages target Ubuntu
+  24.04 on ARM64 and x86_64. Codex is a separate install for assisted authoring.
+
 ## v3.0.0rc3 (2026-11-21)
 
 EvidenceForge 3.0 adds support for simulated macOS workstations and introduces EvidenceForge Studio.
