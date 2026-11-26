@@ -26,3 +26,14 @@ user's review and a separate release dispatch for the qualified source SHA.
 - An RC4 source startup with a fresh private profile enrolled all five 1.1.0
   examples and indexed Northstar Health 1.2.0, MetroLink Specialty Care 1.1.0
   and Talus Enterprises 1.0.0 from the bundled catalogs.
+- The six-shard layout at `02b79525` passed all slow tests. The longest
+  shard finished in 1 hour 51 minutes. The failed Windows routine checkpoint
+  smoke passed on a retry of the same run. The Apple Silicon DMG and both
+  Linux AppImages passed packaged verification.
+  [Six-shard qualification](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/45859163814)
+- Fresh startup from the Apple Silicon DMG confirmed the bundled inventory.
+  Desktop review found that all five published diagrams were suppressed.
+  Studio compared the installed YAML with the prepublication YAML stored
+  with the frozen inputs. Diagram review now matches the installed entrypoint
+  and frozen revision through the verified release receipt. Editable
+  scenarios retain the captured-YAML freshness check.

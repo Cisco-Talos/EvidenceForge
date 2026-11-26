@@ -402,9 +402,13 @@ def verify_release(root: Path, *, allow_hardlinks: bool = False) -> ReleaseRecei
     return receipt
 
 
-def frozen_scenario_input(path: Path) -> dict[str, Any] | None:
-    """Resolve immutable inputs for the compiler without consulting live configuration."""
+def frozen_scenario_input(
+    path: Path, *, expected_entrypoint_sha256: str | None = None
+) -> dict[str, Any] | None:
+    """Resolve immutable inputs, optionally binding them to an inspected release entrypoint."""
     if path.suffix == ".efscenario":
+        if expected_entrypoint_sha256 is not None:
+            return None
         from .portable import read_archive
 
         receipt, files = read_archive(path)
@@ -417,9 +421,20 @@ def frozen_scenario_input(path: Path) -> dict[str, Any] | None:
     receipt = verify_release(root)
     if receipt.kind != "scenario":
         raise ArtifactError("expected a scenario release")
-    if path.is_file() and path != root / receipt.entrypoint and path != root / "frozen.json":
+    entrypoint = root / receipt.entrypoint
+    frozen_path = root / "frozen.json"
+    if path.is_file() and path != entrypoint and path != frozen_path:
         raise ArtifactError("select the published scenario entrypoint")
-    return json.loads((root / "frozen.json").read_bytes())
+    if expected_entrypoint_sha256 is not None and (
+        path != entrypoint or receipt.files[receipt.entrypoint] != expected_entrypoint_sha256
+    ):
+        return None
+    frozen = frozen_path.read_bytes()
+    if expected_entrypoint_sha256 is not None and sha256(frozen) != receipt.files.get(
+        "frozen.json"
+    ):
+        raise ArtifactError("published inputs changed during inspection")
+    return json.loads(frozen)
 
 
 def resolve_reference(value: str | Path, project_root: Path) -> Path:

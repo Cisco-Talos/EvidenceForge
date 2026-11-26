@@ -13,7 +13,9 @@ import yaml
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+from evidenceforge.artifacts.portable import import_release
 from evidenceforge.cli.commands import app
+from evidenceforge.examples import discover_examples
 from evidenceforge.studio import environment as environment_module
 from evidenceforge.studio.environment import (
     EnvironmentReport,
@@ -349,6 +351,50 @@ def test_diagram_requires_capture_of_the_inspected_scenario_revision(
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, json.dumps(payload), ""),
     )
+    report = inspect_environment(StudioSettings(workspace=tmp_path), source, tmp_path)
+    assert report.valid
+    assert report.topology is None
+
+
+def test_published_routed_examples_visualize_from_their_verified_releases(tmp_path: Path) -> None:
+    settings = StudioSettings(workspace=tmp_path)
+    examples = [
+        example for example in discover_examples() if example.receipt.lifecycle.version == "1.1.0"
+    ]
+    assert len(examples) == 5
+    for example in examples:
+        source = import_release(example.root, project_root=tmp_path, allow_hardlinks=True)
+        report = inspect_environment(settings, source, tmp_path)
+
+        assert report.valid, report.error
+        assert report.source_sha256 == sha256(source.read_bytes()).hexdigest()
+        assert report.topology is not None and report.topology.routing
+        assert report.topology.segments
+
+
+@pytest.mark.parametrize("changed", ["entrypoint", "compiled"])
+def test_published_diagram_requires_both_the_entrypoint_and_frozen_revisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    example = next(
+        entry
+        for entry in discover_examples()
+        if entry.identity == "evidenceforge/northstar-stolen-credentials@1.1.0"
+    )
+    source = import_release(example.root, project_root=tmp_path, allow_hardlinks=True)
+    run = subprocess.run
+
+    def resolve_then_change(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        resolved = run(*args, **kwargs)
+        if changed == "entrypoint":
+            source.write_bytes(source.read_bytes() + b"\n# Replaced during inspection\n")
+        else:
+            payload = json.loads(resolved.stdout)
+            payload["compiled_sha256"] = "0" * 64
+            resolved.stdout = json.dumps(payload)
+        return resolved
+
+    monkeypatch.setattr(environment_module.subprocess, "run", resolve_then_change)
     report = inspect_environment(StudioSettings(workspace=tmp_path), source, tmp_path)
     assert report.valid
     assert report.topology is None

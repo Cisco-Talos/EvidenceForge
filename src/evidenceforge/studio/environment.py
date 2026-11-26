@@ -14,9 +14,10 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, PrivateAttr, ValidationError
 
+from evidenceforge.artifacts.lifecycle import frozen_scenario_input
 from evidenceforge.composition.models import SelectedPack
 from evidenceforge.desktop.jobs import _eforge_command
-from evidenceforge.models.exceptions import ConfigurationError
+from evidenceforge.models.exceptions import ConfigurationError, EvidenceForgeError
 from evidenceforge.studio.contexts import ConfigurationState, configuration_state, context_arguments
 from evidenceforge.studio.processes import launch_options
 from evidenceforge.studio.settings import StudioSettings, controller_settings
@@ -239,6 +240,18 @@ def overlay_fingerprint(workspace: Path) -> str:
     return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
 
 
+def _matches_published_revision(source: Path, report: EnvironmentReport) -> bool:
+    """Bind a resolved diagram to the installed release sealed by its receipt."""
+    if not report.compiled_sha256:
+        return False
+    try:
+        frozen = frozen_scenario_input(source, expected_entrypoint_sha256=report.source_sha256)
+    except (EvidenceForgeError, OSError, ValueError):
+        return False
+    digests = frozen.get("digests") if isinstance(frozen, dict) else None
+    return isinstance(digests, dict) and digests.get("compiled_sha256") == report.compiled_sha256
+
+
 def inspect_environment(
     settings: StudioSettings, source: Path, workspace: Path, project: Project | None = None
 ) -> EnvironmentReport:
@@ -326,10 +339,12 @@ def inspect_environment(
         _populate_declarations(inspected, captured)
         resolved_environment = inspected.effective_scenario.get("environment")
         captured_source = captured.get(f"sources/{report.source_sha256[:16]}-{source.name}")
-        if (
-            isinstance(resolved_environment, dict)
-            and captured_source is not None
+        matches_captured = (
+            captured_source is not None
             and hashlib.sha256(captured_source.encode("utf-8")).hexdigest() == report.source_sha256
+        )
+        if isinstance(resolved_environment, dict) and (
+            matches_captured or _matches_published_revision(source, inspected)
         ):
             try:
                 inspected.topology = project_topology(resolved_environment)
