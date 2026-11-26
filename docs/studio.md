@@ -412,10 +412,23 @@ title in the top bar, or **Back to workspace**, to return to the Overview. The s
 
 The sidebar lists your projects under **Projects**. Select one to show only its scenarios or packs,
 or drag a row onto a project to move it there. **New project** and **Edit project…** can set a
-**Default pack for new scenarios**: a released industry or organization pack that Codex uses when
-it authors a scenario in that project that has not chosen one yet. Codex writes the pack into the
-scenario YAML, so the file stays self-contained and resolves the same way from the CLI; existing
-pack choices are never replaced, and moving a scenario into the project does not change it. **Scenarios** open grouped by project and **Packs**
+**Default pack for new scenarios**. Codex uses that exact release when authoring a scenario
+without a pack selection, unless you request another composition or an inline environment.
+You can also explicitly ask Codex to replace a pack in an editable draft. The selection is
+written into the scenario YAML so the CLI resolves the same composition.
+
+The **Environment** card shows the scenario's pack selections. Open **Choose packs…** to select
+an exact organization release, one or more industry releases, or **Custom (inline)**. An
+organization's locked industry dependencies appear in the review. **Review change** shows the
+effective environment differences, the authored overrides that still take precedence, and
+validation findings. **Apply to draft** saves the composition after a valid review. **Prepare
+in chat** opens a draft conversation for changes that need reference repairs or other authored
+edits. For a release or legacy scenario, Studio creates an editable draft for that conversation.
+
+Moving a scenario changes its project assignment. If the destination has a different default
+pack, the move offers **Review switch** as a separate action. **Duplicate…** lets you choose a
+destination project or **Ungrouped**, and you can open the same review after creating the copy.
+**Scenarios** open grouped by project and **Packs**
 grouped by publisher; use **Views** to sort by name or by most recently updated instead (packs can
 also be grouped by project). Select a group heading to collapse or expand it; groups start expanded. **Filter** holds every filter for the current
 library, including hidden items and pack type, author, version and location. Each scenario or pack

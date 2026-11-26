@@ -168,8 +168,8 @@ test("export saves an image of exactly this view, and the menu can copy it inste
   // user-event installs its own clipboard, so set up the user before replacing it.
   const user = userEvent.setup();
   const write = vi.fn(async () => undefined);
-  const items: unknown[] = [];
-  vi.stubGlobal("ClipboardItem", class { constructor(value: unknown) { items.push(value); } });
+  const items: Record<string, Promise<Blob>>[] = [];
+  vi.stubGlobal("ClipboardItem", class { constructor(value: Record<string, Promise<Blob>>) { items.push(value); } });
   Object.defineProperty(navigator, "clipboard", { value: { write }, configurable: true });
   const image = new Blob(["png"], { type: "image/png" });
   const view = vi.spyOn(capture, "captureViewImage").mockResolvedValue(image);
@@ -185,7 +185,8 @@ test("export saves an image of exactly this view, and the menu can copy it inste
     await user.click(screen.getByRole("menuitem", { name: "Copy image to clipboard" }));
     expect(await screen.findByText("Image copied")).toBeVisible();
     expect(write).toHaveBeenCalledOnce();
-    expect(items[0]).toHaveProperty(["image/png"]);
+    expect(await items[0]["image/png"]).toBe(image);
+    expect(view).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("menu")).toBeNull();
   } finally {
     view.mockRestore();

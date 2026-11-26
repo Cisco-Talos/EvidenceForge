@@ -641,7 +641,23 @@ def compile_scenario(
                 compiled, compiled.scenario.model_copy(update={"generation_seed": generation_seed})
             )
         return compiled
-    graph = load_scenario_source_graph(path)
+    return compile_scenario_graph(
+        load_scenario_source_graph(path),
+        project_root=project_root,
+        context=context,
+        generation_seed=generation_seed,
+    )
+
+
+def compile_scenario_graph(
+    graph: LoadedSourceGraph,
+    *,
+    project_root: Path | None = None,
+    generation_seed: int | None = None,
+    context: Path | None = None,
+) -> CompiledScenario:
+    """Compile captured source bytes at their original include and asset locations."""
+
     raw = copy.deepcopy(graph.data)
     contract = identify_document(raw)
     if contract.family == "resolved":

@@ -38,7 +38,7 @@ function setup(request = vi.fn(async () => report), onPrepare = vi.fn(async (_pr
     throw new Error(`Unexpected test request: ${path}`);
   }), readTextPreview: vi.fn(async () => ({ text: "# Header\n# Context\n\ndomains: []\ndescription: Clinic exercise\n", truncated: false, binary: false })), download: vi.fn(async () => ({ status: "browser" })) } as unknown as StudioApi;
   const onError = vi.fn();
-  const props = { item, packs, api, onPrepare, onError, dependencyFingerprint: "deps-1" };
+  const props = { item, packs, api, onPrepare, onPreparePacks: onPrepare, onError, dependencyFingerprint: "deps-1" };
   const view = render(<Tooltip.Provider><EnvironmentView {...props} /></Tooltip.Provider>);
   return { ...view, api, onPrepare, onError, props, environmentRequest: request };
 }
@@ -53,7 +53,7 @@ test("embedded Environment shows dependency rows directly without readiness or p
     { key: "missing", kind: "pack" as const, label: "office@2.0.0", status: "missing" as const, detail: "Import this version" },
     { key: "include", kind: "include" as const, label: "users.yaml", status: "missing" as const, detail: "Restore included file" },
   ] };
-  const props = { embedded: true, item, packs, dependencyHealth: health, api, onPrepare: vi.fn(async () => undefined), onError: vi.fn(), onImportPacks };
+  const props = { embedded: true, item, packs, dependencyHealth: health, api, onPrepare: vi.fn(async () => undefined), onPreparePacks: vi.fn(async () => undefined), onError: vi.fn(), onImportPacks };
   const { rerender } = render(<Tooltip.Provider><EnvironmentView {...props} refreshVersion={0} /></Tooltip.Provider>);
   expect(screen.getByText("healthcare@1.0.0")).toBeVisible();
   expect(screen.getByText("office@2.0.0")).toBeVisible();
@@ -155,7 +155,7 @@ test("an exact organization choice prepares a reviewable request with locked dep
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Choose packs…" }));
   const dialog = screen.getByRole("dialog", { name: "Choose environment packs" });
-  expect(within(dialog).getByRole("radio", { name: "One organization" })).toBeChecked();
+  expect(within(dialog).getByRole("radio", { name: "Organization pack" })).toBeChecked();
   await user.type(within(dialog).getByRole("textbox", { name: "Search environment packs" }), "3.0.0");
   await user.click(within(dialog).getByRole("radio", { name: /office 3.0.0/ }));
   await user.click(within(dialog).getByRole("button", { name: "Prepare in chat" }));
@@ -170,7 +170,7 @@ test("an exact organization choice prepares a reviewable request with locked dep
 
 test("empty industry choices are gated and failed preparation retains the selection", async () => {
   const onPrepare = vi.fn(async (_prompt: string) => { throw new Error("Could not create conversation"); });
-  const { onError } = setup(undefined, onPrepare);
+  setup(undefined, onPrepare);
   await screen.findByRole("heading", { name: "Packs 2" });
   const user = userEvent.setup();
   const trigger = screen.getByRole("button", { name: "Choose packs…" });
@@ -185,7 +185,7 @@ test("empty industry choices are gated and failed preparation retains the select
   expect(within(dialog).getByRole("button", { name: "Prepare in chat" })).toBeDisabled();
   await user.click(industry);
   await user.click(within(dialog).getByRole("button", { name: "Prepare in chat" }));
-  await waitFor(() => expect(onError).toHaveBeenCalledWith("Error: Could not create conversation"));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not create conversation");
   expect(dialog).toBeVisible();
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -330,4 +330,55 @@ test("resolved dependency locations stay navigable when composition fails and di
   await screen.findByText(/An unrelated include is missing/);
   await user.click(screen.getByRole("button", { name: "Open team:organization:office@2.0.0 pack workspace" }));
   expect(onOpenPack).toHaveBeenLastCalledWith(office);
+});
+
+test("pack review shows effective changes and applies only the reviewed revision", async () => {
+  const { api, environmentRequest, props, rerender } = setup();
+  const onChanged = vi.fn(async () => undefined);
+  const user = userEvent.setup();
+  const selection = { references: ["project:team:organization:office@3.0.0"] };
+  const endpoint = "/v1/scenario-pack-targets/scenario/review";
+  const review = {
+    revision: "a".repeat(64), changed: true, can_apply: true,
+    current_references: ["project:team:organization:office@2.0.0"],
+    proposed_packs: [{ ...report.selected_packs[0], version: "3.0.0" }, report.selected_packs[1]],
+    changes: ["Added 1 systems · NEW-SERVER"], overrides: ["environment.description"],
+  };
+  rerender(<Tooltip.Provider><EnvironmentView {...props} onChanged={onChanged} /></Tooltip.Provider>);
+  await user.click(await screen.findByRole("button", { name: "Choose packs…" }));
+  const dialog = screen.getByRole("dialog");
+  await user.click(within(dialog).getByRole("radio", { name: /office 3.0.0/ }));
+  const request = vi.mocked(api.request);
+  request.mockResolvedValueOnce(review);
+  await user.click(within(dialog).getByRole("button", { name: "Review change" }));
+  expect(await within(dialog).findByText("Added 1 systems · NEW-SERVER")).toBeVisible();
+  expect(within(dialog).getByText("environment.description")).toBeVisible();
+  expect(within(dialog).getByRole("region", { name: "Locked industry dependencies" })).toHaveTextContent("healthcare@1.0.0");
+  expect(request).toHaveBeenCalledWith(endpoint, "POST", selection, 120000);
+  expect(onChanged).not.toHaveBeenCalled();
+
+  request.mockResolvedValueOnce(review);
+  await user.click(within(dialog).getByRole("button", { name: "Apply to draft" }));
+  expect(request).toHaveBeenCalledWith(endpoint, "POST", { ...selection, revision: review.revision }, 120000);
+  await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+  await waitFor(() => expect(environmentRequest).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("validation errors keep a pack change available for review in chat", async () => {
+  const { api, onPrepare } = setup();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Choose packs…" }));
+  const dialog = screen.getByRole("dialog");
+  await user.click(within(dialog).getByRole("radio", { name: "Custom (inline)" }));
+  vi.mocked(api.request).mockResolvedValueOnce({
+    revision: "a".repeat(64), changed: true, can_apply: false, error_count: 1,
+    current_references: ["project:team:organization:office@2.0.0"],
+    findings: ["[error] storyline[0].actor · Unknown actor"],
+  });
+  await user.click(within(dialog).getByRole("button", { name: "Review change" }));
+  expect(await within(dialog).findByText(/Unknown actor/)).toBeVisible();
+  expect(within(dialog).queryByRole("button", { name: "Apply to draft" })).toBeNull();
+  await user.click(within(dialog).getByRole("button", { name: "Prepare in chat" }));
+  expect(onPrepare).toHaveBeenCalledWith(expect.stringContaining("Remove the pack declarations"));
 });

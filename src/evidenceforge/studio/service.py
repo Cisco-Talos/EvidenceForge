@@ -195,6 +195,12 @@ from evidenceforge.studio.runtime_cleanup import (
     RuntimeCleanupReport,
     RuntimeCleanupSettings,
 )
+from evidenceforge.studio.scenario_packs import (
+    ScenarioPackEdit,
+    ScenarioPackReview,
+    change_scenario_packs,
+    scenario_has_pack,
+)
 from evidenceforge.studio.sessions import WindowSessions
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.startup_diagnostics import startup_phase
@@ -1937,10 +1943,14 @@ def project_pack_instructions(project: Project | None, kind: str | None) -> str:
     pack = project.default_pack
     return (
         f" This scenario belongs to the Studio project {project.name!r}, whose default "
-        f"{pack.kind} pack is {pack.publisher}/{pack.name} version {pack.version}. When the "
-        f"scenario does not yet choose its {pack.kind} pack, compose it with that exact released "
-        "pack unless the user asks otherwise, writing it into the scenario YAML so the file stays "
-        "self-contained. Never replace pack choices the scenario already declares."
+        f"{pack.kind} pack is {pack.publisher}/{pack.name} version {pack.version}. When initially "
+        "authoring a new scenario without a pack choice, use that exact release unless the user "
+        "requests another composition or an inline environment. Preserve declared choices during "
+        "unrelated edits and project moves, including authored inline environments. "
+        "An explicit user request authorizes changing or removing declared "
+        "pack choices in an editable draft. Write the exact chosen references into the scenario "
+        "YAML and validate with the active configuration. Ask before overriding authored "
+        "environment fields or guessing ambiguous actor, system, or other references."
     )
 
 
@@ -3312,6 +3322,87 @@ def create_app(
             raise HTTPException(status_code=404, detail="Source YAML not found in this workspace")
         return item
 
+    def scenario_pack_target(
+        target_id: str, studio: StudioService
+    ) -> tuple[Path, CatalogItem | None, Conversation | None]:
+        workspace = studio.settings.workspace
+        conversation = studio.store.conversation(target_id)
+        if conversation is not None and conversation.workspace != workspace:
+            raise HTTPException(
+                status_code=404, detail="Scenario draft not found in this workspace"
+            )
+        item_id = conversation.item_id if conversation else target_id
+        if item_id is not None:
+            item = catalog_source(item_id, studio)
+            if item.kind != "scenario":
+                raise HTTPException(status_code=400, detail="Choose a scenario")
+            return item.path, item, conversation
+        if conversation.draft_kind == "scenario" and conversation.draft_path is not None:
+            return conversation.draft_path, None, conversation
+        raise HTTPException(status_code=404, detail="Scenario draft has no authored source")
+
+    @app.get("/v1/scenario-pack-targets/{target_id}/project-default")
+    async def suggested_scenario_pack(
+        target_id: str, studio: StudioService = Depends(authorized)
+    ) -> str | None:
+        source, item, conversation = scenario_pack_target(target_id, studio)
+        workspace = studio.settings.workspace
+        project_id = item.project_id if item else conversation.draft_project_id
+        project = studio.store.project(project_id) if project_id else None
+        if project is None or project.workspace != workspace or project.default_pack is None:
+            return None
+        default = project.default_pack
+        matches = [
+            entry
+            for entry in studio.store.items(workspace)
+            if entry.kind == f"{default.kind}_pack"
+            and (entry.publisher, entry.name, entry.version)
+            == (default.publisher, default.name, default.version)
+        ]
+        if not matches or not source.is_file() or not source.is_relative_to(workspace):
+            return None
+        origin = (
+            "package" if any(entry.pack_source == "bundled" for entry in matches) else "project"
+        )
+        reference = f"{origin}:{default.publisher}:{default.kind}:{default.name}@{default.version}"
+        if await asyncio.to_thread(scenario_has_pack, source, reference):
+            return None
+        return reference
+
+    @app.post("/v1/scenario-pack-targets/{target_id}/review")
+    async def review_scenario_packs(
+        target_id: str, edit: ScenarioPackEdit, studio: StudioService = Depends(authorized)
+    ) -> ScenarioPackReview:
+        async with studio.workspace_selection_lock, studio.asset_lock:
+            source, item, conversation = scenario_pack_target(target_id, studio)
+            workspace = studio.settings.workspace
+            if edit.revision is not None and (
+                (conversation is not None and conversation.active)
+                or any(
+                    chat.active
+                    for chat in studio.store.conversations(workspace)
+                    if (item and chat.item_id == item.id) or chat.draft_path == source
+                )
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Finish the active chat before applying a pack change"
+                )
+            try:
+                result = await asyncio.to_thread(change_scenario_packs, source, workspace, edit)
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (EvidenceForgeError, OSError, ValueError, yaml.YAMLError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if edit.revision is not None:
+                studio.asset_inventories.clear()
+                await studio.scan()
+                await studio.emit(
+                    item.id if item else target_id,
+                    "scenario.packs.updated",
+                    result.model_dump(mode="json"),
+                )
+        return result
+
     @app.get("/v1/items/{item_id}/files")
     def source_files(item_id: str, studio: StudioService = Depends(authorized)) -> SourceFiles:
         item = catalog_source(item_id, studio)
@@ -3461,7 +3552,11 @@ def create_app(
         ):
             raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
         example = is_example(studio.store, workspace, item.path)
-        project_id = request.project_id if example else item.project_id
+        project_id = (
+            request.project_id
+            if example or "project_id" in request.model_fields_set
+            else item.project_id
+        )
         project = studio.store.project(project_id) if project_id else None
         if project_id and (project is None or project.workspace != workspace):
             raise HTTPException(status_code=404, detail="Choose a project in the current workspace")

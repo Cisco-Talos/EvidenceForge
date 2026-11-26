@@ -1,9 +1,8 @@
 import { CatalogObjectMenu } from "./CatalogObjectMenu";
 import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { useRef, useState } from "react";
-import { ArrowUpRight, Check, Search } from "lucide-react";
-import { Modal } from "./Modal";
-import type { CatalogItem, DependencyHealth, EnvironmentReport, SelectedPack, StudioApi } from "./api";
+import { ArrowUpRight, Check } from "lucide-react";
+import type { CatalogItem, DependencyHealth, StudioApi } from "./api";
 import { AssetBrowser } from "./AssetBrowser";
 import { ConfigurationLayers } from "./ConfigurationLayers";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -11,62 +10,16 @@ import { SourceDeclarations } from "./SourceDeclarations";
 import { InspectionSection } from "./InspectionSection";
 import { DependencyRows } from "./ImportDialog";
 import { dependencyPackItem, selectedPackItem } from "./environmentPackLinks";
+import { PackPicker, packReference } from "./PackPicker";
 import { RequestFeedback } from "./RequestFeedback";
 import type { useEnvironmentInspection } from "./useEnvironmentInspection";
 
-export function packReference(pack: Pick<SelectedPack, "source" | "publisher" | "type" | "name" | "version" | "location">): string {
-  return pack.source === "path" ? pack.location : `${pack.source}:${pack.publisher}:${pack.type}:${pack.name}@${pack.version}`;
-}
-
-type PackChoice = { key: string; label: string; kind: string; reference: string; author: string; version: string; source: string };
-
-function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus }: {
-  report: EnvironmentReport; packs: CatalogItem[]; onClose: () => void; onReturnFocus: () => void; onPrepare: (prompt: string) => Promise<void>; onError: (message: string) => void;
-}) {
-  const organization = report.selected_packs.find((pack) => pack.type === "organization");
-  const [mode, setMode] = useState<"none" | "industries" | "organization">(organization ? "organization" : report.selected_packs.length ? "industries" : "none");
-  const initial = report.selected_packs.filter((pack) => organization ? pack.type === "organization" : true).map(packReference);
-  const [selected, setSelected] = useState(initial);
-  const [query, setQuery] = useState("");
-  const [working, setWorking] = useState(false);
-  const choices: PackChoice[] = packs.filter((pack) => !pack.hidden && pack.publisher && pack.version).map((pack) => {
-    const source = pack.pack_source === "bundled" ? "package" : "project";
-    const kind = pack.kind === "industry_pack" ? "industry" : "organization";
-    const reference = `${source}:${pack.publisher}:${kind}:${pack.name}@${pack.version}`;
-    return { key: reference, label: pack.name, kind, reference, author: pack.publisher_display_name || pack.publisher || "", version: pack.version, source };
-  });
-  for (const pack of report.selected_packs) {
-    const reference = packReference(pack);
-    if (!choices.some((choice) => choice.key === reference)) choices.push({ key: reference, label: pack.name, kind: pack.type, reference, author: pack.publisher, version: pack.version, source: pack.source });
-  }
-  const activeKind = mode === "organization" ? "organization" : "industry";
-  const active = mode === "none" ? [] : choices.filter((choice) => choice.kind === activeKind && selected.includes(choice.key));
-  async function prepare() {
-    setWorking(true);
-    try {
-      await onPrepare([
-        "Please update this scenario's environment composition using the EvidenceForge scenario and pack workflows.",
-        active.length ? `Use these exact ${activeKind === "organization" ? "organization pack (including its locked industry dependencies)" : "industry packs"}:` : "Remove pack composition and retain a self-contained authored environment.",
-        ...active.map((choice) => `- ${choice.reference} (${choice.label} ${choice.version}, publisher ${choice.author})`),
-        "Inspect the current scenario, nested includes, selected pack exports, and merge origins first. Explain which authored fields would override the chosen pack and propose edits before applying them. Preserve unrelated scenario content, supporting files, safety settings, and existing bundles. If conversion from Scenario 1.0 is needed, explain it. Revalidate and explain composition after the edits.",
-      ].join("\n"));
-      onClose();
-    } catch (error) { onError(String(error)); }
-    finally { setWorking(false); }
-  }
-  return <Modal title="Choose environment packs" description="Choose exact versions. Studio prepares the request in a new conversation for you to review." size="lg" className="environment-picker" busy={working} onClose={onClose} onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus(); }}
-    actions={<><button type="button" className="button-quiet" disabled={working} onClick={onClose}>Cancel</button><button type="button" className="button-primary" disabled={working || (mode !== "none" && !active.length)} onClick={() => void prepare()}>{working ? "Preparing…" : "Prepare in chat"}</button></>}>
-    <fieldset className="pack-mode"><legend>Composition</legend>{(["none", "industries", "organization"] as const).map((choice) => <label key={choice}><input type="radio" name="composition-mode" checked={mode === choice} onChange={() => setMode(choice)} />{choice === "none" ? "No packs" : choice === "industries" ? "Industry packs" : "One organization"}</label>)}</fieldset>
-    {mode !== "none" && <><div className="search-box"><Search size={15} /><input aria-label="Search environment packs" placeholder="Search name, author, or version…" value={query} onChange={(event) => setQuery(event.target.value)} /></div><ul className="pack-choice-list">{choices.filter((choice) => choice.kind === activeKind && `${choice.label} ${choice.author} ${choice.version} ${choice.reference}`.toLowerCase().includes(query.toLowerCase())).map((choice) => <li key={choice.key}><label><input type={mode === "organization" ? "radio" : "checkbox"} name={mode === "organization" ? "organization-pack" : undefined} checked={selected.includes(choice.key)} onChange={(event) => setSelected(mode === "organization" ? [choice.key] : event.target.checked ? [...selected, choice.key] : selected.filter((key) => key !== choice.key))} /><span><strong>{choice.label} <small>{choice.version}</small></strong><small>{choice.author} · {choice.source}</small><code>{choice.reference}</code></span></label></li>)}</ul>{!active.length && <p className="muted">Select {mode === "organization" ? "an organization" : "at least one industry pack"}.</p>}</>}
-  </Modal>;
-}
-
-export function EnvironmentView({ item, packs, dependencyHealth, inspection, onImportPacks, onOpenPack, onChanged, api, onPrepare, onError, embedded = false }: {
+export function EnvironmentView({ item, packs, dependencyHealth, inspection, onImportPacks, onOpenPack, onChanged, api, onPrepare, onPreparePacks, onError, embedded = false }: {
   item: CatalogItem; packs: CatalogItem[]; dependencyHealth?: DependencyHealth;
   inspection: ReturnType<typeof useEnvironmentInspection>;
   onImportPacks?: () => void; onChanged?: () => Promise<void>; api: StudioApi;
   onOpenPack?: (pack: CatalogItem) => void;
-  onPrepare: (prompt: string) => Promise<void>; onError: (message: string) => void; embedded?: boolean;
+  onPrepare: (prompt: string) => Promise<void>; onPreparePacks: (prompt: string) => Promise<void>; onError: (message: string) => void; embedded?: boolean;
 }) {
   const { report, pending: loading, error, completedAt, requestKey, refresh } = inspection;
   const pickerTrigger = useRef<HTMLButtonElement>(null);
@@ -103,7 +56,12 @@ export function EnvironmentView({ item, packs, dependencyHealth, inspection, onI
         <SourceDeclarations key={item.id} item={item} report={report} api={api} onError={onError} />
         <InspectionSection title="Overrides and precedence" count={`${report.merge_decisions.length} override${report.merge_decisions.length === 1 ? "" : "s"}`} summary={report.merge_decisions.slice(0, 2).map((decision) => `${decision.path} → ${decision.winner || decision.higher_layer}`).join(" · ") || "No explicit overrides"}><p className="environment-precedence">Defaults → industries → organization → workspace overlay{report.configuration?.scopes.filter((scope) => scope.id !== "workspace" && scope.enabled).map((scope) => ` → ${scope.name}`).join("")} → scenario fields</p>{report.merge_decisions.length ? <ul className="merge-decisions">{report.merge_decisions.map((decision, index) => <li key={index}><code>{decision.path}</code><span>{decision.action} · {decision.winner || decision.higher_layer}</span><small>{decision.lower_layer} → {decision.higher_layer}</small></li>)}</ul> : <p className="muted">No explicit overrides reported by the compiler.</p>}</InspectionSection>
       </>}
-      {picker && <PackPicker report={report} packs={packs} onClose={() => setPicker(false)} onPrepare={onPrepare} onError={onError} onReturnFocus={() => pickerTrigger.current?.focus()} />}
+      {picker && <PackPicker
+        api={api} targetId={item.id} currentPacks={report.selected_packs} packs={packs}
+        onClose={() => setPicker(false)} onPrepare={onPreparePacks}
+        onApplied={async () => { refresh(); await onChanged?.(); }}
+        onReturnFocus={() => pickerTrigger.current?.focus()}
+      />}
     </>}
   </div>;
 }

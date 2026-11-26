@@ -349,6 +349,20 @@ def test_scenario_clone_copies_authored_files_and_project_without_history(
         assert (target.parent / "ENVIRONMENT.md").read_text() == "Original briefing\n"
         assert "name: alpha\n" in original.read_text()
         assert client.get("/v1/bootstrap", headers=headers).json()["conversations"] == []
+        destination = client.post(
+            "/v1/projects", headers=headers, json={"name": "Destination project"}
+        ).json()
+        for name, project_id in (("cross-project", destination["id"]), ("ungrouped-copy", None)):
+            result = client.post(
+                f"/v1/scenarios/{item['id']}/clone",
+                headers=headers,
+                json={"name": name, "project_id": project_id},
+            )
+            assert result.status_code == 200, result.text
+            assert result.json()["project_id"] == project_id
+            assert (Path(result.json()["path"]).parent / "ENVIRONMENT.md").read_bytes() == (
+                companion.read_bytes()
+            )
         duplicate = client.post(
             f"/v1/scenarios/{item['id']}/clone", headers=headers, json={"name": "alpha-copy"}
         )

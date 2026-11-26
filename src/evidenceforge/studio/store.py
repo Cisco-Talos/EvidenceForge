@@ -75,8 +75,8 @@ class CatalogItem(BaseModel):
 class ProjectDefaultPack(BaseModel):
     """An exact released pack that Studio offers to new scenario authoring in a project.
 
-    It is guidance for Codex conversations only: scenarios stay self-contained, so the CLI and
-    skills (which have no projects) resolve exactly what each scenario file declares.
+    Studio offers it during authoring and after a move or duplication. Resolution always
+    uses the scenario's own declarations.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

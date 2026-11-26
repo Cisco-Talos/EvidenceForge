@@ -67,10 +67,13 @@ export async function captureViewImage(viewport: SVGSVGElement): Promise<Blob> {
 }
 
 /** Put the map as shown on the clipboard as a PNG image. */
-export async function copyViewImage(viewport: SVGSVGElement): Promise<void> {
+export async function copyViewImage(capture: () => Promise<Blob>): Promise<void> {
   if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
     throw new Error("Copying images is not available here");
   }
   // Pass the pending image so the copy keeps the click's user activation in WebKit.
-  await navigator.clipboard.write([new ClipboardItem({ "image/png": captureViewImage(viewport) })]);
+  const image = capture();
+  // A clipboard implementation may reject before it consumes the image promise.
+  void image.catch(() => undefined);
+  await Promise.all([navigator.clipboard.write([new ClipboardItem({ "image/png": image })]), image]);
 }

@@ -714,14 +714,13 @@ def _remap_captured_dependencies(staging: Path, entry: str, kind: str) -> None:
         owner.write_bytes(
             update_top_level(owner.read_bytes(), {"industry_dependencies": dependencies})
         )
-    changes: dict[str, Any] = {}
-    declaring_parent = graph.origins.get(
-        ("composition" if kind == "scenario" else "industry_dependencies",), source
-    ).parent
     if kind == "scenario":
         composition = raw.get("composition")
         if not isinstance(composition, dict):
             return
+        owner = graph.top_level_owner("composition")
+        if not owner.is_relative_to(staging / "source"):
+            raise ArtifactError("scenario composition must be included within the release source")
         composition = json.loads(json.dumps(composition))
         references = [
             *composition.get("industries", []),
@@ -735,32 +734,32 @@ def _remap_captured_dependencies(staging: Path, entry: str, kind: str) -> None:
                 raise ArtifactError(
                     "release is missing an authored dependency from its portable closure"
                 )
-            reference.update({"source": "path", "path": os.path.relpath(target, declaring_parent)})
-        changes["composition"] = composition
-    else:
-        dependencies = json.loads(json.dumps(raw.get("industry_dependencies", [])))
-        lock = load_scenario_source_graph(source.parent / "pack.lock.yaml").data
-        for dependency in dependencies:
-            selected = next(
-                (
-                    item
-                    for item in lock.get("dependencies", [])
-                    if item["publisher"] == dependency["publisher"]
-                    and item["name"] == dependency["name"]
-                ),
-                None,
-            )
-            if selected is None:
-                raise ArtifactError("pack closure is missing an exact locked dependency")
-            target = targets[(selected["publisher"], selected["name"], selected["version"])]
-            dependency.update({"source": "path", "path": os.path.relpath(target, declaring_parent)})
-        if dependencies:
-            changes["industry_dependencies"] = dependencies
-    if changes:
-        files, root_entry, base = _capture_sources(
-            source, "scenario" if kind == "scenario" else "pack"
+            reference.update({"source": "path", "path": os.path.relpath(target, owner.parent)})
+        original = next(item.content for item in graph.sources if item.path == owner)
+        owner.write_bytes(update_top_level(original, {"composition": composition}))
+        return
+    declaring_parent = graph.origins.get(("industry_dependencies",), source).parent
+    dependencies = json.loads(json.dumps(raw.get("industry_dependencies", [])))
+    lock = load_scenario_source_graph(source.parent / "pack.lock.yaml").data
+    for dependency in dependencies:
+        selected = next(
+            (
+                item
+                for item in lock.get("dependencies", [])
+                if item["publisher"] == dependency["publisher"]
+                and item["name"] == dependency["name"]
+            ),
+            None,
         )
-        edited = _edit_envelope(files, root_entry, graph, base, changes)
+        if selected is None:
+            raise ArtifactError("pack closure is missing an exact locked dependency")
+        target = targets[(selected["publisher"], selected["name"], selected["version"])]
+        dependency.update({"source": "path", "path": os.path.relpath(target, declaring_parent)})
+    if dependencies:
+        files, root_entry, base = _capture_sources(source, "pack")
+        edited = _edit_envelope(
+            files, root_entry, graph, base, {"industry_dependencies": dependencies}
+        )
         for name in edited:
             if edited[name] != files[name]:
                 (base / name).write_bytes(edited[name])
@@ -790,7 +789,8 @@ def _verified_bundled_pack(source: Path, document: dict[str, Any]) -> bool:
 
     package_root = (get_config_directory() / "packs").resolve()
     try:
-        source.resolve().relative_to(package_root)
+        installed_source = filesystem_path(source).resolve()
+        installed_source.relative_to(filesystem_path(package_root).resolve())
         reference = PackReference(
             source="package",
             publisher=document["publisher"],
@@ -800,7 +800,7 @@ def _verified_bundled_pack(source: Path, document: dict[str, Any]) -> bool:
         loaded = PackRepository(package_root).resolve(reference, expected_type=document["type"])
     except (ValueError, KeyError, EvidenceForgeError):
         return False
-    return loaded.root.resolve() == source.resolve().parent
+    return filesystem_path(loaded.root).resolve() == installed_source.parent
 
 
 def _parent(path: Path, *, recover: bool = False) -> ParentReference | None:

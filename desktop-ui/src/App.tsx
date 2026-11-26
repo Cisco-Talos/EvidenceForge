@@ -56,6 +56,7 @@ import { currentPrediction, ResourceForecastPanel } from "./ResourceForecastPane
 import "./App.css";
 import { revealAction, revealLabel, revealPath, canReveal } from "./RevealInFinder";
 import { artifactFamilies } from "./artifactGrouping";
+import { PackPicker } from "./PackPicker";
 
 type Section = "scenarios" | "packs" | "bundles" | "jobs" | "settings";
 type ActivityFilter = "all" | "running" | "queued" | "attention" | "done";
@@ -101,6 +102,8 @@ function App() {
   const [cloningItem, setCloningItem] = useState<CatalogItem | null>(null);
   const [cloneName, setCloneName] = useState("");
   const [cloneProjectId, setCloneProjectId] = useState("");
+  const [reviewClonePack, setReviewClonePack] = useState(false);
+  const [packSwitch, setPackSwitch] = useState<{ targetId: string; reference: string } | null>(null);
   const [cloneVersion, setCloneVersion] = useState("");
   const [clonePublisherStatus, setClonePublisherStatus] = useState<PackPublisherStatus | null>(null);
   const [clonePublisher, setClonePublisher] = useState("");
@@ -362,6 +365,9 @@ function App() {
       await api.request(`/v1/items/${entry.id}`, "PATCH", { project_id: projectId, ...(confirmed ? { confirm_configuration_change: true } : {}) });
       setConfigurationMove(null);
       await studio.reload();
+      if (entry.kind === "scenario" && entry.project_id !== projectId && nextProject?.default_pack) {
+        await offerProjectPack(entry.id, `Moved ${artifactTitle(entry)} to ${nextProject.name}.`);
+      }
     } catch (error) { setNotice(String(error)); }
   }
 
@@ -469,7 +475,8 @@ function App() {
     const stem = entry.name || "scenario";
     setCloningItem(entry);
     setCloneName(`${stem}-copy`);
-    setCloneProjectId("");
+    setCloneProjectId(snapshot?.example_sources?.includes(entry.id) ? "" : entry.project_id || "");
+    setReviewClonePack(false);
   }
 
   async function beginPackClone(entry: CatalogItem) {
@@ -490,12 +497,17 @@ function App() {
     if (!api || !cloningItem || !cloneName.trim()) return;
     setBusy(true);
     try {
-      const cloned = await api.request<CatalogItem>(`/v1/scenarios/${cloningItem.id}/clone`, "POST", { name: cloneName.trim(), ...(cloningExample ? { project_id: cloneProjectId || null } : {}) });
+      const cloned = await api.request<CatalogItem>(`/v1/scenarios/${cloningItem.id}/clone`, "POST", { name: cloneName.trim(), project_id: cloneProjectId || null });
       await studio.reload();
       setCloningItem(null);
       setSection("scenarios");
       openItem(cloned);
-      showNotice(`Created ${cloned.name} with a separate authored scenario folder.`);
+      const message = `Created ${cloned.name} with a separate authored scenario folder.`;
+      if (snapshot?.projects.some((project) => project.id === cloneProjectId && project.default_pack)) {
+        await offerProjectPack(cloned.id, message, reviewClonePack);
+      } else {
+        showNotice(message);
+      }
     } catch (error) { setNotice(String(error)); }
     finally { setBusy(false); }
   }
@@ -655,14 +667,59 @@ function App() {
     }
   }
 
-  async function prepareEnvironmentChange(text: string) {
-    if (!api || !item) return;
-    const created = await api.request<Conversation>("/v1/conversations", "POST", { item_id: item.id });
+  async function offerProjectPack(targetId: string, message: string, openReview = false) {
+    if (!api) return;
+    try {
+      const reference = await api.request<string | null>(`/v1/scenario-pack-targets/${targetId}/project-default`);
+      if (!reference) {
+        showNotice(message);
+        return;
+      }
+      const open = () => setPackSwitch({ targetId, reference });
+      if (openReview) open();
+      else showNotice(message, { label: `Review switch to ${reference.slice(reference.lastIndexOf(":") + 1)}`, run: open });
+    } catch (error) {
+      showNotice(`${message} The project pack could not be checked. ${String(error)}`);
+    }
+  }
+
+  async function prepareEnvironmentChange(text: string, target = item) {
+    if (!api || !target) return;
+    const created = await api.request<Conversation>("/v1/conversations", "POST", { item_id: target.id });
     await studio.reload();
+    setDraftConversationId(null);
     setFixDraft({ conversationId: created.id, text });
-    if (created.item_id && created.item_id !== item.id) setSelectedId(created.item_id);
+    setSelectedId(created.item_id || target.id);
+    setSection(target.kind === "scenario" ? "scenarios" : "packs");
     setSelectedConversation(created.id);
     setWorkspaceTarget("conversations");
+  }
+
+  async function prepareScenarioPackChange(targetId: string, text: string) {
+    if (!api) return;
+    const entries = await api.request<CatalogItem[]>("/v1/items?kind=scenario");
+    const existing = snapshot?.conversations.find((entry) => entry.id === targetId);
+    const target = entries.find((entry) => entry.id === (existing?.item_id || targetId));
+    if (!target && existing) {
+      setSelectedId(null);
+      setDraftConversationId(existing.id);
+      setFixDraft({ conversationId: existing.id, text });
+      setSection("scenarios");
+      return;
+    }
+    if (!target) throw new Error("Scenario source is unavailable. Refresh the library.");
+    const metadata = await api.request<{ lifecycle?: { status: string }; digest: string }>(`/v1/items/${target.id}/lifecycle`);
+    if (metadata.lifecycle?.status === "draft") {
+      await prepareEnvironmentChange(text, target);
+      return;
+    }
+    const draft = await api.request<{ path: string }>(`/v1/items/${target.id}/lifecycle`, "POST", {
+      action: "draft", expected_digest: metadata.digest, project_id: target.project_id,
+    }, 180000);
+    const updated = await api.request<CatalogItem[]>("/v1/items?kind=scenario");
+    const editable = updated.find((entry) => entry.path === draft.path);
+    if (!editable) throw new Error("Studio created the draft. Refresh the library to open it.");
+    await prepareEnvironmentChange(text, editable);
   }
 
   async function createDraft(name?: string, projectId?: string | null, displayName?: string, packKind?: ItemKind) {
@@ -713,6 +770,10 @@ function App() {
     try {
       await api.request(`/v1/conversations/${draft.id}`, "PATCH", { draft_project_id: projectId });
       await studio.reload();
+      const project = snapshot?.projects.find((entry) => entry.id === projectId);
+      if (draft.draft_kind === "scenario" && draft.draft_path && draft.draft_project_id !== projectId && project?.default_pack) {
+        await offerProjectPack(draft.id, `Moved ${draftTitle(draft)} to ${project.name}.`);
+      }
     } catch (error) { setNotice(String(error)); }
   }
 
@@ -1031,7 +1092,7 @@ function App() {
           : <EmptyState tall icon={<FolderOpen size={30} />} title={search ? "No matches" : selectedProject ? `No ${section} in this project` : "Nothing here yet"}>{search ? "Try another search." : selectedProject ? `Drag ${section} onto ${selectedProject.name} in the sidebar, or use their project menu.` : section === "packs" ? "Import or create a pack to describe an industry or organization." : "Add or import a scenario to start building your library."}</EmptyState>}
       </div>}
 
-      {showLibrary && !item && draftConversation && <div className="draft-page"><div className="draft-banner"><div><span className="eyebrow">AUTHORING DRAFT</span>{draftConversation.draft_kind === "scenario" ? <ArtifactTitle key={draftConversation.id} name={draftConversation.draft_name || "New scenario"} displayName={draftConversation.draft_display_name} api={api} source={{ context: { kind: "scenario", name: draftConversation.draft_name || "new-scenario" } }} onSave={saveDraftDisplayName} disabled={draftConversation.active} /> : <strong>{draftConversation.draft_kind === "industry_pack" ? "New industry pack" : "New organization pack"}</strong>}{draftConversation.draft_path ? <div className="path-with-copy draft-target"><span className="path-value" title={draftConversation.draft_path}>Target: {shortPath(draftConversation.draft_path)}</span><CopyPathButton path={draftConversation.draft_path} label="Copy draft path" onError={setNotice} /></div> : <span>The authored file will appear in this library.</span>}</div><DraftObjectMenu draft={draftConversation} projects={snapshot.projects} onOpen={() => setDraftConversationId(draftConversation.id)} onRename={draftConversation.draft_kind === "scenario" ? () => { setRenamingDraft(draftConversation); setDraftName(draftTitle(draftConversation)); } : undefined} onMove={(id) => void assignDraftProject(draftConversation, id)} onDelete={() => setDeletingConversation(draftConversation)} /></div><ChatView followupMode={snapshot.settings.chat_followup_mode || "queue"} item={{ name: draftConversation.draft_kind === "scenario" ? "New scenario" : "New pack", kind: draftConversation.draft_kind || "scenario" }} conversation={draftConversation} codexHealth={codexHealth} api={api} subscribeEvents={studio.subscribeEvents} onRenamed={studio.reload} onError={setNotice} /></div>}
+      {showLibrary && !item && draftConversation && <div className="draft-page"><div className="draft-banner"><div><span className="eyebrow">AUTHORING DRAFT</span>{draftConversation.draft_kind === "scenario" ? <ArtifactTitle key={draftConversation.id} name={draftConversation.draft_name || "New scenario"} displayName={draftConversation.draft_display_name} api={api} source={{ context: { kind: "scenario", name: draftConversation.draft_name || "new-scenario" } }} onSave={saveDraftDisplayName} disabled={draftConversation.active} /> : <strong>{draftConversation.draft_kind === "industry_pack" ? "New industry pack" : "New organization pack"}</strong>}{draftConversation.draft_path ? <div className="path-with-copy draft-target"><span className="path-value" title={draftConversation.draft_path}>Target: {shortPath(draftConversation.draft_path)}</span><CopyPathButton path={draftConversation.draft_path} label="Copy draft path" onError={setNotice} /></div> : <span>The authored file will appear in this library.</span>}</div><DraftObjectMenu draft={draftConversation} projects={snapshot.projects} onOpen={() => setDraftConversationId(draftConversation.id)} onRename={draftConversation.draft_kind === "scenario" ? () => { setRenamingDraft(draftConversation); setDraftName(draftTitle(draftConversation)); } : undefined} onMove={(id) => void assignDraftProject(draftConversation, id)} onDelete={() => setDeletingConversation(draftConversation)} /></div><ChatView followupMode={snapshot.settings.chat_followup_mode || "queue"} item={{ name: draftConversation.draft_kind === "scenario" ? "New scenario" : "New pack", kind: draftConversation.draft_kind || "scenario" }} conversation={draftConversation} codexHealth={codexHealth} api={api} subscribeEvents={studio.subscribeEvents} initialDraft={fixDraft?.conversationId === draftConversation.id ? fixDraft.text : undefined} onDraftSubmitted={(id) => setFixDraft((current) => current?.conversationId === id ? null : current)} onRenamed={studio.reload} onError={setNotice} /></div>}
 
       {showLibrary && item && snapshot.missing_sources?.includes(item.id) && <MissingScenarioSource key={item.id} item={item} conversations={conversations} jobs={itemJobs} api={api} onRecovered={async (recovered) => { await studio.reload(); openItem(recovered); }} onRemoved={async () => { await studio.reload(); setSelectedId(null); }} onRuns={() => setSection("jobs")} />}
 
@@ -1039,7 +1100,7 @@ function App() {
         onNavigate={(target, jobId) => { setWorkspaceTarget(target); if (jobId !== undefined) setFocusJobId(jobId); }}
         onOpenConversation={(chat) => { setSelectedConversation(chat.id); setWorkspaceTarget("conversations"); }}
         onCreateConversation={() => void createConversation()} onAskNetwork={(context) => createConversation(item, context)} onRenameConversation={(chat) => { setEditingConversation(chat); setEditingTitle(chat.title); }} onDeleteConversation={setDeletingConversation}
-        onProjectChange={(id) => void assignProject(item, id)} onClone={() => item.kind === "scenario" ? beginScenarioClone(item) : void beginPackClone(item)} onExportPack={() => void exportPack(item)} onDeleteScenario={() => setDeletingScenario(item)} onDeletePack={() => setDeletingPack(item)} onHidden={() => void setItemHidden(item, !item.hidden)} onViewYaml={() => void viewYaml()} onImportPacks={() => setPackImportOpen(true)} onOpenPack={(entry) => { setSection("packs"); openItem(entry); }} onGenerate={startGeneration} onValidate={() => void validateItem()} onFix={() => void fixValidationInChat()} onPrepare={prepareEnvironmentChange} onDraftSubmitted={(conversationId) => setFixDraft((current) => current?.conversationId === conversationId ? null : current)} onChanged={studio.reload} onOpenArtifact={async (path) => { const items = await api.request<CatalogItem[]>("/v1/items"); const found = items.find((entry) => entry.path === path); if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); } }} onError={setNotice} />}
+        onProjectChange={(id) => void assignProject(item, id)} onClone={() => item.kind === "scenario" ? beginScenarioClone(item) : void beginPackClone(item)} onExportPack={() => void exportPack(item)} onDeleteScenario={() => setDeletingScenario(item)} onDeletePack={() => setDeletingPack(item)} onHidden={() => void setItemHidden(item, !item.hidden)} onViewYaml={() => void viewYaml()} onImportPacks={() => setPackImportOpen(true)} onOpenPack={(entry) => { setSection("packs"); openItem(entry); }} onGenerate={startGeneration} onValidate={() => void validateItem()} onFix={() => void fixValidationInChat()} onPrepare={prepareEnvironmentChange} onPreparePacks={(text) => prepareScenarioPackChange(item.id, text)} onDraftSubmitted={(conversationId) => setFixDraft((current) => current?.conversationId === conversationId ? null : current)} onChanged={studio.reload} onOpenArtifact={async (path) => { const items = await api.request<CatalogItem[]>("/v1/items"); const found = items.find((entry) => entry.path === path); if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); } }} onError={setNotice} />}
 
       {section === "jobs" && <div className="page activity-page">
         <div className="library-toolbar"><ViewsMenu<"type" | "timeline"> heading="Layout" sort={activityView} onSort={setActivityView} options={["type", "timeline"]} labels={{ type: "Grouped by type", timeline: "Timeline" }} /><div className="segmented" role="group" aria-label="Show activity">{activityFilters.map(([id, label, count]) => <button key={id} type="button" aria-pressed={activityFilter === id} aria-label={`${label}${count ? ` (${count})` : ""}`} onClick={() => setActivityFilter(id)}>{label}{count ? <span className="tab-count" aria-hidden="true">{count}</span> : null}</button>)}</div></div>
@@ -1061,7 +1122,12 @@ function App() {
 ]} /></div>) : <p className="muted">No saved views for this library yet.</p>}</div><form className="saved-view-create" onSubmit={(event) => { event.preventDefault(); void saveCurrentView(); }}><label className="modal-field">Name for current view<input aria-label="Saved view name" maxLength={80} value={viewName} onChange={(event) => setViewName(event.target.value)} placeholder="For example, active investigations" /></label><button className="button-primary" type="submit" disabled={busy || !viewName.trim()}>Save view</button></form></Modal>}
       {notice && <div className={`toast toast-${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}><span>{notice.message}</span>{notice.action && <button className="button-quiet" onClick={() => { notice.action?.run(); dismissNotice(); }}>{notice.action.label}</button>}{closeFailed && <button className="button-quiet" onClick={() => void invoke("studio_exit")}>Force close</button>}<button className="icon-button" aria-label="Dismiss message" onClick={() => { dismissNotice(); setCloseFailed(false); }}><X size={16} /></button></div>}
       {exportItem && <Modal title={`Export ${artifactTitle(exportItem)}`} ariaLabel={isTauri() ? "Export scenario bundle" : "Download scenario bundle"} description="The ZIP holds the run’s logs, ground truth and resolved scenario, plus the current YAML and notes." busy={busy} onClose={() => setExportItem(null)} actions={<><button type="button" className="button-quiet" onClick={() => setExportItem(null)} disabled={busy}>Cancel</button><button type="button" className="button-primary" onClick={() => void downloadBundle()} disabled={busy}><Download size={16} /> {busy ? "Preparing ZIP…" : isTauri() ? "Export ZIP" : "Download ZIP"}</button></>}><label className="modal-field">Run<select aria-label={isTauri() ? "Run to export" : "Run to download"} value={exportRunId} onChange={(event) => setExportRunId(event.target.value)}>{completedRuns(exportItem).map((run) => <option key={run.id} value={run.id}>{formatTime(run.started_at || 0)} · {run.id.slice(0, 8)}</option>)}</select></label>{busy && isTauri() && <ExportStatus progress={exportProgress} api={api!} onError={(error) => setNotice(error)} />}</Modal>}
-      {cloningItem?.kind === "scenario" && <Modal title={`Duplicate ${artifactTitle(cloningItem)}`} ariaLabel="Duplicate scenario" description={cloningExample ? "Creates your own editable copy under your publisher settings. The example stays unchanged." : "Copies the authored files into a new folder in the same project. Conversations and runs stay with the original."} busy={busy} onClose={() => setCloningItem(null)} onSubmit={() => void cloneScenario()} actions={<><button type="button" className="button-quiet" onClick={() => setCloningItem(null)} disabled={busy}>Cancel</button><button type="submit" className="button-primary" disabled={busy || !!scenarioNameError(cloneName.trim())}>{busy ? "Duplicating…" : "Duplicate scenario"}</button></>}>{cloningExample && <label className="modal-field">Project<select aria-label="Duplicate destination project" value={cloneProjectId} disabled={busy} onChange={(event) => setCloneProjectId(event.target.value)}><option value="">Ungrouped</option>{snapshot.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}<label className="modal-field">New scenario name<input autoFocus aria-label="New scenario name" name="scenario-clone-name" autoComplete="off" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label><p className="muted small">Use letters, digits, hyphens, or underscores.</p></Modal>}
+      {packSwitch && <PackPicker key={packSwitch.targetId} api={api} targetId={packSwitch.targetId}
+        suggestion={packSwitch.reference} packs={snapshot.items.filter((entry) => entry.kind !== "scenario")}
+        onClose={() => setPackSwitch(null)} onPrepare={(text) => prepareScenarioPackChange(packSwitch.targetId, text)}
+        onApplied={async () => { await studio.reload(); showNotice("Updated the draft’s environment packs."); }}
+      />}
+      {cloningItem?.kind === "scenario" && <Modal title={`Duplicate ${artifactTitle(cloningItem)}`} ariaLabel="Duplicate scenario" description={cloningExample ? "Creates your own editable copy under your publisher settings. The example stays unchanged." : "Copies the authored files to the selected project. Conversations and runs stay with the original."} busy={busy} onClose={() => setCloningItem(null)} onSubmit={() => void cloneScenario()} actions={<><button type="button" className="button-quiet" onClick={() => setCloningItem(null)} disabled={busy}>Cancel</button><button type="submit" className="button-primary" disabled={busy || !!scenarioNameError(cloneName.trim())}>{busy ? "Duplicating…" : "Duplicate scenario"}</button></>}><label className="modal-field">Project<select aria-label="Duplicate destination project" value={cloneProjectId} disabled={busy} onChange={(event) => setCloneProjectId(event.target.value)}><option value="">Ungrouped</option>{snapshot.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>{snapshot.projects.some((project) => project.id === cloneProjectId && project.default_pack) && <label className="project-pack-review"><input type="checkbox" checked={reviewClonePack} disabled={busy} onChange={(event) => setReviewClonePack(event.target.checked)} /> Review the project’s default pack after duplicating</label>}<label className="modal-field">New scenario name<input autoFocus aria-label="New scenario name" name="scenario-clone-name" autoComplete="off" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label><p className="muted small">Use letters, digits, hyphens, or underscores.</p></Modal>}
       {cloningItem && cloningItem.kind !== "scenario" && <Modal title={`Duplicate ${artifactTitle(cloningItem)}`} ariaLabel="Duplicate pack" description="Creates a validated, editable pack in this workspace under your publisher namespace." busy={busy} onClose={() => setCloningItem(null)} onSubmit={() => void clonePack()} actions={<><button type="button" className="button-quiet" onClick={() => setCloningItem(null)} disabled={busy}>Cancel</button><button type="submit" className="button-primary" disabled={busy || !clonePublisherStatus || !!packNameError(cloneName.trim()) || !/^\d+\.\d+\.\d+$/.test(cloneVersion.trim()) || (!clonePublisherStatus.configured && (!/^[a-z0-9][a-z0-9-]*$/.test(clonePublisher.trim()) || !clonePublisherDisplay.trim()))}>{busy ? "Duplicating…" : "Duplicate pack"}</button></>}><label className="modal-field">Pack name<input autoFocus aria-label="Pack name" name="pack-clone-name" autoComplete="off" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label><label className="modal-field">Pack version<input aria-label="Pack version" name="pack-clone-version" autoComplete="off" value={cloneVersion} onChange={(event) => setCloneVersion(event.target.value)} /></label>{clonePublisherStatus === null ? <p className="muted">Checking publisher identity…</p> : clonePublisherStatus.configured ? <p className="muted">Publisher: {clonePublisherStatus.publisher_display_name} ({clonePublisherStatus.publisher}, {clonePublisherStatus.scope} scope)</p> : <><p className="muted">Pack copies need a publisher identity. This will be saved for this workspace.</p><label className="modal-field">Publisher ID<input aria-label="Publisher ID" name="pack-publisher-id" autoComplete="off" value={clonePublisher} onChange={(event) => setClonePublisher(event.target.value)} /></label><label className="modal-field">Publisher display name<input aria-label="Publisher display name" name="pack-publisher-display-name" autoComplete="off" value={clonePublisherDisplay} onChange={(event) => setClonePublisherDisplay(event.target.value)} /></label></>}</Modal>}
       {projectForm && <Modal title={projectForm.id ? "Edit project" : "New project"} description="Projects group scenarios and packs in this workspace. Their files stay where they are." busy={busy} onClose={() => setProjectForm(null)} onSubmit={() => void saveProject()} actions={<><button type="button" className="button-quiet" onClick={() => setProjectForm(null)}>Cancel</button><button type="submit" className="button-primary" disabled={busy || !projectForm.name.trim()}>{busy ? "Saving…" : projectForm.id ? "Save project" : "Create project"}</button></>}><label className="modal-field">Project Name<input autoFocus aria-label="Project Name" name="project-name" autoComplete="off" maxLength={80} value={projectForm.name} onChange={(event) => setProjectForm({ ...projectForm, name: event.target.value })} /></label><label className="modal-field">Description<textarea aria-label="Project description" maxLength={240} rows={3} value={projectForm.description} onChange={(event) => setProjectForm({ ...projectForm, description: event.target.value })} /></label><label className="modal-field configuration-toggle" title="Applies this project’s configuration directory after workspace defaults to every assigned scenario. Existing runs keep their captured inputs."><span><input type="checkbox" checked={projectForm.overlay_enabled || false} onChange={(event) => setProjectForm({ ...projectForm, overlay_enabled: event.target.checked })} /> Use project configuration</span><small>Shared by this project’s scenarios. Existing runs keep their captured inputs.</small></label><ProjectPackField value={projectForm.default_pack || ""} items={snapshot.items} onChange={(value) => setProjectForm({ ...projectForm, default_pack: value })} />{projectForm.assignItemId && <p className="muted">The selected item will be added to this project.</p>}</Modal>}
       {configurationMove && <ConfirmModal title={`Move ${configurationMove.entry.name}?`} danger={false} confirmLabel="Move scenario" description="This changes the project configuration used for validation, forecasts and future generations. Existing runs keep their captured inputs." onCancel={() => setConfigurationMove(null)} onConfirm={() => assignProject(configurationMove.entry, configurationMove.projectId, true)}><p>{snapshot?.projects.find((project) => project.id === configurationMove.entry.project_id)?.name || "Ungrouped"} → {snapshot?.projects.find((project) => project.id === configurationMove.projectId)?.name || "Ungrouped"}</p></ConfirmModal>}

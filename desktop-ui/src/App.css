@@ -1467,6 +1467,11 @@ html[data-platform="linux"] select optgroup { color: var(--text-1); background-c
 .pack-choice-list strong { font-size: var(--text-md); }
 .pack-choice-list small { color: var(--text-2); font-size: var(--text-xs); }
 .pack-choice-list code { color: var(--text-2); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.pack-review h3, .pack-review h4 { font-size: var(--text-sm); margin: 0 0 6px; }
+.pack-review section { padding: 12px 0; border-top: 1px solid var(--border); }
+.pack-review section ul { padding-inline-start: 20px; margin: 0 0 12px; overflow-wrap: anywhere; }
+.pack-review section li { margin-bottom: 4px; }
+.project-pack-review { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
 
 .resource-forecast { margin-bottom: 16px; }
 .overview-grid .resource-forecast { margin-bottom: 0; }

@@ -352,7 +352,7 @@ test("a scenario can be cloned from its library menu with a new name", async () 
     await user.clear(screen.getByRole("textbox", { name: "New scenario name" }));
     await user.type(screen.getByRole("textbox", { name: "New scenario name" }), "Alpha-copy");
     await user.click(screen.getByRole("button", { name: "Duplicate scenario" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/scenarios/alpha/clone", "POST", { name: "Alpha-copy" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/scenarios/alpha/clone", "POST", { name: "Alpha-copy", project_id: null }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Duplicate scenario" })).toBeNull());
     expect(screen.getByRole("heading", { name: "Alpha-copy" })).toBeTruthy();
   } finally {
@@ -3105,5 +3105,39 @@ test("a run copies its bundle path from the summary without toggling, and a comp
   } finally {
     if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
     else Reflect.deleteProperty(navigator, "clipboard");
+  }
+});
+
+test("a project move offers an optional review of the exact destination pack", async () => {
+  const originalProjects = snapshot.projects;
+  const originalItems = snapshot.items;
+  const reference = "package:evidenceforge:organization:talus-enterprises@1.0.0";
+  snapshot.projects = [{ id: "talus", workspace, name: "Talus", description: "", updated_at: 1,
+    default_pack: { kind: "organization", publisher: "evidenceforge", name: "talus-enterprises", version: "1.0.0" } }];
+  snapshot.items = [...originalItems, { ...originalItems[0], id: "talus-org", kind: "organization_pack",
+    name: "talus-enterprises", publisher: "evidenceforge", version: "1.0.0", pack_source: "bundled" }];
+  const request = vi.mocked(useStudio().api!.request);
+  try {
+    await renderExpandedApp();
+    request.mockResolvedValueOnce({ ...originalItems[0], project_id: "talus" }).mockResolvedValueOnce(reference);
+    const row = screen.getByText("Alpha", { selector: ".scenario-row-title strong" }).closest(".scenario-row");
+    const project = screen.getByRole("button", { name: "Open project Talus" }).closest(".project-nav-entry");
+    const transfer = { effectAllowed: "", dropEffect: "", setData: vi.fn(), getData: vi.fn(() => "alpha") };
+    fireEvent.dragStart(row?.querySelector(".scenario-drag-handle") as HTMLElement, { dataTransfer: transfer });
+    fireEvent.drop(project as HTMLElement, { dataTransfer: transfer });
+    const offer = await screen.findByRole("button", { name: "Review switch to talus-enterprises@1.0.0" });
+    expect(request).toHaveBeenCalledWith("/v1/items/alpha", "PATCH", { project_id: "talus" });
+    expect(request).toHaveBeenCalledWith("/v1/scenario-pack-targets/alpha/project-default");
+    expect(request.mock.calls.some(([path]) => path.endsWith("/review"))).toBe(false);
+
+    const user = userEvent.setup();
+    await user.click(offer);
+    const dialog = screen.getByRole("dialog", { name: "Choose environment packs" });
+    expect(within(dialog).getByRole("radio", { name: /talus-enterprises 1.0.0/ })).toBeChecked();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(request.mock.calls.some(([path]) => path.endsWith("/review"))).toBe(false);
+  } finally {
+    snapshot.projects = originalProjects;
+    snapshot.items = originalItems;
   }
 });

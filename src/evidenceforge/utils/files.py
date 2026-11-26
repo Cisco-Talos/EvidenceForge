@@ -153,6 +153,15 @@ class LoadedSourceGraph:
     origins: dict[tuple[str, ...], Path]
     sources: tuple[LoadedScenarioSource, ...]
 
+    def top_level_owner(self, key: str) -> Path:
+        """Find the file to edit for a whole field, or reject a split declaration."""
+        owners = {path for field, path in self.origins.items() if field[:1] == (key,)}
+        if len(owners) > 1:
+            raise ScenarioIncludeError(
+                f"'{key}' spans multiple included files. Move it into one file before editing it."
+            )
+        return next(iter(owners), self.root)
+
 
 def load_yaml(path: Path | str) -> dict:
     """Load and parse YAML file safely.
@@ -222,6 +231,7 @@ def load_scenario_source_graph(
     include_budget: ScenarioIncludeBudget | None = None,
     include_budget_state: ScenarioIncludeBudgetState | None = None,
     allowed_root: Path | None = None,
+    source_override: tuple[Path, bytes] | None = None,
 ) -> LoadedSourceGraph:
     """Load an authored scenario once while retaining sources and field origins.
 
@@ -232,6 +242,7 @@ def load_scenario_source_graph(
         include_budget_state: Optional mutable counters shared across several related source
             graphs, such as all semantic documents in one pack.
         allowed_root: Optional lexical root that every source must remain beneath.
+        source_override: Preview bytes for one existing declaring file.
     """
 
     if include_budget is not None and include_budget_state is not None:
@@ -250,6 +261,17 @@ def load_scenario_source_graph(
     sources: dict[Path, LoadedScenarioSource] = {}
     budget_state.check_before_read(scenario_path, depth=1)
     root_content = _read_source_bytes(scenario_path, max_bytes=budget_state.remaining_bytes)
+    preloaded: dict[Path, tuple[bytes, dict[str, Any]]] = {}
+    if source_override is not None:
+        owner, replacement = source_override
+        if len(replacement) > budget_state.remaining_bytes:
+            raise ScenarioIncludeError(
+                f"Preview source exceeds scenario include byte limit: {owner}"
+            )
+        if owner == scenario_path:
+            root_content = replacement
+        else:
+            preloaded[owner] = (replacement, _load_raw_yaml(owner, replacement))
     root_data = _load_raw_yaml(scenario_path, root_content)
     if root_data.get("kind") == "evidenceforge.resolved-scenario":
         budget_state.consume(scenario_path, depth=1, size=len(root_content))
@@ -272,9 +294,13 @@ def load_scenario_source_graph(
         stack=(),
         budget_state=budget_state,
         sources=sources,
-        preloaded={scenario_path: (root_content, root_data)},
+        preloaded={**preloaded, scenario_path: (root_content, root_data)},
         allowed_root=lexical_allowed_root,
     )
+    if source_override is not None and source_override[0] not in sources:
+        raise ScenarioIncludeError(
+            f"Preview source is not in the scenario graph: {source_override[0]}"
+        )
     return LoadedSourceGraph(
         root=scenario_path,
         data=data,
@@ -342,7 +368,7 @@ def _load_yaml_with_includes(
         raise ScenarioIncludeError(f"Circular scenario include detected: {chain}")
 
     if preloaded is not None and path in preloaded:
-        content, data = preloaded.pop(path)
+        content, data = preloaded[path]
     else:
         depth = len(stack) + 1
         budget_state.check_before_read(path, depth=depth)

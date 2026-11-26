@@ -961,15 +961,16 @@ export function NetworkDiagram({ graph, context, description, actions, revision,
 
   /** Save or copy exactly the map as shown: its zoom, pan, collapsed sites and layers. */
   async function exportImage(mode: "save" | "copy") {
-    if (!viewport.current) return;
+    const displayedMap = viewport.current;
+    if (!displayedMap) return;
     const done = (message: string) => { setExportStatus(message); window.setTimeout(() => setExportStatus(""), 4000); };
     try {
       if (mode === "copy") {
         setExportStatus("Copying…");
-        await copyViewImage(viewport.current);
+        await copyViewImage(() => captureViewImage(displayedMap));
         done("Image copied");
       } else {
-        const image = await captureViewImage(viewport.current);
+        const image = await captureViewImage(displayedMap);
         const name = `${(exportName ?? "network-diagram").trim().replace(/[\\/:*?"<>|]+/g, "-") || "network-diagram"}.png`;
         const result = await (onSaveImage ?? browserSave)(image, name);
         done(result.status === "cancelled" ? "" : result.status === "saved" ? "Image saved" : "Image downloaded");

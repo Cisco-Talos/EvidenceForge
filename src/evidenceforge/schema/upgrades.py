@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from typing import Any
 
 import yaml
@@ -21,6 +22,7 @@ def update_top_level(
     edits: list[tuple[int, int, str]] = []
     remaining = dict(changes)
     seen: set[str] = set()
+    token_ends: list[int] | None = None
     for key, value in node.value:
         if not isinstance(key, yaml.ScalarNode) or key.value in seen:
             raise SchemaValidationError(
@@ -31,6 +33,15 @@ def update_top_level(
             continue
         start = key.start_mark.index
         end = value.end_mark.index
+        if isinstance(value, (yaml.MappingNode, yaml.SequenceNode)) and not value.flow_style:
+            # A block's end mark can include comments before the next top-level key.
+            if token_ends is None:
+                token_ends = [
+                    token.end_mark.index
+                    for token in yaml.scan(text)
+                    if token.start_mark.index < token.end_mark.index
+                ]
+            end = token_ends[bisect_right(token_ends, end) - 1]
         replacement = ""
         if key.value in changes:
             replacement = yaml.safe_dump(

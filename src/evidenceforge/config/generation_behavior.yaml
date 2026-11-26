@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 579
+current_revision: 580
 history_start_revision: 1
-behavior_surface_sha256: e87d4c415954a506b9578c0ded3c6a3fc2f08d661a9764128bd810b8bebcbded
+behavior_surface_sha256: 67e08444640bbd4e53979c30f97aaf1cfc439db8189f2e09c92795b0d5e7d1cd
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6707,3 +6707,11 @@ changes:
   - zeek_x509
   summary: Record each Zeek sensor's translated connection ports in source expectations.
     Require a completed TCP connection for Zeek X.509 capability in generation and evaluation.
+- revision: 580
+  id: studio-scenario-pack-review
+  impact: none
+  domains:
+  - pack-composition
+  formats: []
+  summary: Compile Studio pack proposals without editing draft files. Bind portable release
+    dependencies in the scenario's declaring YAML, including composition declared in an include.

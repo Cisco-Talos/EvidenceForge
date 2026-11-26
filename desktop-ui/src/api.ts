@@ -31,6 +31,7 @@ export type ScorecardDetail = Schema["ScorecardDetail"];
 export type PackPublisherStatus = Schema["PackPublisherStatus"];
 export type PackCreation = { item: CatalogItem; conversation: Conversation };
 export type PackReview = Schema["PackReview"];
+export type ScenarioPackReview = Schema["ScenarioPackReview"];
 export type PackTopology = Schema["PackTopology"];
 export type TopologyGraph = Schema["RoutedTopologyGraph"];
 export type NetworkChatContext = Schema["RoutedNetworkChatContext"];

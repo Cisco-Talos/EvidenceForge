@@ -9,6 +9,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from evidenceforge._windows_paths import filesystem_path
 from evidenceforge.artifacts.lifecycle import create_draft
 from evidenceforge.composition.packs import PackRepository
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
@@ -264,14 +265,14 @@ def test_pack_diagrams_are_read_only_and_bound_to_exact_catalog_items(
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     with TestClient(create_app(_paths(tmp_path / "app"), "pack-test")) as client:
         catalog = client.get("/v1/bootstrap", headers=HEADERS).json()["items"]
-        items = {item["path"]: item for item in catalog}
+        items = {filesystem_path(Path(item["path"])).resolve(): item for item in catalog}
         before = {path: path.read_bytes() for path in workspace.rglob("*.yaml")}
         for source, expected in (
             (workspace_pack, {"explicit", "v4", "v4-narrow", "v6", "v6-narrow"}),
             (draft, {"draft-lan"}),
             (bundled, {"clinical_lan", "server_lan"}),
         ):
-            item = items[str(source)]
+            item = items[filesystem_path(source).resolve()]
             endpoint = f"/v1/packs/{item['id']}/topology"
             assert client.get(endpoint).status_code == 401
             response = client.get(endpoint, headers=HEADERS)
@@ -293,7 +294,7 @@ def test_pack_diagrams_are_read_only_and_bound_to_exact_catalog_items(
                 )
                 assert host["primary_users"] == ["maya.patel"]
                 assert host["roles"] == ["workstation"]
-        industry_id = items[str(industry)]["id"]
+        industry_id = items[filesystem_path(industry).resolve()]["id"]
         assert client.get(f"/v1/packs/{industry_id}/topology", headers=HEADERS).status_code == 400
         assert before == {path: path.read_bytes() for path in workspace.rglob("*.yaml")}
         client.post(

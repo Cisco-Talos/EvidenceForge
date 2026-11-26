@@ -603,6 +603,40 @@ export interface paths {
         patch: operations["update_item_v1_items__item_id__patch"];
         trace?: never;
     };
+    "/v1/scenario-pack-targets/{target_id}/project-default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Suggested Scenario Pack */
+        get: operations["suggested_scenario_pack_v1_scenario_pack_targets__target_id__project_default_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/scenario-pack-targets/{target_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Scenario Packs */
+        post: operations["review_scenario_packs_v1_scenario_pack_targets__target_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/items/{item_id}/files": {
         parameters: {
             query?: never;
@@ -4213,8 +4247,8 @@ export interface components {
          * ProjectDefaultPack
          * @description An exact released pack that Studio offers to new scenario authoring in a project.
          *
-         *     It is guidance for Codex conversations only: scenarios stay self-contained, so the CLI and
-         *     skills (which have no projects) resolve exactly what each scenario file declares.
+         *     Studio offers it during authoring and after a move or duplication. Resolution always
+         *     uses the scenario's own declarations.
          */
         ProjectDefaultPack: {
             /**
@@ -5017,6 +5051,48 @@ export interface components {
             documents?: string[] | null;
             /** Configuration Context */
             configuration_context?: string | null;
+        };
+        /**
+         * ScenarioPackEdit
+         * @description An exact selection, with a revision supplied only when applying.
+         */
+        ScenarioPackEdit: {
+            /** References */
+            references: string[];
+            /** Revision */
+            revision?: string | null;
+        };
+        /**
+         * ScenarioPackReview
+         * @description Pack and environment changes with findings from ordinary scenario validation.
+         */
+        ScenarioPackReview: {
+            /** Revision */
+            revision: string;
+            /** Changed */
+            changed: boolean;
+            /** Can Apply */
+            can_apply: boolean;
+            /** Current References */
+            current_references: string[];
+            /** Proposed Packs */
+            proposed_packs?: components["schemas"]["SelectedPack"][];
+            /** Changes */
+            changes?: string[];
+            /** Overrides */
+            overrides?: string[];
+            /** Findings */
+            findings?: string[];
+            /**
+             * Error Count
+             * @default 0
+             */
+            error_count: number;
+            /**
+             * Current Error
+             * @default
+             */
+            current_error: string;
         };
         /**
          * ScenarioRenameRequest
@@ -7111,6 +7187,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatalogItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    suggested_scenario_pack_v1_scenario_pack_targets__target_id__project_default_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                target_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_scenario_packs_v1_scenario_pack_targets__target_id__review_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                target_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioPackEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioPackReview"];
                 };
             };
             /** @description Validation Error */
