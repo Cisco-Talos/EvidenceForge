@@ -1295,7 +1295,8 @@ class TestGenerateCheckpointResume:
             text=True,
         )
         marker = sync_directory / f"{checkpoint_hour:020d}.ready"
-        deadline = time.monotonic() + 30
+        # Shared runners can need more than 30 seconds to commit a late checkpoint.
+        deadline = time.monotonic() + 60
         while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
             time.sleep(0.01)
         if not marker.exists():

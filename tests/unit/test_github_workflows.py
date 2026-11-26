@@ -90,15 +90,15 @@ def test_release_slow_workflow_excludes_soak_diagnostics() -> None:
 
 
 def test_release_slow_workflow_shards_tests_and_parallelizes_portability() -> None:
-    """The release lane preserves all slow tests across four independent shards."""
+    """The release lane preserves all slow tests across six independent shards."""
 
     jobs = _release_slow_jobs()
     arguments = _slow_test_arguments(jobs)
-    assert arguments[arguments.index("--ci-shard-count") + 1] == "5"
+    assert arguments[arguments.index("--ci-shard-count") + 1] == "6"
     assert arguments[arguments.index("--ci-shard-index") + 1] == "${{ matrix.shard_index }}"
     shards = jobs["slow-comprehensive"]["strategy"]["matrix"]["include"]
-    assert len(shards) == 5
-    assert {shard["shard_index"] for shard in shards} == set(range(5))
+    assert len(shards) == 6
+    assert {shard["shard_index"] for shard in shards} == set(range(6))
     assert all(shard["shard_number"] == shard["shard_index"] + 1 for shard in shards)
     assert "checkpoint-portability" not in jobs["slow-comprehensive"]["needs"]
     assert "slow-comprehensive" not in jobs["checkpoint-portability"]["needs"]

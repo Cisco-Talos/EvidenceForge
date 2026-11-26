@@ -84,7 +84,7 @@ latest. Do not manually push a stable tag to initiate this path.
 
 1. Version/metadata consistency, a matching changelog entry and valid source/tag provenance.
 2. Routine CI, 70% Linux routine coverage, native macOS, both Linux architectures' and Windows
-   Studio/state recovery, all five slow shards without coverage, and Python checkpoint portability.
+   Studio/state recovery, all six slow shards without coverage, and Python checkpoint portability.
 3. Native macOS Apple Silicon and Ubuntu 24.04 ARM64/x86_64 builds with locked Python/npm/Cargo
    dependencies, isolated packaged CLI/resource and checkpoint-enabled generation verification,
    a positive Mac-native CLI generation/evaluation smoke (ES/ULF/history and process census),

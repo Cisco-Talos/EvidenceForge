@@ -42,6 +42,8 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 - Qualify prospective prerelease commits before tagging. A qualification-only run completes
   fresh release CI and extended tests before producing installers for review
   (`3ef654e9`, `874b4f89`).
+- Balance slow release tests across six runners using observed costs for the routed examples.
+  Give the checkpoint test harness time to reach its existing interruption point on shared runners.
 - The Apple Silicon macOS installer is ad-hoc signed and ships without Developer ID signing or
   notarization. The Windows 11 x86_64 installer is unsigned. Linux AppImages target Ubuntu
   24.04 on ARM64 and x86_64. Codex is a separate install for assisted authoring.
