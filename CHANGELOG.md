@@ -17,6 +17,7 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
   explicit pack changes on editable drafts (`99d1c3ee`).
 - Keep chat table columns readable and correct packaged-path handling for bundled pack drafts
   on Windows (`4660db4a`, `99d1c3ee`).
+- Apply the same diagram export filename rules on every host OS.
 
 **Bundled content**
 

@@ -4,7 +4,7 @@
 //! involved. Only PNG data is accepted, the user chooses the destination in a native save dialog,
 //! and the file is written through a temporary sibling and renamed into place.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use tauri::{
     ipc::{InvokeBody, Request},
@@ -45,14 +45,14 @@ fn percent_decode(value: &str) -> Option<String> {
 
 /// A plain PNG file name: no folders, no control characters, and a `.png` extension.
 fn image_file_name(value: &str) -> String {
-    let name = Path::new(value)
-        .file_name()
-        .and_then(|name| name.to_str())
+    let name = value
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
         .unwrap_or("network-diagram");
     let cleaned: String = name
         .chars()
         .map(|character| {
-            if character.is_control() || matches!(character, '/' | '\\' | ':') {
+            if character.is_control() || character == ':' {
                 '_'
             } else {
                 character
@@ -146,6 +146,10 @@ mod tests {
     fn suggested_names_stay_in_the_chosen_folder_and_end_in_png() {
         assert_eq!(
             image_file_name("../secret/Talos network"),
+            "Talos network.png"
+        );
+        assert_eq!(
+            image_file_name(r"C:\secret\Talos network"),
             "Talos network.png"
         );
         assert_eq!(image_file_name("diagram.png"), "diagram.png");
