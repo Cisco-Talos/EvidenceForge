@@ -413,7 +413,8 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
     workflow = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
     triggers = workflow[True]  # PyYAML treats YAML 1.1 'on' as a boolean.
     assert triggers["push"] == {"branches": ["main"]}
-    assert set(triggers["workflow_dispatch"]["inputs"]) == {"source-sha", "tag"}
+    assert set(triggers["workflow_dispatch"]["inputs"]) == {"source-sha", "tag", "qualify-only"}
+    assert triggers["workflow_dispatch"]["inputs"]["qualify-only"]["default"] is False
     jobs = workflow["jobs"]
     assert jobs["publish-release"]["needs"] == [
         "release-scope",
@@ -455,6 +456,24 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
         "release-scope",
         "validate-release-version",
     ]
+    assert jobs["qualify-installers"]["needs"] == [
+        "validate-release-version",
+        "release-ci",
+        "release-slow",
+    ]
+    assert jobs["qualify-installers"]["uses"] == jobs["build-installers"]["uses"]
+    assert jobs["qualify-installers"]["with"] == {
+        "source-ref": source,
+        "release": True,
+        "force-tests": True,
+    }
+    assert "&& inputs.qualify-only &&" in jobs["qualify-installers"]["if"]
+    for job in ("build-installers", "build-installers-legacy", "publish-release"):
+        assert "&& !inputs.qualify-only &&" in jobs[job]["if"]
+    assert "qualify-installers" in jobs["release-gates"]["needs"]
+    assert jobs["release-gates"]["env"]["INSTALLER_RESULT"] == (
+        "${{ inputs.qualify-only && needs.qualify-installers.result || needs.build-installers.result }}"
+    )
     installers = yaml.safe_load((root / ".github/workflows/installers.yml").read_text())
     build = "\n".join(step.get("run", "") for step in installers["jobs"]["build"]["steps"])
     assert "--build-app" in build and "--release" in build and "--skip-dmg" not in build

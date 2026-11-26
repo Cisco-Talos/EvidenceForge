@@ -4,11 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       source-sha:
-        description: Full commit SHA from dev to qualify, tag and publish as a new prerelease
+        description: Full commit SHA from dev for a new prerelease
         type: string
       tag:
         description: Existing annotated prerelease tag to recover (leave source-sha blank)
         type: string
+      qualify-only:
+        description: Run all release tests, then build installers for review without publishing
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
   push:
@@ -42,6 +46,7 @@ jobs:
         shell: bash
         env:
           RECOVERY_TAG: ${{ inputs.tag }}
+          QUALIFY_ONLY: ${{ inputs.qualify-only }}
         run: |
           if [ "$GITHUB_REF" != refs/heads/dev ]; then
             echo 'Dispatch prereleases from dev.'
@@ -49,6 +54,10 @@ jobs:
           fi
           if [[ -n "$RELEASE_SOURCE_SHA" && -z "$RECOVERY_TAG" && "$RELEASE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             exit 0
+          fi
+          if [ "$QUALIFY_ONLY" = true ]; then
+            echo 'Qualification requires a full source-sha for a new prerelease.'
+            exit 1
           fi
           if [[ -z "$RELEASE_SOURCE_SHA" && "$RECOVERY_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$ ]]; then
             exit 0
@@ -141,13 +150,22 @@ jobs:
       force-tests: ${{ github.event_name == 'workflow_dispatch' }}
 
   build-installers:
-    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'true'
+    if: github.event_name != 'pull_request' && !inputs.qualify-only && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'true'
     needs: [release-scope, validate-release-version]
     uses: ./.github/workflows/installers.yml
     with:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
       release: true
       force-tests: ${{ inputs.source-sha != '' && github.event_name == 'workflow_dispatch' }}
+
+  qualify-installers:
+    if: github.event_name == 'workflow_dispatch' && inputs.qualify-only && needs.validate-release-version.outputs.ci-modern == 'true'
+    needs: [validate-release-version, release-ci, release-slow]
+    uses: ./.github/workflows/installers.yml
+    with:
+      source-ref: ${{ needs.validate-release-version.outputs.sha }}
+      release: true
+      force-tests: true
 
   # Immutable snapshots such as a5 predate the shard/evidence helpers. Preserve
   # manual recovery using their known CI policy, without overlaying source files.
@@ -167,7 +185,7 @@ jobs:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
 
   build-installers-legacy:
-    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'false'
+    if: github.event_name != 'pull_request' && !inputs.qualify-only && needs.release-scope.outputs.cleanup != 'true' && needs.validate-release-version.outputs.ci-modern == 'false'
     needs: [release-scope, validate-release-version, release-ci-legacy, release-slow-legacy]
     uses: Cisco-Talos/EvidenceForge/.github/workflows/installers.yml@4302afd5f38126118ad4346efb7c76b3dac8d06d
     with:
@@ -175,9 +193,9 @@ jobs:
       release: true
 
   release-gates:
-    name: Release publication gates
+    name: Release gates
     if: always() && !cancelled() && github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
-    needs: [release-scope, validate-release-version, release-ci, release-slow, build-installers, release-ci-legacy, release-slow-legacy, build-installers-legacy]
+    needs: [release-scope, validate-release-version, release-ci, release-slow, build-installers, qualify-installers, release-ci-legacy, release-slow-legacy, build-installers-legacy]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -185,7 +203,7 @@ jobs:
       MODERN: ${{ needs.validate-release-version.outputs.ci-modern }}
       CI_RESULT: ${{ needs.release-ci.result }}
       SLOW_RESULT: ${{ needs.release-slow.result }}
-      INSTALLER_RESULT: ${{ needs.build-installers.result }}
+      INSTALLER_RESULT: ${{ inputs.qualify-only && needs.qualify-installers.result || needs.build-installers.result }}
       LEGACY_CI_RESULT: ${{ needs.release-ci-legacy.result }}
       LEGACY_SLOW_RESULT: ${{ needs.release-slow-legacy.result }}
       LEGACY_INSTALLER_RESULT: ${{ needs.build-installers-legacy.result }}
@@ -213,7 +231,7 @@ jobs:
     # Ignore skipped ancestors in the unused modern/legacy branch, while still
     # requiring the selected policy's complete validation and installer gates.
     if: >-
-      always() && !cancelled() && github.event_name != 'pull_request' &&
+      always() && !cancelled() && github.event_name != 'pull_request' && !inputs.qualify-only &&
       needs.release-scope.outputs.cleanup != 'true' &&
       needs.validate-release-version.result == 'success' &&
       needs.release-gates.result == 'success'

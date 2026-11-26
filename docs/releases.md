@@ -59,6 +59,19 @@ four installers for that SHA, and verifies the downloaded artifacts before creat
 annotated tag. It publishes those installers and their checksums from the same run with
 **Pre-release** enabled and **Latest** disabled. After a source fix, dispatch the new commit SHA.
 
+For installer review before publication approval, run the same workflow with `qualify-only=true`.
+It runs fresh release CI and extended tests before building all four installers. The run uploads
+the installers and checksums as Actions artifacts and skips tagging and release publication.
+
+```sh
+candidate_sha=$(git rev-parse HEAD)
+gh workflow run release.yml --ref dev -f source-sha="$candidate_sha" -f qualify-only=true
+gh run download RUN_ID --name release-installer-macos-aarch64 --dir dist/macos/RUN_ID
+```
+
+After approval, use the normal release dispatch on the reviewed SHA. That publishing run
+produces and verifies its own installer artifacts.
+
 ## Stable releases
 
 On `dev`, remove the prerelease suffix when preparing the stable release, synchronize versions
