@@ -1,0 +1,9 @@
+- name: completed TCP connection supports certificate analysis
+  conn_state: SF
+  eligible: true
+- name: responder reset suppresses certificate analysis
+  conn_state: RSTR
+  eligible: false
+- name: unanswered connection suppresses certificate analysis
+  conn_state: S0
+  eligible: false

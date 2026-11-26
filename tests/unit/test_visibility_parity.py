@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from evidenceforge.evaluation.routed_placement import RoutedPlacement
+from evidenceforge.events.evidence_source_rules import semantic_source_admission
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.models.scenario import NetworkConfig, System
 
@@ -85,3 +86,16 @@ def test_ground_truth_agreement_uses_routed_placement(
         if _sensor_visible(scenario, sensor.name, facts, denied=bool(case.get("denied")))
     }
     assert observed == set(case["observers"])
+
+
+@pytest.mark.parametrize(
+    "case",
+    yaml.safe_load((FIXTURES / "capabilities" / "zeek-x509.yaml").read_text(encoding="utf-8")),
+    ids=lambda case: case["name"],
+)
+def test_zeek_x509_capability_matches_documented_transport_state(case: dict[str, Any]) -> None:
+    from evidenceforge.evaluation.ground_truth_agreement import _source_semantic_admission
+
+    facts = {"network": {"conn_state": case["conn_state"]}}
+    assert semantic_source_admission("zeek_x509", "connection", facts) is case["eligible"]
+    assert _source_semantic_admission("zeek_x509", "connection", facts, "tap") is case["eligible"]

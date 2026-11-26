@@ -28,7 +28,10 @@ from evidenceforge.events.evidence_projection import (
     required_capabilities,
     source_event_contracts,
 )
-from evidenceforge.events.evidence_source_rules import endpoint_local_destination_ip
+from evidenceforge.events.evidence_source_rules import (
+    endpoint_local_destination_ip,
+    semantic_source_admission,
+)
 from evidenceforge.events.ground_truth import GroundTruthDocument
 from evidenceforge.events.ground_truth_occurrence import (
     GroundTruthOccurrence,
@@ -718,6 +721,13 @@ def _source_inventory(scenario: Scenario) -> dict[str, SourceInstanceDeployment]
     return {source.identity.source_instance: source for source in deployment}
 
 
+def _source_semantic_admission(format_name: str, kind: str, facts: dict, hostname: str) -> bool:
+    """Verify Zeek analyzer admission independently of emitter availability."""
+    if format_name == "zeek_x509":
+        return kind == "connection" and (facts.get("network") or {}).get("conn_state") == "SF"
+    return semantic_source_admission(format_name, kind, facts, hostname)
+
+
 def _expectation_errors(
     row: GroundTruthOccurrence,
     expectation: GroundTruthSourceExpectation,
@@ -769,9 +779,7 @@ def _expectation_errors(
     known["capability"] = source.policy.capabilities.covers(
         required_capabilities(expectation.format, row.kind, row.facts, expectation.role)
     )
-    from evidenceforge.events.evidence_source_rules import semantic_source_admission
-
-    known["capability"] = known["capability"] and semantic_source_admission(
+    known["capability"] = known["capability"] and _source_semantic_admission(
         expectation.format, row.kind, row.facts, expectation.source_host
     )
     from evidenceforge.events.evidence_source_rules import native_projection_applicable

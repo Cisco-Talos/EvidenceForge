@@ -44,6 +44,7 @@ fixtures are checked by `tests/unit/test_visibility_parity.py`.
 | 576 | Routed bundled packs drop the release-only configuration binding, and copied packs remap their own file-set presets. |
 | 577 | Bundled Talus Enterprises 1.0.0. |
 | 578 | Deferred Mac shell commands must fit their GUI session. Mac SSH receiver qualification precedes routed attempts. The checkpoint inventory declares routing and VIP ownership as rebuilt state. |
+| 579 | Zeek source expectations retain the sensor's translated ports, and X.509 capability accounts for the completed connection requirement. |
 
 ## Regression repairs
 
@@ -79,11 +80,34 @@ On this Mac, directories created under `/private/tmp` inherit `wheel`, while the
 normal macOS user temporary directory inherits `staff`. The LaunchDaemon test
 passed there with the original assertions.
 
-The slow tier exercises generation from frozen releases and from drafts with
-current defaults. The frozen Lantern Works 1.1.0 bundle generated and passed
-evaluation acceptance, while the stricter example test found one Zeek
-Internet TAP source-port mismatch and two Zeek X.509 capability disagreements.
-Its scenario completeness score was 99.9723 against the test's 100 requirement.
+## Slow tier and focused retests
+
+The initial slow tier covered all 2,272 collected cases exactly once. It reported
+2,262 passes, five platform skips, and five failures. The serial run completed
+the frozen releases and both Alderbrook drafts. Three parallel groups ran the
+other eight drafts, and the remaining inventory ran in four groups planned from
+the repository's CI timings. All 20 bundled example cases generated bundles.
+
+- Frozen Lantern Works 1.1.0 passed evaluation acceptance. The stricter example
+  test found one Zeek Internet TAP source-port mismatch and two Zeek X.509
+  capability disagreements. Its scenario completeness score was 99.9723 against
+  the test's 100 requirement. The source expectation had the translated IP and
+  canonical private port. Revision 579 records the port from the same sensor
+  observation as the address. The generator and independent evaluator also
+  account for X.509's successful connection requirement.
+- The Northstar CLI envelope and packaged catalog tests held older expectations.
+  They now require the exact legacy-firewall advisory and the Talus catalog entry.
+- The Windows ordinary-event throughput check took 12.19s under concurrent test
+  load and passed in isolation with its existing 2s limit. The default-target
+  iteration test hit its 1,800s first-generation timeout during the parallel run.
+
+The first focused checks on revision 579 passed 150 default-tier cases, the
+routed PAT bundle test, and both Northstar and Talus contract tests.
+All five original slow failures passed targeted retests. The isolated default
+iteration case passed byte comparison and evaluation in 36m 47s. The rebuilt
+Lantern Works 1.1.0 frozen-release case passed the full zero-finding agreement
+and exact score assertions in 4m 16s. The full default and slow runs predate
+revision 579. The follow-up verified the affected cases directly.
 
 ## Follow-ups
 

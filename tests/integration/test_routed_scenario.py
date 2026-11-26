@@ -176,6 +176,32 @@ def test_routed_bundle_enforces_delivery_and_projects_native_sensor_tuples(
 
     inside = _records(bundle, "zeek-core", "conn")
     outside = _records(bundle, "zeek-outside", "conn")
+    with (bundle / "GROUND_TRUTH_EVENTS.jsonl").open() as stream:
+        internet_truth = next(
+            row
+            for row in map(json.loads, stream)
+            if row["facts"].get("http", {}).get("uri") == "/internet"
+        )
+    observed_ports: dict[str, int] = {}
+    for sensor, http_rows, connections in (
+        ("zeek-core", inside_http, inside),
+        ("zeek-outside", outside_http, outside),
+    ):
+        uid = next(row["uid"] for row in http_rows if row["uri"] == "/internet")
+        connection = next(row for row in connections if row["uid"] == uid)
+        expectation = next(
+            item
+            for item in internet_truth["source_expectations"]
+            if item["source_host"] == sensor and item["format"] == "zeek_conn"
+        )
+        required = expectation["requirements"][0]["required"]
+        observed_ports[sensor] = connection["id.orig_p"]
+        assert (required["id.orig_p"], required["id.resp_p"]) == (
+            connection["id.orig_p"],
+            connection["id.resp_p"],
+        )
+    assert observed_ports["zeek-core"] != observed_ports["zeek-outside"]
+
     for source, dest, crosses, blocked_at in (
         ("10.40.10.10", "198.51.100.30", inside, outside),
         ("198.51.100.30", "10.40.10.10", outside, inside),

@@ -1,7 +1,7 @@
 schema_version: '1.0'
-current_revision: 578
+current_revision: 579
 history_start_revision: 1
-behavior_surface_sha256: 055c8c6f73b18ed7180d091d641bf6415c883d0473bf6ca48af87c17b98e4427
+behavior_surface_sha256: e87d4c415954a506b9578c0ded3c6a3fc2f08d661a9764128bd810b8bebcbded
 changes:
 - revision: 1
   id: initial-generation-behavior-contract
@@ -6696,3 +6696,14 @@ changes:
   - zeek_conn
   summary: Keep deferred Mac shell commands inside their GUI session and qualify Mac SSH
     receivers before routing attempts. Declare the rebuilt routing and VIP maps in checkpoints.
+- revision: 579
+  id: zeek-ground-truth-translated-ports-and-x509-admission
+  impact: localized
+  domains:
+  - ground-truth-source-contracts
+  - sensor-visibility
+  formats:
+  - zeek_conn
+  - zeek_x509
+  summary: Record each Zeek sensor's translated connection ports in source expectations.
+    Require a completed TCP connection for Zeek X.509 capability in generation and evaluation.

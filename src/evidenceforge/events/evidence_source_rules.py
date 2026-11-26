@@ -45,6 +45,8 @@ def source_admission_facts(event: CanonicalOccurrence) -> dict:
 def semantic_source_admission(format_name: str, kind: str, facts: dict, hostname: str = "") -> bool:
     """Qualify a source's semantic projection before collection policy is applied."""
     network = facts.get("network") or {}
+    if format_name == "zeek_x509":
+        return kind == "connection" and network.get("conn_state") == "SF"
     if format_name == "cisco_asa":
         return kind == "connection" and bool(network) and not network.get("application_layer_only")
     if format_name == "ecar":

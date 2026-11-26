@@ -84,9 +84,18 @@ def test_validate_json_success_has_stable_bounded_envelope() -> None:
     payload = json.loads(result.stdout)
     assert payload["schema_version"] == "1.0"
     assert payload["valid"] is True
-    assert payload["status"] in {"valid", "valid_with_warnings"}
+    assert payload["status"] == "valid_with_warnings"
     assert payload["input"]["kind"] == "scenario-2.0"
-    assert payload["severity_counts"] == {"error": 0, "warning": 0, "info": 0}
+    assert payload["severity_counts"] == {"error": 0, "warning": 1, "info": 0}
+    assert [
+        (issue["severity"], issue["field_path"], issue["message"]) for issue in payload["issues"]
+    ] == [
+        (
+            "warning",
+            "environment.network.routing",
+            "Firewall sources 'northstar-edge-fw' use legacy segment-based visibility.",
+        )
+    ]
     assert payload["scenario"]["name"] == "northstar-health-baseline"
     assert [pack["name"] for pack in payload["composition"]["selected_packs"]] == [
         "healthcare",

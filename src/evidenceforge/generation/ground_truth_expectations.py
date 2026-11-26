@@ -521,6 +521,11 @@ class GroundTruthExpectationPlanner:
                                     src_ip=view.tuple_view.src_ip,
                                     dst_ip=view.tuple_view.dst_ip,
                                 )
+                                if fmt == "zeek_conn":
+                                    for endpoint in ("src_port", "dst_port"):
+                                        observed_port = getattr(view.tuple_view, endpoint)
+                                        if observed_port != getattr(network, endpoint):
+                                            identifiers[endpoint] = str(observed_port)
                                 identifiers.update(
                                     {
                                         "file:" + canonical: observed

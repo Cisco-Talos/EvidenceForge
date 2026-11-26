@@ -436,6 +436,7 @@ def test_all_packaged_samples_have_the_fixed_catalog_contract() -> None:
         "technology",
         "northstar-health",
         "metrolink-specialty-care",
+        "talus-enterprises",
     }
     expected_catalogs = {name for name, _path, _model in CATALOG_FILES}
     assert all(set(pack.catalogs) == expected_catalogs for pack in packs)

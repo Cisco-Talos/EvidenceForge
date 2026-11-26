@@ -239,7 +239,13 @@ def native_requirements(
         selector = {"uid": uid} if uid else {}
         if format_name == "zeek_conn":
             source_port, destination_port = native_zeek_connection_ports(
-                network.get("protocol", ""), network.get("src_port"), network.get("dst_port")
+                network.get("protocol", ""),
+                int(identifiers["src_port"])
+                if "src_port" in identifiers
+                else network.get("src_port"),
+                int(identifiers["dst_port"])
+                if "dst_port" in identifiers
+                else network.get("dst_port"),
             )
             required = {
                 "id.orig_h": network.get("src_ip"),
